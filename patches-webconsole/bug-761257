@@ -1,39 +1,14 @@
 # HG changeset patch
-# Parent 610147f26e4e943fc5a34a77a0d70336882ff93f
+# Parent 3049ead9e504033a951af3227dd1dce6d01df250
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1338928470 -10800
+# Date 1339010985 -10800
 
 Bug 761257 - Further improve Web Console output performance
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -37,22 +37,22 @@ XPCOMUtils.defineLazyModuleGetter(this, 
- XPCOMUtils.defineLazyGetter(this, "l10n", function() {
-   return WebConsoleUtils.l10n;
- });
- 
- function LogFactory(aMessagePrefix)
- {
-   function log(aMessage) {
-     var _msg = aMessagePrefix + " " + aMessage + "\n";
--    dump(_msg);
-+    //dump(_msg);
-   }
-   return log;
- }
- 
--let log = LogFactory("*** HUDService:");
-+let log = LogFactory("");
- 
- // The amount of time in milliseconds that must pass between messages to
- // trigger the display of a new group.
- const NEW_GROUP_DELAY = 5000;
- 
- // The amount of time in milliseconds that we wait before performing a live
- // search.
- const SEARCH_DELAY = 200;
-@@ -170,21 +170,33 @@ const ERRORS = { LOG_MESSAGE_MISSING_ARG
+@@ -170,21 +170,27 @@ const ERRORS = { LOG_MESSAGE_MISSING_ARG
  // The indent of a console group in pixels.
  const GROUP_INDENT = 12;
  
@@ -43,24 +18,21 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  // The number of messages to display in a single display update. If we display
  // too many messages at once we slow the Firefox UI too much.
 -const MESSAGES_IN_INTERVAL = 30;
-+//const MESSAGES_IN_BATCH = DEFAULT_LOG_LIMIT;
-+const MESSAGES_IN_BATCH = 100;
-+
-+// The number of messages allowed in queue before we start delaying display
-+// updates.
-+const MESSAGES_BEFORE_QUEUE = 30;
- 
- // The delay between display updates - tells how often we should push new
- // messages to screen.
+-
+-// The delay between display updates - tells how often we should push new
+-// messages to screen.
 -const OUTPUT_INTERVAL = 90; // milliseconds
-+const OUTPUT_INTERVAL = 150; // milliseconds
++const MESSAGES_IN_INTERVAL = DEFAULT_LOG_LIMIT;
 +
-+// How much time to wait after the last add to output queue before displaying
-+// the messages in the queue.
-+const LAST_ADD_TO_QUEUE_OUTPUT = 50; // milliseconds
++// The delay between display updates - tells how often we should *try* to push
++// new messages to screen. This value is optimistic, updates won't always
++// happen. Keep this low so the Web Console output feels live.
++const OUTPUT_INTERVAL = 50; // milliseconds
 +
-+const OUTPUT_TIMER_INTERVAL = Math.min(OUTPUT_INTERVAL,
-+                                       LAST_ADD_TO_QUEUE_OUTPUT);
++// When the output queue has more than MESSAGES_IN_INTERVAL items we throttle
++// output updates to this number of milliseconds. So during a lot of output we
++// update every N milliseconds given here.
++const THROTTLE_UPDATES = 1000; // milliseconds
  
  ///////////////////////////////////////////////////////////////////////////
  //// Helper for creating the network panel.
@@ -69,7 +41,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
   * Creates a DOMNode and sets all the attributes of aAttributes on the created
   * element.
   *
-@@ -1044,25 +1056,34 @@ HeadsUpDisplay.prototype = {
+@@ -1044,34 +1050,25 @@ HeadsUpDisplay.prototype = {
     * Holds the network requests currently displayed by the Web Console. Each key
     * represents the connection ID and the value is network request information.
     * @private
@@ -89,24 +61,24 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    _lastOutputFlush: 0,
  
    /**
-+   * Last time when a message was added to the output queue.
-+   *
-+   * @private
-+   * @type number
-+   *       Timestamp in milliseconds since the Unix epoch.
-+   */
-+  _lastOutputQueueAdd: 0,
-+
-+  /**
-    * The number of messages displayed in the last interval. The interval is
-    * given by OUTPUT_INTERVAL.
+-   * The number of messages displayed in the last interval. The interval is
+-   * given by OUTPUT_INTERVAL.
+-   *
+-   * @private
+-   * @type number
+-   */
+-  _messagesDisplayedInInterval: 0,
+-
+-  /**
+    * Message nodes are stored here in a queue for later display.
     *
     * @private
-    * @type number
+    * @type array
     */
-   _messagesDisplayedInInterval: 0,
+   _outputQueue: null,
  
-@@ -1408,21 +1429,27 @@ HeadsUpDisplay.prototype = {
+   /**
+@@ -1408,21 +1405,27 @@ HeadsUpDisplay.prototype = {
    function HUD__displayCachedConsoleMessages(aRemoteMessages)
    {
      if (!aRemoteMessages.length) {
@@ -137,7 +109,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Shortcut to make XUL nodes
     *
-@@ -1882,16 +1909,18 @@ HeadsUpDisplay.prototype = {
+@@ -1882,16 +1885,18 @@ HeadsUpDisplay.prototype = {
     *        console service. This object needs to hold:
     *          - hudId - the Web Console ID.
     *          - apiMessage - a representation of the object sent by the console
@@ -156,7 +128,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let sourceURL = null;
      let sourceLine = 0;
      let level = aMessage.apiMessage.level;
-@@ -2014,98 +2043,102 @@ HeadsUpDisplay.prototype = {
+@@ -2014,98 +2019,111 @@ HeadsUpDisplay.prototype = {
            data: { object: node._stacktrace },
          };
  
@@ -227,6 +199,15 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    return node;
 +  },
 +
++  /**
++   * Determine the category of a given nsIScriptError.
++   *
++   * @param nsIScriptError aScriptError
++   *        The script error you want to determine the category for.
++   * @return CATEGORY_JS|CATEGORY_CSS|-1
++   *         Depending on the script error CATEGORY_JS or CATEGORY_CSS can be
++   *         returned. If the category is unknown -1 is returned.
++   */
 +  categoryForScriptError: function HUD_categoryForScriptError(aScriptError)
 +  {
      switch (aScriptError.category) {
@@ -298,7 +279,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      methodNode.setAttribute("value", request.method);
      methodNode.classList.add("webconsole-msg-body-piece");
      msgNode.appendChild(methodNode);
-@@ -2141,37 +2174,36 @@ HeadsUpDisplay.prototype = {
+@@ -2141,37 +2159,36 @@ HeadsUpDisplay.prototype = {
                                                       msgNode,
                                                       this.hudId,
                                                       null,
@@ -343,7 +324,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let urlNode = chromeDocument.createElementNS(XUL_NS, "label");
      urlNode.setAttribute("crop", "center");
      urlNode.setAttribute("flex", "1");
-@@ -2189,30 +2221,33 @@ HeadsUpDisplay.prototype = {
+@@ -2189,30 +2206,33 @@ HeadsUpDisplay.prototype = {
                                                      null,
                                                      aFileURI);
  
@@ -379,7 +360,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      PARENTNODE_NOT_FOUND: "parentNode element not found"
    },
  
-@@ -2268,36 +2303,43 @@ HeadsUpDisplay.prototype = {
+@@ -2268,36 +2288,43 @@ HeadsUpDisplay.prototype = {
          break;
        case "JSTerm:ClearOutput":
          this.jsterm.clearOutput();
@@ -428,7 +409,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Callback method for when the Web Console initialization is complete. For
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
-@@ -2381,33 +2423,63 @@ HeadsUpDisplay.prototype = {
+@@ -2381,33 +2408,71 @@ HeadsUpDisplay.prototype = {
     *          if the network request/response body was discarded or not.
     *        - log - the request and response information. This is a HAR-like
     *        object. See HUDService-content.js
@@ -479,6 +460,14 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    }
 +  },
 +
++  /**
++   * Update an output message to reflect the latest state of a network request,
++   * given a network connection ID.
++   *
++   * @private
++   * @param string aConnectionId
++   *        The connection ID to update.
++   */
 +  _updateNetMessage: function HUD__updateNetMessage(aConnectionId)
 +  {
 +    let networkInfo = this._networkRequests[aConnectionId];
@@ -500,7 +489,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }
        let statusText = "[" + status.join(" ") + "]";
  
-@@ -2424,24 +2496,16 @@ HeadsUpDisplay.prototype = {
+@@ -2424,24 +2489,16 @@ HeadsUpDisplay.prototype = {
          ConsoleUtils.setMessageType(messageNode, CATEGORY_NETWORK,
                                      SEVERITY_ERROR);
        }
@@ -525,26 +514,47 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param object aMessage
     *        The message received from the content script. It needs to hold two
-@@ -2500,80 +2564,76 @@ HeadsUpDisplay.prototype = {
+@@ -2495,92 +2552,103 @@ HeadsUpDisplay.prototype = {
+ 
+   /**
+    * Output a message node. This filters a node appropriately, then sends it to
+    * the output, regrouping and pruning output as necessary.
+    *
     * Note: this call is async - the given message node may not be displayed when
     * you call this method.
     *
-    * @param nsIDOMNode aNode
-    *        The message node to send to the output.
-    * @param nsIDOMNode [aNodeAfter]
-    *        Insert the node after the given aNodeAfter (optional).
+-   * @param nsIDOMNode aNode
+-   *        The message node to send to the output.
+-   * @param nsIDOMNode [aNodeAfter]
+-   *        Insert the node after the given aNodeAfter (optional).
++   * @param integer aCategory
++   *        The category of the message you want to output. See the CATEGORY_*
++   *        constants.
++   * @param function|nsIDOMElement aMethodOrNode
++   *        The method that creates the message element to send to the output or
++   *        the actual element. If a method is given it will be bound to the HUD
++   *        object and the arguments will be |aArguments|.
++   * @param array [aArguments]
++   *        If a method is given to output the message element then the method
++   *        will be invoked with the list of arguments given here.
     */
 -  outputMessageNode: function HUD_outputMessageNode(aNode, aNodeAfter)
 +  outputMessage: function HUD_outputMessage(aCategory, aMethodOrNode, aArguments)
    {
 -    this._outputQueue.push([aNode, aNodeAfter]);
 -    this._flushMessageQueue();
++    if (!this._outputQueue.length) {
++      // If the queue is empty we consider that now was the last output flush.
++      // This avoid an immediate output flush when the timer executes.
++      this._lastOutputFlush = Date.now();
++    }
++
 +    this._outputQueue.push([aCategory, aMethodOrNode, aArguments]);
-+    log("outputMessage len " + this._outputQueue.length + "\n");
++
 +    if (!this._outputTimeout) {
 +      this._outputTimeout =
 +        this.chromeWindow.setTimeout(this._flushMessageQueue.bind(this),
-+                                     OUTPUT_TIMER_INTERVAL);
++                                     OUTPUT_INTERVAL);
 +    }
    },
  
@@ -559,8 +569,15 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    {
 -    if ((Date.now() - this._lastOutputFlush) >= OUTPUT_INTERVAL) {
 -      this._messagesDisplayedInInterval = 0;
--    }
--
++    let timeSinceFlush = Date.now() - this._lastOutputFlush;
++    if (this._outputQueue.length > MESSAGES_IN_INTERVAL &&
++        timeSinceFlush < THROTTLE_UPDATES) {
++      this._outputTimeout =
++        this.chromeWindow.setTimeout(this._flushMessageQueue.bind(this),
++                                     OUTPUT_INTERVAL);
++      return;
+     }
+ 
      // Determine how many messages we can display now.
 -    let toDisplay = Math.min(this._outputQueue.length,
 -                             MESSAGES_IN_INTERVAL -
@@ -574,9 +591,9 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -            this._flushMessageQueue();
 -          }.bind(this), OUTPUT_INTERVAL);
 -      }
-+    let toDisplay = Math.min(this._outputQueue.length, MESSAGES_IN_BATCH);
++    let toDisplay = Math.min(this._outputQueue.length, MESSAGES_IN_INTERVAL);
 +    if (toDisplay < 1) {
-+      log("HUD__flushMessageQueue toDisplay < 1\n");
++      this._outputTimeout = null;
        return;
      }
  
@@ -589,7 +606,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      let batch = this._outputQueue.splice(0, toDisplay);
      if (!batch.length) {
-+      log("HUD__flushMessageQueue !batch.length\n");
++      this._outputTimeout = null;
        return;
      }
  
@@ -600,8 +617,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      let hudIdSupportsString = WebConsoleUtils.supportsString(this.hudId);
  
-+    log("HUD__flushMessageQueue queue " + this._outputQueue.length + " batch " + batch.length + "\n");
-+
      // Output the current batch of messages.
      for (let item of batch) {
 -      if (this._outputMessageFromQueue(hudIdSupportsString, item)) {
@@ -612,19 +627,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }
      }
  
-     // Keep track of how many messages we displayed, so we do not display too
-     // many at once.
+-    // Keep track of how many messages we displayed, so we do not display too
+-    // many at once.
 -    this._messagesDisplayedInInterval += batch.length;
-+    //this._messagesDisplayedInInterval += batch.length;
- 
+-
      let oldScrollHeight = 0;
  
      // Prune messages if needed. We do not do this for every flush call to
      // improve performance.
      let removedNodes = 0;
-     if (shouldPrune || !(this._outputQueue.length % 20)) {
+-    if (shouldPrune || !(this._outputQueue.length % 20)) {
++    if (shouldPrune || !this._outputQueue.length) {
        oldScrollHeight = scrollBox.scrollHeight;
-@@ -2603,42 +2663,56 @@ HeadsUpDisplay.prototype = {
+ 
+       let categories = Object.keys(this._pruneCategoriesQueue);
+       categories.forEach(function _pruneOutput(aCategory) {
+         removedNodes += pruneConsoleOutputIfNecessary(this.hudId, aCategory);
+       }, this);
+       this._pruneCategoriesQueue = {};
+     }
+@@ -2603,42 +2671,55 @@ HeadsUpDisplay.prototype = {
      else if (!scrolledToBottom && removedNodes > 0 &&
               oldScrollHeight != scrollBox.scrollHeight) {
        // If there were pruned messages and if scroll is not at the bottom, then
@@ -641,15 +663,13 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -          this._flushMessageQueue();
 -        }.bind(this), OUTPUT_INTERVAL);
 +        this.chromeWindow.setTimeout(this._flushMessageQueue.bind(this),
-+                                     OUTPUT_TIMER_INTERVAL);
-     }
--
--    this._lastOutputFlush = Date.now();
++                                     OUTPUT_INTERVAL);
++    }
 +    else {
 +      this._outputTimeout = null;
-+    }
-+
-+    //this._lastOutputFlush = Date.now();
+     }
+ 
+     this._lastOutputFlush = Date.now();
    },
  
    /**
@@ -660,15 +680,16 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        The HUD ID as an nsISupportsString.
     * @param array aItem
     *        An item from the output queue - this item represents a message.
-    * @return boolean
-    *         True if the message is visible, false otherwise.
+-   * @return boolean
+-   *         True if the message is visible, false otherwise.
++   * @return nsIDOMElement|null
++   *         The DOM element of the message if the message is visible, null otherwise.
     */
    _outputMessageFromQueue:
    function HUD__outputMessageFromQueue(aHudIdSupportsString, aItem)
    {
 -    let [node, afterNode] = aItem;
 +    let [category, methodOrNode, args] = aItem;
-+    log("_outputMessageFromQueue " + category + " " + methodOrNode + "\n");
 +
 +    let node = typeof methodOrNode == "function" ?
 +               methodOrNode.apply(this, args || []) :
@@ -689,7 +710,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        isRepeated = ConsoleUtils.filterRepeatedCSS(node, this.outputNode,
                                                    this.hudId);
      }
-@@ -2651,53 +2725,58 @@ HeadsUpDisplay.prototype = {
+@@ -2651,53 +2732,58 @@ HeadsUpDisplay.prototype = {
      }
  
      if (!isRepeated) {
@@ -752,7 +773,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      return pruned;
    },
  
-@@ -3140,18 +3219,18 @@ JSTerm.prototype = {
+@@ -3140,18 +3226,18 @@ JSTerm.prototype = {
    writeOutput:
    function JST_writeOutput(aOutputMessage, aCategory, aSeverity, aNodeAfter,
                             aTimestamp)
@@ -773,7 +794,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param boolean aClearStorage
     *        True if you want to clear the console messages storage associated to
-@@ -3165,16 +3244,17 @@ JSTerm.prototype = {
+@@ -3165,16 +3251,17 @@ JSTerm.prototype = {
      let outputNode = hud.outputNode;
      let node;
      while ((node = outputNode.firstChild)) {
@@ -791,7 +812,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Updates the size of the input field (command line) to fit its contents.
-@@ -4273,33 +4353,16 @@ ConsoleUtils = {
+@@ -4273,33 +4360,16 @@ ConsoleUtils = {
        this.mergeFilteredMessageNode(lastMessage, aNode);
        return true;
      }
@@ -825,3 +846,91 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *         otherwise.
     */
    isOutputScrolledToBottom:
+diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
+--- a/dom/base/ConsoleAPI.js
++++ b/dom/base/ConsoleAPI.js
+@@ -16,17 +16,20 @@ const MAX_PAGE_TIMERS = 10000;
+ const ARGUMENT_PATTERN = /%\d*\.?\d*([osdif])\b/g;
+ 
+ // The maximum stacktrace depth when populating the stacktrace array used for
+ // console.trace().
+ const DEFAULT_MAX_STACKTRACE_DEPTH = 200;
+ 
+ // The console API methods are async and their action is executed later. This
+ // delay tells how much later.
+-const CALL_DELAY = 30; // milliseconds
++const CALL_DELAY = 15; // milliseconds
++
++// This constant tells how many messages to process in a single timer execution.
++const MESSAGES_IN_INTERVAL = 1500;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm");
+ 
+ let nsITimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+ 
+ function ConsoleAPI() {}
+@@ -146,19 +149,16 @@ ConsoleAPI.prototype = {
+       __mozillaConsole__: { value: true }
+     };
+ 
+     Object.defineProperties(contentObj, properties);
+     Cu.makeObjectPropsNormal(contentObj);
+ 
+     this._queuedCalls = [];
+     this._destroyedWindows = [];
+-    this._timerCallback = {
+-      notify: this._timerCallbackNotify.bind(this),
+-    };
+ 
+     return contentObj;
+   },
+ 
+   observe: function CA_observe(aSubject, aTopic, aData)
+   {
+     if (aTopic == "xpcom-shutdown") {
+       Services.obs.removeObserver(this, "xpcom-shutdown");
+@@ -191,31 +191,36 @@ ConsoleAPI.prototype = {
+       innerID: aMeta.innerID,
+       timeStamp: Date.now(),
+       stack: this.getStackTrace(aMethod != "trace" ? 1 : null),
+     };
+ 
+     this._queuedCalls.push([aMethod, aArguments, metaForCall]);
+ 
+     if (!this._timerInitialized) {
+-      nsITimer.initWithCallback(this._timerCallback, CALL_DELAY,
+-                                Ci.nsITimer.TYPE_ONE_SHOT);
++      nsITimer.initWithCallback(this._timerCallback.bind(this), CALL_DELAY,
++                                Ci.nsITimer.TYPE_REPEATING_SLACK);
+       this._timerInitialized = true;
+     }
+   },
+ 
+   /**
+    * Timer callback used to process each of the queued calls.
+    * @private
+    */
+-  _timerCallbackNotify: function CA__timerCallbackNotify()
++  _timerCallback: function CA__timerCallback()
+   {
+-    this._timerInitialized = false;
+-    this._queuedCalls.splice(0).forEach(this._processQueuedCall, this);
+-    this._destroyedWindows = [];
++    this._queuedCalls.splice(0, MESSAGES_IN_INTERVAL)
++      .forEach(this._processQueuedCall, this);
++
++    if (!this._queuedCalls.length) {
++      this._timerInitialized = false;
++      this._destroyedWindows = [];
++      nsITimer.cancel();
++    }
+   },
+ 
+   /**
+    * Process a queued call to a console method.
+    *
+    * @private
+    * @param array aCall
+    *        Array that holds information about the queued call.
