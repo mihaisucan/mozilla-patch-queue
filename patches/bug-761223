@@ -1,0 +1,85 @@
+# HG changeset patch
+# User Panos Astithas <past@mozilla.com>
+# Date 1338886560 -10800
+# Node ID 2ac49a6d1b143ef70414e482b530682ae8d87948
+# Parent  a1e6daec7ef2acb88675ae1c737f56908a9730a6
+Bug 761223 - JS Debugger errors prevent me from debugging Orion
+
+diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools/debugger/debugger-controller.js
+--- a/browser/devtools/debugger/debugger-controller.js
++++ b/browser/devtools/debugger/debugger-controller.js
+@@ -869,17 +869,17 @@ SourceScripts.prototype = {
+     // Ignore scripts generated from 'clientEvaluate' packets.
+     if (aPacket.url == "debugger eval code") {
+       return;
+     }
+ 
+     this._addScript({ url: aPacket.url, startLine: aPacket.startLine }, true);
+     // If there are any stored breakpoints for this script, display them again.
+     for (let bp of DebuggerController.Breakpoints.store) {
+-      if (bp.location.url == aPacket.url) {
++      if (bp && bp.location.url == aPacket.url) {
+         DebuggerController.Breakpoints.displayBreakpoint(bp.location);
+       }
+     }
+   },
+ 
+   /**
+    * Handler for the thread client's scriptsadded notification.
+    */
+diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-script-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
+@@ -165,18 +165,20 @@ ThreadActor.prototype = {
+       let packet = this._paused(aFrame);
+       if (!packet) {
+         return undefined;
+       }
+       packet.why = aReason;
+       this.conn.send(packet);
+       return this._nest();
+     } catch(e) {
+-      Cu.reportError("Got an exception during TA__pauseAndRespond: " + e +
+-                     ": " + e.stack);
++      let msg = "Got an exception during TA__pauseAndRespond: " + e +
++                ": " + e.stack;
++      Cu.reportError(msg);
++      dumpn(msg);
+       return undefined;
+     }
+   },
+ 
+   /**
+    * Handle a protocol request to resume execution of the debuggee.
+    */
+   onResume: function TA_onResume(aRequest) {
+@@ -1535,21 +1537,28 @@ EnvironmentActor.prototype = {
+                                     return !!element[name];
+                                   })) {
+         continue;
+       }
+ 
+       // TODO: this part should be removed in favor of the commented-out part
+       // below when getVariableDescriptor lands.
+       let desc = {
+-        value: this.obj.getVariable(name),
+         configurable: false,
+         writable: true,
+         enumerable: true
+       };
++      try {
++        desc.value = this.obj.getVariable(name);
++      } catch (e) {
++        // Avoid "Debugger scope is not live" errors.
++        dumpn("Debugger EA_bindings: error calling env.getVariable('" +
++              name + "'): " + e);
++        continue;
++      }
+       //let desc = this.obj.getVariableDescriptor(name);
+       let descForm = {
+         enumerable: true,
+         configurable: desc.configurable
+       };
+       if ("value" in desc) {
+         descForm.value = this.threadActor.createValueGrip(desc.value);
+         descForm.writable = desc.writable;
