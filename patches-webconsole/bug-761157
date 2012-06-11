@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1338823798 -10800
+# Date 1339431826 -10800
 # Node ID 610147f26e4e943fc5a34a77a0d70336882ff93f
-# Parent  0e4f8e1a141b672926f9f90898f85d72b5229c7e
+# Parent af2a59c2334728db194971a51392b5eb27a70b9d
 Bug 761157 - Sometimes network requests do not display all information
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -40,7 +40,29 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    _lastOutputFlush: 0,
  
-@@ -2129,23 +2139,28 @@ HeadsUpDisplay.prototype = {
+@@ -1830,17 +1840,20 @@ HeadsUpDisplay.prototype = {
+    * cleanup for the tree widget and removes it from the DOM.
+    *
+    * @param nsIDOMNode aMessageNode
+    *        The message node that contains the property inspector from a
+    *        console.dir call.
+    */
+   pruneConsoleDirNode: function HUD_pruneConsoleDirNode(aMessageNode)
+   {
+-    aMessageNode.parentNode.removeChild(aMessageNode);
++    if (aMessageNode.parentNode) {
++      aMessageNode.parentNode.removeChild(aMessageNode);
++    }
++
+     let tree = aMessageNode.querySelector("tree");
+     tree.parentNode.removeChild(tree);
+     aMessageNode.propertyTreeView = null;
+     if (tree.view) {
+       tree.view.data = null;
+     }
+     tree.view = null;
+   },
+@@ -2129,23 +2142,28 @@ HeadsUpDisplay.prototype = {
                                                       CATEGORY_NETWORK,
                                                       SEVERITY_LOG,
                                                       msgNode,
@@ -73,7 +95,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
    /**
     * Log file activity.
-@@ -2376,22 +2391,23 @@ HeadsUpDisplay.prototype = {
+@@ -2376,22 +2394,23 @@ HeadsUpDisplay.prototype = {
        this.logNetActivity(aMessage);
        return;
      }
@@ -101,7 +123,47 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }
        let statusText = "[" + status.join(" ") + "]";
  
-@@ -2723,31 +2739,35 @@ HeadsUpDisplay.prototype = {
+@@ -2671,26 +2690,38 @@ HeadsUpDisplay.prototype = {
+     // Loop through the categories we found and prune if needed.
+     for (let category in nodes) {
+       let limit = this.logLimitForCategory(category);
+       let indexes = nodes[category];
+       if (indexes.length > limit) {
+         let n = Math.max(0, indexes.length - limit);
+         pruned += n;
+         for (let i = n - 1; i >= 0; i--) {
+-          let node = this._outputQueue[indexes[i]][0];
++          this._pruneItemFromQueue(this._outputQueue[indexes[i]]);
+           this._outputQueue.splice(indexes[i], 1);
+         }
+       }
+     }
+ 
+     return pruned;
+   },
+ 
+   /**
++   * Prune an item from the output queue.
++   *
++   * @private
++   * @param array aItem
++   *        The item you want to remove from the output queue.
++   */
++  _pruneItemFromQueue: function HUD__pruneItemFromQueue(aItem)
++  {
++    this.removeOutputMessage(aItem[0]);
++  },
++
++  /**
+    * Retrieve the limit of messages for a specific category.
+    *
+    * @param number aCategory
+    *        The category of messages you want to retrieve the limit for. See the
+    *        CATEGORY_* constants.
+    * @return number
+    *         The number of messages allowed for the specific category.
+    */
+@@ -2723,32 +2754,35 @@ HeadsUpDisplay.prototype = {
      if (aNode.classList.contains("webconsole-msg-cssparser")) {
        let desc = aNode.childNodes[2].textContent;
        let location = "";
@@ -118,7 +180,10 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        return;
      }
  
-     aNode.parentNode.removeChild(aNode);
+-    aNode.parentNode.removeChild(aNode);
++    if (aNode.parentNode) {
++      aNode.parentNode.removeChild(aNode);
++    }
    },
  
    /**
@@ -127,9 +192,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    destroy: function HUD_destroy()
    {
-     this._outputQueue = [];
-+    this._networkRequests = {};
- 
+-    this._outputQueue = [];
+-
      this.sendMessageToContent("WebConsole:Destroy", {});
  
      this._messageListeners.forEach(function(aName) {
@@ -137,3 +201,35 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }, this);
  
      if (this.jsterm) {
+       this.jsterm.destroy();
+@@ -3135,26 +3169,28 @@ JSTerm.prototype = {
+    *
+    * @param boolean aClearStorage
+    *        True if you want to clear the console messages storage associated to
+    *        this Web Console.
+    */
+   clearOutput: function JST_clearOutput(aClearStorage)
+   {
+     let hud = this.hud;
+-    hud.cssNodes = {};
+-
+     let outputNode = hud.outputNode;
+     let node;
+     while ((node = outputNode.firstChild)) {
+       hud.removeOutputMessage(node);
+     }
+ 
+     hud.HUDBox.lastTimestamp = 0;
+     hud.groupDepth = 0;
++    hud._outputQueue.forEach(hud._pruneItemFromQueue, hud);
++    hud._outputQueue = [];
++    hud._networkRequests = {};
++    hud.cssNodes = {};
+ 
+     if (aClearStorage) {
+       hud.sendMessageToContent("ConsoleAPI:ClearCache", {});
+     }
+   },
+ 
+   /**
+    * Updates the size of the input field (command line) to fit its contents.

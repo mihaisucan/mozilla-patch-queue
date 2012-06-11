@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 7587acbef8e88c827436d6f6ec9fe0a02cd84d75
+# Parent d68890a2beaa5cc39f5a09ae425bf40a86a06766
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1339101231 -10800
+# Date 1339440284 -10800
 
 Bug 761257 - Further improve Web Console output performance; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
@@ -109,7 +109,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Shortcut to make XUL nodes
     *
-@@ -1882,16 +1885,18 @@ HeadsUpDisplay.prototype = {
+@@ -1885,16 +1888,18 @@ HeadsUpDisplay.prototype = {
     *        console service. This object needs to hold:
     *          - hudId - the Web Console ID.
     *          - apiMessage - a representation of the object sent by the console
@@ -128,7 +128,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let sourceURL = null;
      let sourceLine = 0;
      let level = aMessage.apiMessage.level;
-@@ -2014,98 +2019,115 @@ HeadsUpDisplay.prototype = {
+@@ -2017,98 +2022,115 @@ HeadsUpDisplay.prototype = {
            data: { object: node._stacktrace },
          };
  
@@ -283,7 +283,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      methodNode.setAttribute("value", request.method);
      methodNode.classList.add("webconsole-msg-body-piece");
      msgNode.appendChild(methodNode);
-@@ -2141,37 +2163,36 @@ HeadsUpDisplay.prototype = {
+@@ -2144,37 +2166,36 @@ HeadsUpDisplay.prototype = {
                                                       msgNode,
                                                       this.hudId,
                                                       null,
@@ -328,7 +328,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let urlNode = chromeDocument.createElementNS(XUL_NS, "label");
      urlNode.setAttribute("crop", "center");
      urlNode.setAttribute("flex", "1");
-@@ -2189,30 +2210,33 @@ HeadsUpDisplay.prototype = {
+@@ -2192,30 +2213,33 @@ HeadsUpDisplay.prototype = {
                                                      null,
                                                      aFileURI);
  
@@ -364,7 +364,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      PARENTNODE_NOT_FOUND: "parentNode element not found"
    },
  
-@@ -2268,36 +2292,43 @@ HeadsUpDisplay.prototype = {
+@@ -2271,36 +2295,44 @@ HeadsUpDisplay.prototype = {
          break;
        case "JSTerm:ClearOutput":
          this.jsterm.clearOutput();
@@ -374,7 +374,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          break;
        case "WebConsole:ConsoleAPI":
 -        this.logConsoleAPIMessage(aMessage.json);
-+        this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage.json]);
++        this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage,
++                           [aMessage.json]);
          break;
 -      case "WebConsole:PageError":
 -        this.reportPageError(aMessage.json.pageError);
@@ -413,7 +414,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Callback method for when the Web Console initialization is complete. For
     * now this method sends the web-console-created notification using the
     * nsIObserverService.
-@@ -2381,70 +2412,103 @@ HeadsUpDisplay.prototype = {
+@@ -2384,70 +2416,103 @@ HeadsUpDisplay.prototype = {
     *          if the network request/response body was discarded or not.
     *        - log - the request and response information. This is a HAR-like
     *        object. See HUDService-content.js
@@ -552,7 +553,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *        properties: location and title.
     */
    onLocationChange: function HUD_onLocationChange(aMessage)
-@@ -2495,92 +2559,103 @@ HeadsUpDisplay.prototype = {
+@@ -2498,92 +2563,103 @@ HeadsUpDisplay.prototype = {
  
    /**
     * Output a message node. This filters a node appropriately, then sends it to
@@ -684,7 +685,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        }, this);
        this._pruneCategoriesQueue = {};
      }
-@@ -2603,101 +2678,123 @@ HeadsUpDisplay.prototype = {
+@@ -2606,84 +2682,107 @@ HeadsUpDisplay.prototype = {
      else if (!scrolledToBottom && removedNodes > 0 &&
               oldScrollHeight != scrollBox.scrollHeight) {
        // If there were pruned messages and if scroll is not at the bottom, then
@@ -803,24 +804,50 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      let pruned = 0;
  
-     // Loop through the categories we found and prune if needed.
-     for (let category in nodes) {
-       let limit = this.logLimitForCategory(category);
-       let indexes = nodes[category];
-       if (indexes.length > limit) {
-         let n = Math.max(0, indexes.length - limit);
-         pruned += n;
-         for (let i = n - 1; i >= 0; i--) {
--          let node = this._outputQueue[indexes[i]][0];
-           this._outputQueue.splice(indexes[i], 1);
-         }
-       }
-     }
- 
-     return pruned;
+@@ -2708,17 +2807,41 @@ HeadsUpDisplay.prototype = {
+    * Prune an item from the output queue.
+    *
+    * @private
+    * @param array aItem
+    *        The item you want to remove from the output queue.
+    */
+   _pruneItemFromQueue: function HUD__pruneItemFromQueue(aItem)
+   {
+-    this.removeOutputMessage(aItem[0]);
++    let [category, methodOrNode, args] = aItem;
++    if (typeof methodOrNode != "function" &&
++        methodOrNode._evalCacheId && !methodOrNode._panelOpen) {
++      this.jsterm.clearObjectCache(methodOrNode._evalCacheId);
++    }
++
++    if (category == CATEGORY_NETWORK) {
++      let connectionId = null;
++      if (methodOrNode == this.logNetActivity) {
++        connectionId = args[0];
++      }
++      else if (typeof methodOrNode != "function") {
++        connectionId = methodOrNode._connectionId;
++      }
++      if (connectionId && connectionId in this._networkRequests) {
++        delete this._networkRequests[connectionId];
++      }
++    }
++    else if (category == CATEGORY_WEBDEV &&
++             methodOrNode == this.logConsoleAPIMessage) {
++      let level = args[0].apiMessage.level;
++      if (level == "dir") {
++        this.jsterm.clearObjectCache(args[0].objectsCacheId);
++      }
++    }
    },
  
-@@ -3140,18 +3237,18 @@ JSTerm.prototype = {
+   /**
+    * Retrieve the limit of messages for a specific category.
+    *
+    * @param number aCategory
+    *        The category of messages you want to retrieve the limit for. See the
+    *        CATEGORY_* constants.
+@@ -3154,18 +3277,18 @@ JSTerm.prototype = {
    writeOutput:
    function JST_writeOutput(aOutputMessage, aCategory, aSeverity, aNodeAfter,
                             aTimestamp)
@@ -841,26 +868,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param boolean aClearStorage
     *        True if you want to clear the console messages storage associated to
-@@ -3165,16 +3262,18 @@ JSTerm.prototype = {
-     let outputNode = hud.outputNode;
-     let node;
-     while ((node = outputNode.firstChild)) {
-       hud.removeOutputMessage(node);
-     }
- 
-     hud.HUDBox.lastTimestamp = 0;
-     hud.groupDepth = 0;
-+    hud._outputQueue = [];
-+    hud._networkRequests = {};
- 
-     if (aClearStorage) {
-       hud.sendMessageToContent("ConsoleAPI:ClearCache", {});
-     }
-   },
- 
-   /**
-    * Updates the size of the input field (command line) to fit its contents.
-@@ -4273,33 +4372,16 @@ ConsoleUtils = {
+@@ -4289,33 +4412,16 @@ ConsoleUtils = {
        this.mergeFilteredMessageNode(lastMessage, aNode);
        return true;
      }
@@ -1703,7 +1711,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_prun
  
 -  browser.removeEventListener("DOMContentLoaded",testCSSPruning, false);
 +  let waitForNoRepeatedNodes = {
-+    name:  "number of nodes is LOG_LIMIT", 
++    name:  "number of nodes is LOG_LIMIT",
 +    validatorFn: function()
 +    {
 +      return countMessageNodes() == LOG_LIMIT;
@@ -1732,7 +1740,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_prun
 -
 -  finishTest();
 +  waitForSuccess({
-+    name: "repeated nodes in cssNodes", 
++    name: "repeated nodes in cssNodes",
 +    validatorFn: function()
 +    {
 +      return hudRef.cssNodes["css log x"];
