@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 5ef77cb9a62b1f33890ef7f8503bd70376f40292
+# Parent 665e11e32550c9b80bbca1cb81e4b52023cb0525
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1339440937 -10800
+# Date 1339532207 -10800
 
 Bug 762996 - Add errors count to the Web Console button in the developer toolbar
 
@@ -28,7 +28,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    Components.utils.import("resource:///modules/devtools/gcli.jsm", obj);
    Components.utils.import("resource:///modules/devtools/GcliCommands.jsm", {});
    return obj.gcli;
-@@ -31,16 +34,17 @@ function DeveloperToolbar(aChromeWindow,
+@@ -31,16 +34,20 @@ function DeveloperToolbar(aChromeWindow,
  
    this._element = aToolbarElement;
    this._element.hidden = true;
@@ -38,6 +38,9 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    this._pendingShowCallback = undefined;
    this._pendingHide = false;
 +  this._errorsCount = {};
++  this._webConsoleButton = this._chromeWindow.document
++                           .getElementById("developer-toolbar-webconsole");
++  this._webConsoleButtonLabel = this._webConsoleButton.label;
  }
  
  /**
@@ -46,7 +49,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
  const NOTIFICATIONS = {
    /** DeveloperToolbar.show() has been called, and we're working on it */
    LOAD: "developer-toolbar-load",
-@@ -53,26 +57,38 @@ const NOTIFICATIONS = {
+@@ -53,26 +60,37 @@ const NOTIFICATIONS = {
  };
  
  /**
@@ -56,8 +59,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
  DeveloperToolbar.prototype.NOTIFICATIONS = NOTIFICATIONS;
  
 +DeveloperToolbar.prototype._contentMessageListeners =
-+  ["WebConsole:CachedMessages", "WebConsole:PageError",
-+   "WebConsole:LocationChange"];
++  ["WebConsole:CachedMessages", "WebConsole:PageError"];
 +
  /**
   * Is the toolbar open?
@@ -85,7 +87,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
  {
    if (this.visible) {
      this.hide();
-@@ -147,19 +163,22 @@ DeveloperToolbar.prototype._onload = fun
+@@ -147,19 +165,23 @@ DeveloperToolbar.prototype._onload = fun
      scratchpad: null
    });
  
@@ -96,6 +98,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    this._chromeWindow.getBrowser().tabContainer.addEventListener("TabSelect", this, false);
 +  this._chromeWindow.getBrowser().tabContainer.addEventListener("TabClose", this, false);
    this._chromeWindow.getBrowser().addEventListener("load", this, true);
++  this._chromeWindow.getBrowser().addEventListener("beforeunload", this, true);
    this._chromeWindow.addEventListener("resize", this, false);
  
 +  this._initErrorsCount(this._chromeWindow.getBrowser().selectedTab);
@@ -108,7 +111,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
      this._pendingShowCallback.call();
      this._pendingShowCallback = undefined;
    }
-@@ -173,16 +192,64 @@ DeveloperToolbar.prototype._onload = fun
+@@ -173,16 +195,66 @@ DeveloperToolbar.prototype._onload = fun
    }
  
    if (!DeveloperToolbar.introShownThisSession) {
@@ -121,10 +124,11 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +{
 +  let tabId = aTab.linkedPanel;
 +  if (tabId in this._errorsCount) {
-+    dump("DT__initErrorsCount tabId already tracked! " + tabId + "\n");
++    //dump("DT__initErrorsCount tabId already tracked! " + tabId + "\n");
++    this._updateErrorsCount();
 +    return;
 +  }
-+  dump("DT__initErrorsCount " + tabId + "\n");
++  //dump("DT__initErrorsCount " + tabId + "\n");
 +
 +  let messageManager = aTab.linkedBrowser.messageManager;
 +  messageManager.loadFrameScript(WEBCONSOLE_CONTENT_SCRIPT_URL, true);
@@ -136,33 +140,34 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +  }, this);
 +
 +  let message = {
-+    features: ["PageError", "LocationChange"],
++    features: ["PageError"],
 +    cachedMessages: ["PageError"],
 +  };
 +
 +  this.sendMessageToTab(aTab, "WebConsole:Init", message);
-+  dump("DT__initErrorsCount end " + tabId + "\n");
++  this._updateErrorsCount();
 +};
 +
 +DeveloperToolbar.prototype._stopErrorsCount = function DT__stopErrorsCount(aTab)
 +{
 +  let tabId = aTab.linkedPanel;
 +  if (!(tabId in this._errorsCount)) {
-+    dump("DT__stopErrorsCount tabId untracked! " + tabId + "\n");
++    //dump("DT__stopErrorsCount tabId untracked! " + tabId + "\n");
++    this._updateErrorsCount();
 +    return;
 +  }
-+  dump("DT__stopErrorsCount " + tabId + "\n");
++  //dump("DT__stopErrorsCount " + tabId + "\n");
 +
 +  let messageManager = aTab.linkedBrowser.messageManager;
 +
-+  this.sendMessageToTab(aTab, "WebConsole:Destroy");
++  this.sendMessageToTab(aTab, "WebConsole:Destroy", {});
 +
 +  this._contentMessageListeners.forEach(function(aName) {
 +    messageManager.removeMessageListener(aName, this);
 +  }, this);
 +
 +  delete this._errorsCount[tabId];
-+  dump("DT__stopErrorsCount end " + tabId + "\n");
++  this._updateErrorsCount();
 +};
 +
  /**
@@ -173,7 +178,31 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    if (this._lastState == NOTIFICATIONS.HIDE) {
      return;
    }
-@@ -241,36 +308,105 @@ DeveloperToolbar.prototype._notify = fun
+@@ -202,16 +274,23 @@ DeveloperToolbar.prototype.hide = functi
+ 
+ /**
+  * Hide the developer toolbar
+  */
+ DeveloperToolbar.prototype.destroy = function DT_destroy()
+ {
+   this._chromeWindow.getBrowser().tabContainer.removeEventListener("TabSelect", this, false);
+   this._chromeWindow.getBrowser().removeEventListener("load", this, true); 
++  this._chromeWindow.getBrowser().removeEventListener("beforeunload", this, true);
++  this._chromeWindow.removeEventListener("resize", this, false);
++
++  //dump("DT_destroy\n");
++
++  let tabs = this._chromeWindow.getBrowser().tabs;
++  Array.prototype.forEach.call(tabs, this._stopErrorsCount, this);
+ 
+   this.display.onVisibilityChange.remove(this.outputPanel._visibilityChanged, this.outputPanel);
+   this.display.onVisibilityChange.remove(this.tooltipPanel._visibilityChanged, this.tooltipPanel);
+   this.display.onOutput.remove(this.outputPanel._outputChanged, this.outputPanel);
+   this.display.destroy();
+   this.outputPanel.destroy();
+   this.tooltipPanel.destroy();
+   delete this._input;
+@@ -241,36 +320,153 @@ DeveloperToolbar.prototype._notify = fun
  };
  
  /**
@@ -182,7 +211,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
   */
  DeveloperToolbar.prototype.handleEvent = function DT_handleEvent(aEvent)
  {
-+  dump("DT_handleEvent " + aEvent.type + "\n");
++  //dump("DT_handleEvent " + aEvent.type + "\n");
    if (aEvent.type == "TabSelect" || aEvent.type == "load") {
      this._chromeWindow.HUDConsoleUI.refreshCommand();
      this._chromeWindow.DebuggerUI.refreshCommand();
@@ -199,10 +228,9 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
          },
        });
 +
-+    }
-+
-+    if (aEvent.type == "TabSelect" && this.visible) {
-+      this._initErrorsCount(aEvent.target);
++      if (aEvent.type == "TabSelect") {
++        this._initErrorsCount(aEvent.target);
++      }
      }
    }
    else if (aEvent.type == "resize") {
@@ -210,6 +238,8 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    }
 +  else if (aEvent.type == "TabClose") {
 +    this._stopErrorsCount(aEvent.target);
++  } else if (aEvent.type == "beforeunload") {
++    this._onPageBeforeUnload(aEvent);
 +  }
 +};
 +
@@ -217,25 +247,27 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +{
 +  if (!aMessage.json ||
 +      !(aMessage.json.hudId in this._errorsCount)) {
-+    dump("received message from unknown ID " + aMessage  + "\n");
++    //dump("received message from unknown ID " + aMessage  + "\n");
 +    return;
 +  }
 +
-+  dump("receiveMessage " + aMessage.name + " " + aMessage.json.hudId + "\n");
++  //dump("receiveMessage " + aMessage.name + " " + aMessage.json.hudId + "\n");
++
++  let tabId = aMessage.json.hudId;
++  let errors = this._errorsCount[tabId];
 +
 +  switch (aMessage.name) {
 +    case "WebConsole:PageError":
-+      this._onPageError(aMessage.json.hudId, aMessage.json.pageError);
++      this._onPageError(tabId, aMessage.json.pageError);
 +      break;
 +    case "WebConsole:CachedMessages":
-+      this._onCachedMessages(aMessage.json.hudId, aMessage.json.messages);
-+      break;
-+    case "WebConsole:LocationChange":
-+      this._onTabLocationChange(aMessage.json.hudId, aMessage.json);
++      this._onCachedMessages(tabId, aMessage.json.messages);
 +      break;
 +  }
 +
-+  dump("receiveMessage end errors " + this._errorsCount[aMessage.json.hudId] + "\n");
++  if (errors != this._errorsCount[tabId]) {
++    this._updateErrorsCount(tabId);
++  }
 +};
 +
 +DeveloperToolbar.prototype.sendMessageToTab =
@@ -253,11 +285,13 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +DeveloperToolbar.prototype._onPageError =
 +function DT__onPageError(aTabId, aPageError)
 +{
-+  let isError = true;
-+  if ((aPageError.flags & aPageError.warningFlag) ||
++  if (aPageError.category == "CSS Parser" ||
++      aPageError.category == "CSS Loader" ||
++      (aPageError.flags & aPageError.warningFlag) ||
 +      (aPageError.flags & aPageError.strictFlag)) {
-+    isError = false;
++    return; // just a CSS or JS warning
 +  }
++
 +  this._errorsCount[aTabId]++;
 +};
 +
@@ -271,6 +305,49 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +function DT__onTabLocationChange(aTabId)
 +{
 +  this._errorsCount[aTabId] = 0;
++};
++
++DeveloperToolbar.prototype._onPageBeforeUnload =
++function DT__onPageBeforeUnload(aEvent)
++{
++  //dump("DT__onPageBeforeUnload\n");
++  let window = aEvent.target.defaultView;
++  if (window.top !== window) {
++    //dump("not top window\n");
++    return;
++  }
++
++  let tabs = this._chromeWindow.getBrowser().tabs;
++  Array.prototype.some.call(tabs, function(aTab) {
++    if (aTab.linkedBrowser.contentWindow === window) {
++      let tabId = aTab.linkedPanel;
++      if (tabId in this._errorsCount) {
++        this._errorsCount[tabId] = 0;
++        this._updateErrorsCount(tabId);
++      }
++      return true;
++    }
++    return false;
++  }, this);
++}
++
++DeveloperToolbar.prototype._updateErrorsCount =
++function DT__updateErrorsCount(aChangedTabId)
++{
++  let tabId = this._chromeWindow.getBrowser().selectedTab.linkedPanel;
++  if (aChangedTabId && tabId != aChangedTabId) {
++    return;
++  }
++
++  let errors = this._errorsCount[tabId];
++
++  if (errors) {
++    this._webConsoleButton.label =
++      this._webConsoleButtonLabel + " (" + errors + ")";
++  }
++  else {
++    this._webConsoleButton.label = this._webConsoleButtonLabel;
++  }
  };
  
  /**
@@ -282,7 +359,63 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -1281,39 +1281,57 @@ let ConsoleListener = {
+@@ -53,16 +53,17 @@ let Manager = {
+    */
+   get sequenceId() "HUDContent-" + (++this._sequence),
+ 
+   /**
+    * Initialize the Web Console manager.
+    */
+   init: function Manager_init()
+   {
++    //dump("Manager_init " + this.hudId + " \n");
+     this._enabledFeatures = [];
+     this._messageHandlers = {};
+ 
+     this._messageListeners.forEach(function(aName) {
+       addMessageListener(aName, this);
+     }, this);
+ 
+     // Need to track the owner XUL window to listen to the unload and TabClose
+@@ -83,31 +84,29 @@ let Manager = {
+   },
+ 
+   /**
+    * The message handler. This method forwards all the remote messages to the
+    * appropriate code.
+    */
+   receiveMessage: function Manager_receiveMessage(aMessage)
+   {
+-    if (!_alive) {
++    if (!_alive || !aMessage.json) {
+       return;
+     }
+ 
+-    if (!aMessage.json || (aMessage.name != "WebConsole:Init" &&
+-                           aMessage.json.hudId != this.hudId)) {
+-      Cu.reportError("Web Console content script: received message " +
+-                     aMessage.name + " from wrong hudId!");
++    if (aMessage.name == "WebConsole:Init" && !this.hudId) {
++      this._onInit(aMessage.json);
++      return;
++    }
++    if (aMessage.json.hudId != this.hudId) {
+       return;
+     }
+ 
+     switch (aMessage.name) {
+-      case "WebConsole:Init":
+-        this._onInit(aMessage.json);
+-        break;
+       case "WebConsole:EnableFeature":
+         this.enableFeature(aMessage.json.feature, aMessage.json);
+         break;
+       case "WebConsole:DisableFeature":
+         this.disableFeature(aMessage.json.feature);
+         break;
+       case "WebConsole:GetPreferences":
+         this.handleGetPreferences(aMessage.json);
+@@ -1281,39 +1280,57 @@ let ConsoleListener = {
     */
    observe: function CL_observe(aScriptError)
    {
@@ -351,7 +484,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     *         with an added _type property so the remote Web Console instance can
     *         tell the difference between various types of cached messages.
     */
-@@ -1321,24 +1339,25 @@ let ConsoleListener = {
+@@ -1321,24 +1338,25 @@ let ConsoleListener = {
    {
      let innerWindowId = WebConsoleUtils.getInnerWindowId(Manager.window);
      let result = [];
@@ -362,7 +495,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
        if (!(aError instanceof Ci.nsIScriptError) ||
 -          aError.innerWindowID != innerWindowId) {
 +          aError.innerWindowID != innerWindowId ||
-+          this.isCategoryAllowed(aError.category)) {
++          !this.isCategoryAllowed(aError.category)) {
          return;
        }
  
@@ -379,6 +512,18 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     * Remove the nsIConsoleService listener.
     */
    destroy: function CL_destroy()
+@@ -2500,8 +2518,11 @@ let ConsoleProgressListener = {
+     this._locationChange = false;
+     let webProgress = docShell.QueryInterface(Ci.nsIWebProgress);
+     webProgress.removeProgressListener(this);
+   },
+ };
+ 
+ Manager.init();
+ })();
++
++//dump("HUDService-content script loaded\n");
++
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm

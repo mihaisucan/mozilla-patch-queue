@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent d68890a2beaa5cc39f5a09ae425bf40a86a06766
+# Parent 8a1414308869a12e442ffc570c01cb0782aa2e5a
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1339440284 -10800
+# Date 1339500307 -10800
 
 Bug 761257 - Further improve Web Console output performance; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
@@ -868,7 +868,20 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @param boolean aClearStorage
     *        True if you want to clear the console messages storage associated to
-@@ -4289,33 +4412,16 @@ ConsoleUtils = {
+@@ -4278,44 +4401,28 @@ ConsoleUtils = {
+    * @return boolean
+    *         true if the message is filtered, false otherwise.
+    */
+   filterRepeatedConsole:
+   function ConsoleUtils_filterRepeatedConsole(aNode, aOutput) {
+     let lastMessage = aOutput.lastChild;
+ 
+     // childNodes[2] is the description element
+-    if (lastMessage && !aNode.classList.contains("webconsole-msg-inspector") &&
++    if (lastMessage && lastMessage.childNodes[2] &&
++        !aNode.classList.contains("webconsole-msg-inspector") &&
+         aNode.childNodes[2].textContent ==
+         lastMessage.childNodes[2].textContent) {
        this.mergeFilteredMessageNode(lastMessage, aNode);
        return true;
      }
@@ -1617,7 +1630,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_priv
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
-@@ -95,17 +95,29 @@ function testXhrPost()
+@@ -111,17 +111,29 @@ function testXhrPost()
  
  function testFormSubmission()
  {
@@ -1805,7 +1818,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_ou
 diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 --- a/dom/base/ConsoleAPI.js
 +++ b/dom/base/ConsoleAPI.js
-@@ -16,17 +16,20 @@ const MAX_PAGE_TIMERS = 10000;
+@@ -16,23 +16,26 @@ const MAX_PAGE_TIMERS = 10000;
  const ARGUMENT_PATTERN = /%\d*\.?\d*([osdif])\b/g;
  
  // The maximum stacktrace depth when populating the stacktrace array used for
@@ -1824,10 +1837,17 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
  Cu.import("resource://gre/modules/Services.jsm");
  Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm");
  
- let nsITimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+-let nsITimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++let gTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
  
  function ConsoleAPI() {}
-@@ -146,19 +149,16 @@ ConsoleAPI.prototype = {
+ ConsoleAPI.prototype = {
+ 
+   classID: Components.ID("{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}"),
+ 
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIDOMGlobalPropertyInitializer]),
+ 
+@@ -146,30 +149,28 @@ ConsoleAPI.prototype = {
        __mozillaConsole__: { value: true }
      };
  
@@ -1847,7 +1867,19 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
    {
      if (aTopic == "xpcom-shutdown") {
        Services.obs.removeObserver(this, "xpcom-shutdown");
-@@ -191,31 +191,36 @@ ConsoleAPI.prototype = {
+       Services.obs.removeObserver(this, "inner-window-destroyed");
+       this._destroyedWindows = [];
+       this._queuedCalls = [];
++      gTimer = null;
+     }
+     else if (aTopic == "inner-window-destroyed") {
+       let innerWindowID = aSubject.QueryInterface(Ci.nsISupportsPRUint64).data;
+       delete this.timerRegistry[innerWindowID + ""];
+       this._destroyedWindows.push(innerWindowID);
+     }
+   },
+ 
+@@ -191,31 +192,36 @@ ConsoleAPI.prototype = {
        innerID: aMeta.innerID,
        timeStamp: Date.now(),
        stack: this.getStackTrace(aMethod != "trace" ? 1 : null),
@@ -1858,8 +1890,8 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
      if (!this._timerInitialized) {
 -      nsITimer.initWithCallback(this._timerCallback, CALL_DELAY,
 -                                Ci.nsITimer.TYPE_ONE_SHOT);
-+      nsITimer.initWithCallback(this._timerCallback.bind(this), CALL_DELAY,
-+                                Ci.nsITimer.TYPE_REPEATING_SLACK);
++      gTimer.initWithCallback(this._timerCallback.bind(this), CALL_DELAY,
++                              Ci.nsITimer.TYPE_REPEATING_SLACK);
        this._timerInitialized = true;
      }
    },
@@ -1880,7 +1912,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 +    if (!this._queuedCalls.length) {
 +      this._timerInitialized = false;
 +      this._destroyedWindows = [];
-+      nsITimer.cancel();
++      gTimer.cancel();
 +    }
    },
  
