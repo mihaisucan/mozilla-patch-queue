@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 665e11e32550c9b80bbca1cb81e4b52023cb0525
+# Parent f5176267675cc3fce17d66c12ef442a5db713fc6
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1339532207 -10800
+# Date 1339610785 -10800
 
-Bug 762996 - Add errors count to the Web Console button in the developer toolbar
+Bug 762996 - Add errors count to the Web Console button in the developer toolbar; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
 diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/shared/DeveloperToolbar.jsm
 --- a/browser/devtools/shared/DeveloperToolbar.jsm
@@ -49,7 +49,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
  const NOTIFICATIONS = {
    /** DeveloperToolbar.show() has been called, and we're working on it */
    LOAD: "developer-toolbar-load",
-@@ -53,26 +60,37 @@ const NOTIFICATIONS = {
+@@ -53,26 +60,41 @@ const NOTIFICATIONS = {
  };
  
  /**
@@ -71,10 +71,14 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    enumerable: true
  });
  
-+DeveloperToolbar.prototype._sequenceId = 0;
++var _gSequenceId = 0;
++
++/**
++ * Getter for a unique ID.
++ */
 +Object.defineProperty(DeveloperToolbar.prototype, 'sequenceId', {
 +  get: function DT_visible() {
-+    return this._sequenceId++;
++    return _gSequenceId++;
 +  },
 +  enumerable: true
 +});
@@ -87,7 +91,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
  {
    if (this.visible) {
      this.hide();
-@@ -147,19 +165,23 @@ DeveloperToolbar.prototype._onload = fun
+@@ -147,19 +169,23 @@ DeveloperToolbar.prototype._onload = fun
      scratchpad: null
    });
  
@@ -111,8 +115,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
      this._pendingShowCallback.call();
      this._pendingShowCallback = undefined;
    }
-@@ -173,16 +195,66 @@ DeveloperToolbar.prototype._onload = fun
-   }
+@@ -174,16 +200,77 @@ DeveloperToolbar.prototype._onload = fun
  
    if (!DeveloperToolbar.introShownThisSession) {
      this.display.maybeShowIntro();
@@ -120,15 +123,21 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    }
  };
  
+ /**
++ * Initialize the listeners needed for tracking the number of errors for a given
++ * tab.
++ *
++ * @private
++ * @param nsIDOMNode aTab the xul:tab for which you want to track the number of
++ * errors.
++ */
 +DeveloperToolbar.prototype._initErrorsCount = function DT__initErrorsCount(aTab)
 +{
 +  let tabId = aTab.linkedPanel;
 +  if (tabId in this._errorsCount) {
-+    //dump("DT__initErrorsCount tabId already tracked! " + tabId + "\n");
 +    this._updateErrorsCount();
 +    return;
 +  }
-+  //dump("DT__initErrorsCount " + tabId + "\n");
 +
 +  let messageManager = aTab.linkedBrowser.messageManager;
 +  messageManager.loadFrameScript(WEBCONSOLE_CONTENT_SCRIPT_URL, true);
@@ -148,20 +157,25 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +  this._updateErrorsCount();
 +};
 +
++/**
++ * Stop the listeners needed for tracking the number of errors for a given
++ * tab.
++ *
++ * @private
++ * @param nsIDOMNode aTab the xul:tab for which you want to stop tracking the
++ * number of errors.
++ */
 +DeveloperToolbar.prototype._stopErrorsCount = function DT__stopErrorsCount(aTab)
 +{
 +  let tabId = aTab.linkedPanel;
 +  if (!(tabId in this._errorsCount)) {
-+    //dump("DT__stopErrorsCount tabId untracked! " + tabId + "\n");
 +    this._updateErrorsCount();
 +    return;
 +  }
-+  //dump("DT__stopErrorsCount " + tabId + "\n");
-+
-+  let messageManager = aTab.linkedBrowser.messageManager;
 +
 +  this.sendMessageToTab(aTab, "WebConsole:Destroy", {});
 +
++  let messageManager = aTab.linkedBrowser.messageManager;
 +  this._contentMessageListeners.forEach(function(aName) {
 +    messageManager.removeMessageListener(aName, this);
 +  }, this);
@@ -170,7 +184,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +  this._updateErrorsCount();
 +};
 +
- /**
++/**
   * Hide the developer toolbar.
   */
  DeveloperToolbar.prototype.hide = function DT_hide()
@@ -178,7 +192,8 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    if (this._lastState == NOTIFICATIONS.HIDE) {
      return;
    }
-@@ -202,16 +274,23 @@ DeveloperToolbar.prototype.hide = functi
+ 
+@@ -202,16 +289,21 @@ DeveloperToolbar.prototype.hide = functi
  
  /**
   * Hide the developer toolbar
@@ -190,8 +205,6 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +  this._chromeWindow.getBrowser().removeEventListener("beforeunload", this, true);
 +  this._chromeWindow.removeEventListener("resize", this, false);
 +
-+  //dump("DT_destroy\n");
-+
 +  let tabs = this._chromeWindow.getBrowser().tabs;
 +  Array.prototype.forEach.call(tabs, this._stopErrorsCount, this);
  
@@ -202,23 +215,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    this.outputPanel.destroy();
    this.tooltipPanel.destroy();
    delete this._input;
-@@ -241,36 +320,153 @@ DeveloperToolbar.prototype._notify = fun
- };
- 
- /**
-  * Update various parts of the UI when the current tab changes
-  * @param aEvent
-  */
- DeveloperToolbar.prototype.handleEvent = function DT_handleEvent(aEvent)
- {
-+  //dump("DT_handleEvent " + aEvent.type + "\n");
-   if (aEvent.type == "TabSelect" || aEvent.type == "load") {
-     this._chromeWindow.HUDConsoleUI.refreshCommand();
-     this._chromeWindow.DebuggerUI.refreshCommand();
- 
-     if (this.visible) {
-       let contentDocument = this._chromeWindow.getBrowser().contentDocument;
- 
+@@ -256,21 +348,158 @@ DeveloperToolbar.prototype.handleEvent =
        this.display.reattach({
          contentDocument: contentDocument,
          chromeWindow: this._chromeWindow,
@@ -238,20 +235,22 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    }
 +  else if (aEvent.type == "TabClose") {
 +    this._stopErrorsCount(aEvent.target);
-+  } else if (aEvent.type == "beforeunload") {
++  }
++  else if (aEvent.type == "beforeunload") {
 +    this._onPageBeforeUnload(aEvent);
 +  }
 +};
 +
++/**
++ * The handler of messages received from the nsIMessageManager.
++ *
++ * @param object aMessage the message received from the content process.
++ */
 +DeveloperToolbar.prototype.receiveMessage = function DT_receiveMessage(aMessage)
 +{
-+  if (!aMessage.json ||
-+      !(aMessage.json.hudId in this._errorsCount)) {
-+    //dump("received message from unknown ID " + aMessage  + "\n");
++  if (!aMessage.json || !(aMessage.json.hudId in this._errorsCount)) {
 +    return;
 +  }
-+
-+  //dump("receiveMessage " + aMessage.name + " " + aMessage.json.hudId + "\n");
 +
 +  let tabId = aMessage.json.hudId;
 +  let errors = this._errorsCount[tabId];
@@ -261,7 +260,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +      this._onPageError(tabId, aMessage.json.pageError);
 +      break;
 +    case "WebConsole:CachedMessages":
-+      this._onCachedMessages(tabId, aMessage.json.messages);
++      aMessage.json.messages.forEach(this._onPageError.bind(this, tabId));
 +      break;
 +  }
 +
@@ -270,6 +269,14 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +  }
 +};
 +
++/**
++ * Send a message to the content process using the nsIMessageManager of the
++ * given tab.
++ *
++ * @param nsIDOMNode aTab the tab you want to send a message to.
++ * @param string aName the name of the message you want to send.
++ * @param object aMessage the message to send.
++ */
 +DeveloperToolbar.prototype.sendMessageToTab =
 +function DT_sendMessageToTab(aTab, aName, aMessage)
 +{
@@ -282,6 +289,15 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +  aTab.linkedBrowser.messageManager.sendAsyncMessage(aName, aMessage);
 +};
 +
++/**
++ * Process a "WebConsole:PageError" message received from the given tab. This
++ * method counts the JavaScript exceptions received.
++ *
++ * @private
++ * @param string aTabId the ID of the tab from where the page error comes.
++ * @param object aPageError the page error object received from the content
++ * process.
++ */
 +DeveloperToolbar.prototype._onPageError =
 +function DT__onPageError(aTabId, aPageError)
 +{
@@ -295,25 +311,18 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +  this._errorsCount[aTabId]++;
 +};
 +
-+DeveloperToolbar.prototype._onCachedMessages =
-+function DT__onCachedMessages(aTabId, aMessages)
-+{
-+  aMessages.forEach(this._onPageError.bind(this, aTabId));
-+};
-+
-+DeveloperToolbar.prototype._onTabLocationChange =
-+function DT__onTabLocationChange(aTabId)
-+{
-+  this._errorsCount[aTabId] = 0;
-+};
-+
++/**
++ * The |beforeunload| event handler. This function resets the errors count when
++ * a different page starts loading.
++ *
++ * @private
++ * @param nsIDOMEvent aEvent the beforeunload DOM event.
++ */
 +DeveloperToolbar.prototype._onPageBeforeUnload =
 +function DT__onPageBeforeUnload(aEvent)
 +{
-+  //dump("DT__onPageBeforeUnload\n");
 +  let window = aEvent.target.defaultView;
 +  if (window.top !== window) {
-+    //dump("not top window\n");
 +    return;
 +  }
 +
@@ -329,8 +338,17 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 +    }
 +    return false;
 +  }, this);
-+}
++};
 +
++/**
++ * Update the page errors count displayed in the Web Console button for the
++ * currently selected tab.
++ *
++ * @private
++ * @param string [aChangedTabId] Optional. The tab ID that had its page errors
++ * count changed. If this is provided and it doesn't match the currently
++ * selected tab, then the button is not updated.
++ */
 +DeveloperToolbar.prototype._updateErrorsCount =
 +function DT__updateErrorsCount(aChangedTabId)
 +{
@@ -356,28 +374,360 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
   * @param aInput the input element that should get focus.
   * @param aLoadCallback called when the panel is loaded properly.
   */
+diff --git a/browser/devtools/shared/test/Makefile.in b/browser/devtools/shared/test/Makefile.in
+--- a/browser/devtools/shared/test/Makefile.in
++++ b/browser/devtools/shared/test/Makefile.in
+@@ -14,21 +14,23 @@ include $(topsrcdir)/config/rules.mk
+ 
+ _BROWSER_TEST_FILES = \
+   browser_browser_basic.js \
+   browser_promise_basic.js \
+   browser_require_basic.js \
+   browser_templater_basic.js \
+   browser_toolbar_basic.js \
+   browser_toolbar_tooltip.js \
++  browser_toolbar_webconsole_errors_count.js \
+   head.js \
+   $(NULL)
+ 
+ _BROWSER_TEST_PAGES = \
+   browser_templater_basic.html \
+   browser_toolbar_basic.html \
++  browser_toolbar_webconsole_errors_count.html \
+   $(NULL)
+ 
+ libs:: $(_BROWSER_TEST_FILES)
+ 	$(INSTALL) $(foreach f,$^,"$f") $(DEPTH)/_tests/testing/mochitest/browser/$(relativesrcdir)
+ 
+ libs:: $(_BROWSER_TEST_PAGES)
+ 	$(INSTALL) $(foreach f,$^,"$f") $(DEPTH)/_tests/testing/mochitest/browser/$(relativesrcdir)
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.html b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.html
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.html
+@@ -0,0 +1,29 @@
++<!DOCTYPE HTML>
++<!-- Any copyright is dedicated to the Public Domain.
++     http://creativecommons.org/publicdomain/zero/1.0/ -->
++<html>
++<head>
++  <meta charset="UTF-8">
++  <title>Developer Toolbar Tests - errors count in the Web Console button</title>
++  <script type="text/javascript">
++    console.log("foobarBug762996consoleLog");
++    window.onload = function() {
++      window.foobarBug762996load();
++    };
++    window.foobarBug762996a();
++  </script>
++  <script type="text/javascript">
++    window.foobarBug762996b();
++  </script>
++</head>
++<body>
++  <p>Hello world! Test for errors count in the Web Console button (developer
++  toolbar).</p>
++  <p style="color: foobarBug762996css"><button>click me</button></p>
++  <script type="text/javascript">
++    document.querySelector("button").onclick = function() {
++      window.foobarBug762996click();
++    };
++  </script>
++</body>
++</html>
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+@@ -0,0 +1,208 @@
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Tests that the developer toolbar errors count works properly.
++
++function test() {
++  const TEST_URI = "http://example.com/browser/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.html";
++
++  let imported = {};
++  Components.utils.import("resource:///modules/HUDService.jsm", imported);
++  let HUDService = imported.HUDService;
++
++  let webconsole = document.getElementById("developer-toolbar-webconsole");
++  let toolbar = document.getElementById("Tools:DevToolbar");
++  let tab1, tab2;
++
++  function openToolbar(browser, tab) {
++    tab1 = tab;
++    ignoreAllUncaughtExceptions(false);
++
++    ok(!DeveloperToolbar.visible, "DeveloperToolbar is not visible");
++
++    expectUncaughtException();
++    oneTimeObserve(DeveloperToolbar.NOTIFICATIONS.SHOW, onOpenToolbar);
++    toolbar.doCommand();
++  }
++
++  ignoreAllUncaughtExceptions();
++  addTab(TEST_URI, openToolbar);
++
++  function getErrorsCount() {
++    let match = webconsole.label.match(/\((\d+)\)$/);
++    return (match || [])[1];
++  }
++
++  function onOpenToolbar() {
++    ok(DeveloperToolbar.visible, "DeveloperToolbar is visible");
++
++    waitForValue({
++      name: "web console button shows page errors",
++      validator: getErrorsCount,
++      value: 3,
++      success: addErrors,
++      failure: finish,
++    });
++  }
++
++  function addErrors() {
++    expectUncaughtException();
++    let button = content.document.querySelector("button");
++    EventUtils.synthesizeMouse(button, 2, 2, {}, content);
++
++    waitForValue({
++      name: "button shows one more error after click in page",
++      validator: getErrorsCount,
++      value: 4,
++      success: function() {
++        ignoreAllUncaughtExceptions();
++        addTab(TEST_URI, onOpenSecondTab);
++      },
++      failure: finish,
++    });
++  }
++
++  function onOpenSecondTab(browser, tab) {
++    tab2 = tab;
++
++    ignoreAllUncaughtExceptions(false);
++    expectUncaughtException();
++
++    waitForValue({
++      name: "button shows correct number of errors after new tab is open",
++      validator: getErrorsCount,
++      value: 3,
++      success: switchToTab1,
++      failure: finish,
++    });
++  }
++
++  function switchToTab1() {
++    gBrowser.selectedTab = tab1;
++    waitForValue({
++      name: "button shows the page errors from tab 1",
++      validator: getErrorsCount,
++      value: 4,
++      success: function() {
++        openWebConsole(tab1, onWebConsoleOpen);
++      },
++      failure: finish,
++    });
++  }
++
++  function openWebConsole(tab, callback)
++  {
++    function _onWebConsoleOpen(subject)
++    {
++      subject.QueryInterface(Ci.nsISupportsString);
++      let hud = HUDService.getHudReferenceById(subject.data);
++      executeSoon(callback.bind(null, hud));
++    }
++
++    oneTimeObserve("web-console-created", _onWebConsoleOpen);
++
++    HUDService.activateHUDForContext(tab);
++  }
++
++  function onWebConsoleOpen(hud) {
++    waitForValue({
++      name: "web console shows the page errors",
++      validator: function() {
++        return hud.outputNode.querySelectorAll(".hud-exception").length;
++      },
++      value: 4,
++      success: checkConsoleOutput.bind(null, hud),
++      failure: finish,
++    });
++  }
++
++  function checkConsoleOutput(hud) {
++    let errors = ["foobarBug762996a", "foobarBug762996b", "foobarBug762996load",
++                  "foobarBug762996click", "foobarBug762996consoleLog",
++                  "foobarBug762996css"];
++    errors.forEach(function(error) {
++      isnot(hud.outputNode.textContent.indexOf(error), -1,
++            error + " found in the Web Console output");
++    });
++
++    hud.jsterm.clearOutput();
++
++    is(hud.outputNode.textContent.indexOf("foobarBug762996color"), -1,
++       "clearOutput() worked");
++
++    expectUncaughtException();
++    let button = content.document.querySelector("button");
++    EventUtils.synthesizeMouse(button, 2, 2, {}, content);
++
++    waitForValue({
++      name: "button shows one more error after another click in page",
++      validator: getErrorsCount,
++      value: 5,
++      success: function() {
++        waitForValue(waitForNewError);
++      },
++      failure: finish,
++    });
++
++    let waitForNewError = {
++      name: "the Web Console displays the new error",
++      validator: function() {
++        return hud.outputNode.textContent.indexOf("foobarBug762996click") > -1;
++      },
++      success: doPageReload.bind(null, hud),
++      failure: finish,
++    };
++  }
++
++  function doPageReload(hud) {
++    tab1.linkedBrowser.addEventListener("load", function _onReload() {
++      tab1.linkedBrowser.removeEventListener("load", _onReload, true);
++      ignoreAllUncaughtExceptions(false);
++      expectUncaughtException();
++    }, true);
++
++    ignoreAllUncaughtExceptions();
++    content.location.reload();
++
++    waitForValue({
++      name: "the Web Console button count has been reset after page reload",
++      validator: getErrorsCount,
++      value: 3,
++      success: function() {
++        waitForValue(waitForConsoleOutputAfterReload);
++      },
++      failure: finish,
++    });
++
++    let waitForConsoleOutputAfterReload = {
++      name: "the Web Console displays the correct number of errors after reload",
++      validator: function() {
++        return hud.outputNode.querySelectorAll(".hud-exception").length;
++      },
++      value: 4,
++      success: function() {
++        isnot(hud.outputNode.textContent.indexOf("foobarBug762996load"), -1,
++              "foobarBug762996load found in console output after page reload");
++        testEnd();
++      },
++      failure: testEnd,
++    };
++  }
++
++  function testEnd() {
++    document.getElementById("developer-toolbar-closebutton").doCommand();
++    HUDService.deactivateHUDForContext(tab1);
++    gBrowser.removeTab(tab1);
++    gBrowser.removeTab(tab2);
++    finish();
++  }
++
++  function oneTimeObserve(name, callback) {
++    function _onObserve(aSubject, aTopic, aData) {
++      Services.obs.removeObserver(_onObserve, name);
++      callback(aSubject, aTopic, aData);
++    };
++    Services.obs.addObserver(_onObserve, name, false);
++  }
++}
++
+diff --git a/browser/devtools/shared/test/head.js b/browser/devtools/shared/test/head.js
+--- a/browser/devtools/shared/test/head.js
++++ b/browser/devtools/shared/test/head.js
+@@ -126,8 +126,72 @@ function catchFail(func) {
+     catch (ex) {
+       ok(false, ex);
+       console.error(ex);
+       finish();
+       throw ex;
+     }
+   };
+ }
++
++/**
++ * Polls a given function waiting for the given value.
++ *
++ * @param object aOptions
++ *        Options object with the following properties:
++ *        - validator
++ *        A validator function that should return the expected value. This is
++ *        called every few milliseconds to check if the result is the expected
++ *        one. When the returned result is the expected one, then the |success|
++ *        function is called and polling stops. If |validator| never returns
++ *        the expected value, then polling timeouts after several tries and
++ *        a failure is recorded - the given |failure| function is invoked.
++ *        - success
++ *        A function called when the validator function returns the expected
++ *        value.
++ *        - failure
++ *        A function called if the validator function timeouts - fails to return
++ *        the expected value in the given time.
++ *        - name
++ *        Name of test. This is used to generate the success and failure
++ *        messages.
++ *        - timeout
++ *        Timeout for validator function, in milliseconds. Default is 5000 ms.
++ *        - value
++ *        The expected value. If this option is omitted then the |validator|
++ *        function must return a trueish value.
++ *        Each of the provided callback functions will receive two arguments:
++ *        the |aOptions| object and the last value returned by |validator|.
++ */
++function waitForValue(aOptions)
++{
++  let start = Date.now();
++  let timeout = aOptions.timeout || 5000;
++  let lastValue;
++
++  function wait(validatorFn, successFn, failureFn)
++  {
++    if ((Date.now() - start) > timeout) {
++      // Log the failure.
++      ok(false, "Timed out while waiting for: " + aOptions.name);
++      let expected = "value" in aOptions ?
++                     "'" + aOptions.value + "'" :
++                     "a trueish value";
++      info("timeout info :: got '" + lastValue + "', expected " + expected);
++      failureFn(aOptions, lastValue);
++      return;
++    }
++
++    lastValue = validatorFn(aOptions, lastValue);
++    let successful = "value" in aOptions ?
++                      lastValue == aOptions.value :
++                      lastValue;
++    if (successful) {
++      ok(true, aOptions.name);
++      successFn(aOptions, lastValue);
++    }
++    else {
++      setTimeout(function() wait(validatorFn, successFn, failureFn), 100);
++    }
++  }
++
++  wait(aOptions.validator, aOptions.success, aOptions.failure);
++}
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -53,16 +53,17 @@ let Manager = {
-    */
-   get sequenceId() "HUDContent-" + (++this._sequence),
- 
-   /**
-    * Initialize the Web Console manager.
-    */
-   init: function Manager_init()
-   {
-+    //dump("Manager_init " + this.hudId + " \n");
-     this._enabledFeatures = [];
-     this._messageHandlers = {};
- 
-     this._messageListeners.forEach(function(aName) {
-       addMessageListener(aName, this);
-     }, this);
- 
-     // Need to track the owner XUL window to listen to the unload and TabClose
-@@ -83,31 +84,29 @@ let Manager = {
+@@ -83,31 +83,29 @@ let Manager = {
    },
  
    /**
@@ -415,7 +765,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
          break;
        case "WebConsole:GetPreferences":
          this.handleGetPreferences(aMessage.json);
-@@ -1281,39 +1280,57 @@ let ConsoleListener = {
+@@ -1281,39 +1279,57 @@ let ConsoleListener = {
     */
    observe: function CL_observe(aScriptError)
    {
@@ -484,7 +834,7 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     *         with an added _type property so the remote Web Console instance can
     *         tell the difference between various types of cached messages.
     */
-@@ -1321,24 +1338,25 @@ let ConsoleListener = {
+@@ -1321,24 +1337,25 @@ let ConsoleListener = {
    {
      let innerWindowId = WebConsoleUtils.getInnerWindowId(Manager.window);
      let result = [];
@@ -512,18 +862,6 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
     * Remove the nsIConsoleService listener.
     */
    destroy: function CL_destroy()
-@@ -2500,8 +2518,11 @@ let ConsoleProgressListener = {
-     this._locationChange = false;
-     let webProgress = docShell.QueryInterface(Ci.nsIWebProgress);
-     webProgress.removeProgressListener(this);
-   },
- };
- 
- Manager.init();
- })();
-+
-+//dump("HUDService-content script loaded\n");
-+
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
@@ -608,7 +946,26 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
          return CATEGORY_JS;
      }
    },
-@@ -2301,20 +2284,18 @@ HeadsUpDisplay.prototype = {
+@@ -2277,18 +2260,16 @@ HeadsUpDisplay.prototype = {
+    *
+    * @private
+    * @param object aMessage
+    *        A MessageManager object that holds the remote message.
+    */
+   receiveMessage: function HUD_receiveMessage(aMessage)
+   {
+     if (!aMessage.json || aMessage.json.hudId != this.hudId) {
+-      Cu.reportError("JSTerm: received message " + aMessage.name +
+-                     " from wrong hudId.");
+       return;
+     }
+ 
+     switch (aMessage.name) {
+       case "JSTerm:EvalResult":
+       case "JSTerm:EvalObject":
+       case "JSTerm:AutocompleteProperties":
+         this._receiveMessageWithCallback(aMessage.json);
+@@ -2301,20 +2282,18 @@ HeadsUpDisplay.prototype = {
          break;
        case "WebConsole:ConsoleAPI":
          this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage,
