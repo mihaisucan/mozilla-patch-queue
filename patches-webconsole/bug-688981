@@ -1,10 +1,31 @@
 # HG changeset patch
-# Parent f6e4f72930a91289f1ad81d3c7b0e1f64acdd774
+# Parent 59c5ee47dc45209155bf2abbbe28422e0b0f2786
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1339662137 -10800
+# Date 1339706652 -10800
 
 Bug 688981 - Place the web console in its own iframe
 
+diff --git a/browser/base/content/browser.xul b/browser/base/content/browser.xul
+--- a/browser/base/content/browser.xul
++++ b/browser/base/content/browser.xul
+@@ -4,17 +4,16 @@
+ #
+ # This Source Code Form is subject to the terms of the Mozilla Public
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ <?xml-stylesheet href="chrome://browser/content/browser.css" type="text/css"?>
+ <?xml-stylesheet href="chrome://browser/content/places/places.css" type="text/css"?>
+ <?xml-stylesheet href="chrome://browser/skin/devtools/common.css" type="text/css"?>
+-<?xml-stylesheet href="chrome://browser/skin/devtools/webconsole.css" type="text/css"?>
+ <?xml-stylesheet href="chrome://browser/skin/" type="text/css"?>
+ 
+ <?xul-overlay href="chrome://global/content/editMenuOverlay.xul"?>
+ <?xul-overlay href="chrome://browser/content/baseMenuOverlay.xul"?>
+ <?xul-overlay href="chrome://browser/content/places/placesOverlay.xul"?>
+ 
+ # All DTD information is stored in a separate file so that it can be shared by
+ # hiddenWindow.xul.
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 --- a/browser/devtools/jar.mn
 +++ b/browser/devtools/jar.mn
@@ -30,7 +51,411 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -996,1951 +996,16 @@ HUD_SERVICE.prototype =
+@@ -44,67 +44,16 @@ function LogFactory(aMessagePrefix)
+     var _msg = aMessagePrefix + " " + aMessage + "\n";
+     dump(_msg);
+   }
+   return log;
+ }
+ 
+ let log = LogFactory("*** HUDService:");
+ 
+-// The amount of time in milliseconds that must pass between messages to
+-// trigger the display of a new group.
+-const NEW_GROUP_DELAY = 5000;
+-
+-// The amount of time in milliseconds that we wait before performing a live
+-// search.
+-const SEARCH_DELAY = 200;
+-
+-// The number of lines that are displayed in the console output by default, for
+-// each category. The user can change this number by adjusting the hidden
+-// "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
+-const DEFAULT_LOG_LIMIT = 200;
+-
+-// The various categories of messages. We start numbering at zero so we can
+-// use these as indexes into the MESSAGE_PREFERENCE_KEYS matrix below.
+-const CATEGORY_NETWORK = 0;
+-const CATEGORY_CSS = 1;
+-const CATEGORY_JS = 2;
+-const CATEGORY_WEBDEV = 3;
+-const CATEGORY_INPUT = 4;   // always on
+-const CATEGORY_OUTPUT = 5;  // always on
+-
+-// The possible message severities. As before, we start at zero so we can use
+-// these as indexes into MESSAGE_PREFERENCE_KEYS.
+-const SEVERITY_ERROR = 0;
+-const SEVERITY_WARNING = 1;
+-const SEVERITY_INFO = 2;
+-const SEVERITY_LOG = 3;
+-
+-// A mapping from the console API log event levels to the Web Console
+-// severities.
+-const LEVELS = {
+-  error: SEVERITY_ERROR,
+-  warn: SEVERITY_WARNING,
+-  info: SEVERITY_INFO,
+-  log: SEVERITY_LOG,
+-  trace: SEVERITY_LOG,
+-  debug: SEVERITY_LOG,
+-  dir: SEVERITY_LOG,
+-  group: SEVERITY_LOG,
+-  groupCollapsed: SEVERITY_LOG,
+-  groupEnd: SEVERITY_LOG,
+-  time: SEVERITY_LOG,
+-  timeEnd: SEVERITY_LOG
+-};
+-
+-// The lowest HTTP response code (inclusive) that is considered an error.
+-const MIN_HTTP_ERROR_CODE = 400;
+-// The highest HTTP response code (inclusive) that is considered an error.
+-const MAX_HTTP_ERROR_CODE = 599;
+-
+ // The HTML namespace.
+ const HTML_NS = "http://www.w3.org/1999/xhtml";
+ 
+ // The XUL namespace.
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ 
+ // The fragment of a CSS class name that identifies each category.
+ const CATEGORY_CLASS_FRAGMENTS = [
+@@ -138,116 +87,43 @@ const MESSAGE_PREFERENCE_KEYS = [
+   [ null,         null,         null,   null,          ],  // Input
+   [ null,         null,         null,   null,          ],  // Output
+ ];
+ 
+ // Possible directions that can be passed to HUDService.animate().
+ const ANIMATE_OUT = 0;
+ const ANIMATE_IN = 1;
+ 
+-// Constants used for defining the direction of JSTerm input history navigation.
+-const HISTORY_BACK = -1;
+-const HISTORY_FORWARD = 1;
+-
+ // Minimum console height, in pixels.
+ const MINIMUM_CONSOLE_HEIGHT = 150;
+ 
+ // Minimum page height, in pixels. This prevents the Web Console from
+ // remembering a height that covers the whole page.
+ const MINIMUM_PAGE_HEIGHT = 50;
+ 
+ // The default console height, as a ratio from the content window inner height.
+ const DEFAULT_CONSOLE_HEIGHT = 0.33;
+ 
+ // This script is inserted into the content process.
+ const CONTENT_SCRIPT_URL = "chrome://browser/content/devtools/HUDService-content.js";
+ 
++// The Web Console UI is loaded in an iframe. This constant points to the file
++// to load in the iframe.
++const UI_IFRAME_URL = "chrome://browser/content/devtools/webconsole.xul";
++
+ const ERRORS = { LOG_MESSAGE_MISSING_ARGS:
+                  "Missing arguments: aMessage, aConsoleNode and aMessageNode are required.",
+                  CANNOT_GET_HUD: "Cannot getHeads Up Display with provided ID",
+                  MISSING_ARGS: "Missing arguments",
+                  LOG_OUTPUT_FAILED: "Log Failure: Could not append messageNode to outputNode",
+ };
+ 
+-// The indent of a console group in pixels.
+-const GROUP_INDENT = 12;
+-
+ // The pref prefix for webconsole filters
+ const PREFS_PREFIX = "devtools.webconsole.filter.";
+ 
+-// The number of messages to display in a single display update. If we display
+-// too many messages at once we slow the Firefox UI too much.
+-const MESSAGES_IN_INTERVAL = DEFAULT_LOG_LIMIT;
+-
+-// The delay between display updates - tells how often we should *try* to push
+-// new messages to screen. This value is optimistic, updates won't always
+-// happen. Keep this low so the Web Console output feels live.
+-const OUTPUT_INTERVAL = 50; // milliseconds
+-
+-// When the output queue has more than MESSAGES_IN_INTERVAL items we throttle
+-// output updates to this number of milliseconds. So during a lot of output we
+-// update every N milliseconds given here.
+-const THROTTLE_UPDATES = 1000; // milliseconds
+-
+-///////////////////////////////////////////////////////////////////////////
+-//// Helper for creating the network panel.
+-
+-/**
+- * Creates a DOMNode and sets all the attributes of aAttributes on the created
+- * element.
+- *
+- * @param nsIDOMDocument aDocument
+- *        Document to create the new DOMNode.
+- * @param string aTag
+- *        Name of the tag for the DOMNode.
+- * @param object aAttributes
+- *        Attributes set on the created DOMNode.
+- *
+- * @returns nsIDOMNode
+- */
+-function createElement(aDocument, aTag, aAttributes)
+-{
+-  let node = aDocument.createElement(aTag);
+-  if (aAttributes) {
+-    for (let attr in aAttributes) {
+-      node.setAttribute(attr, aAttributes[attr]);
+-    }
+-  }
+-  return node;
+-}
+-
+-///////////////////////////////////////////////////////////////////////////
+-//// Private utility functions for the HUD service
+-
+-/**
+- * Ensures that the number of message nodes of type aCategory don't exceed that
+- * category's line limit by removing old messages as needed.
+- *
+- * @param aHUDId aHUDId
+- *        The HeadsUpDisplay ID.
+- * @param integer aCategory
+- *        The category of message nodes to limit.
+- * @return number
+- *         The number of removed nodes.
+- */
+-function pruneConsoleOutputIfNecessary(aHUDId, aCategory)
+-{
+-  let hudRef = HUDService.getHudReferenceById(aHUDId);
+-  let outputNode = hudRef.outputNode;
+-  let logLimit = hudRef.logLimitForCategory(aCategory);
+-
+-  let messageNodes = outputNode.getElementsByClassName("webconsole-msg-" +
+-      CATEGORY_CLASS_FRAGMENTS[aCategory]);
+-  let n = Math.max(0, messageNodes.length - logLimit);
+-  let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
+-  toRemove.forEach(hudRef.removeOutputMessage, hudRef);
+-
+-  return n;
+-}
+-
+ ///////////////////////////////////////////////////////////////////////////
+ //// The HUD service
+ 
+ function HUD_SERVICE()
+ {
+   // These methods access the "this" object, but they're registered as
+   // event listeners. So we hammer in the "this" binding.
+   this.onTabClose = this.onTabClose.bind(this);
+@@ -310,23 +186,22 @@ HUD_SERVICE.prototype =
+       return this.hudReferences[hudId];
+     }
+ 
+     this.wakeup();
+ 
+     let window = aTab.ownerDocument.defaultView;
+     let gBrowser = window.gBrowser;
+ 
+-    // TODO: check that this works as intended
+     gBrowser.tabContainer.addEventListener("TabClose", this.onTabClose, false);
+     window.addEventListener("unload", this.onWindowUnload, false);
+ 
+     this.registerDisplay(hudId);
+ 
+-    let hud = new HeadsUpDisplay(aTab);
++    let hud = new WebConsole(aTab);
+     this.hudReferences[hudId] = hud;
+ 
+     // register the controller to handle "select all" properly
+     this.createController(window);
+ 
+     if (!aAnimated || hud.consolePanel) {
+       this.disableAnimation(hudId);
+     }
+@@ -432,84 +307,16 @@ HUD_SERVICE.prototype =
+   setFilterState: function HS_setFilterState(aHUDId, aToggleType, aState)
+   {
+     this.filterPrefs[aHUDId][aToggleType] = aState;
+     this.adjustVisibilityForMessageType(aHUDId, aToggleType, aState);
+     Services.prefs.setBoolPref(PREFS_PREFIX + aToggleType, aState);
+   },
+ 
+   /**
+-   * Splits the given console messages into groups based on their timestamps.
+-   *
+-   * @param nsIDOMNode aOutputNode
+-   *        The output node to alter.
+-   * @returns void
+-   */
+-  regroupOutput: function HS_regroupOutput(aOutputNode)
+-  {
+-    // Go through the nodes and adjust the placement of "webconsole-new-group"
+-    // classes.
+-    let nodes = aOutputNode.querySelectorAll(".hud-msg-node" +
+-      ":not(.hud-filtered-by-string):not(.hud-filtered-by-type)");
+-    let lastTimestamp;
+-    for (let i = 0, n = nodes.length; i < n; i++) {
+-      let thisTimestamp = nodes[i].timestamp;
+-      if (lastTimestamp != null &&
+-          thisTimestamp >= lastTimestamp + NEW_GROUP_DELAY) {
+-        nodes[i].classList.add("webconsole-new-group");
+-      }
+-      else {
+-        nodes[i].classList.remove("webconsole-new-group");
+-      }
+-      lastTimestamp = thisTimestamp;
+-    }
+-  },
+-
+-  /**
+-   * Turns the display of log nodes on and off appropriately to reflect the
+-   * adjustment of the message type filter named by @aPrefKey.
+-   *
+-   * @param string aHUDId
+-   *        The ID of the HUD to alter.
+-   * @param string aPrefKey
+-   *        The preference key for the message type being filtered: one of the
+-   *        values in the MESSAGE_PREFERENCE_KEYS table.
+-   * @param boolean aState
+-   *        True if the filter named by @aMessageType is being turned on; false
+-   *        otherwise.
+-   * @returns void
+-   */
+-  adjustVisibilityForMessageType:
+-  function HS_adjustVisibilityForMessageType(aHUDId, aPrefKey, aState)
+-  {
+-    let outputNode = this.getHudReferenceById(aHUDId).outputNode;
+-    let doc = outputNode.ownerDocument;
+-
+-    // Look for message nodes ("hud-msg-node") with the given preference key
+-    // ("hud-msg-error", "hud-msg-cssparser", etc.) and add or remove the
+-    // "hud-filtered-by-type" class, which turns on or off the display.
+-
+-    let xpath = ".//*[contains(@class, 'hud-msg-node') and " +
+-      "contains(concat(@class, ' '), 'hud-" + aPrefKey + " ')]";
+-    let result = doc.evaluate(xpath, outputNode, null,
+-      Ci.nsIDOMXPathResult.UNORDERED_NODE_SNAPSHOT_TYPE, null);
+-    for (let i = 0; i < result.snapshotLength; i++) {
+-      let node = result.snapshotItem(i);
+-      if (aState) {
+-        node.classList.remove("hud-filtered-by-type");
+-      }
+-      else {
+-        node.classList.add("hud-filtered-by-type");
+-      }
+-    }
+-
+-    this.regroupOutput(outputNode);
+-  },
+-
+-  /**
+    * Check that the passed string matches the filter arguments.
+    *
+    * @param String aString
+    *        to search for filter words in.
+    * @param String aFilter
+    *        is a string containing all of the words to filter on.
+    * @returns boolean
+    */
+@@ -522,51 +329,16 @@ HUD_SERVICE.prototype =
+     let searchStr = aString.toLowerCase();
+     let filterStrings = aFilter.toLowerCase().split(/\s+/);
+     return !filterStrings.some(function (f) {
+       return searchStr.indexOf(f) == -1;
+     });
+   },
+ 
+   /**
+-   * Turns the display of log nodes on and off appropriately to reflect the
+-   * adjustment of the search string.
+-   *
+-   * @param string aHUDId
+-   *        The ID of the HUD to alter.
+-   * @param string aSearchString
+-   *        The new search string.
+-   * @returns void
+-   */
+-  adjustVisibilityOnSearchStringChange:
+-  function HS_adjustVisibilityOnSearchStringChange(aHUDId, aSearchString)
+-  {
+-    let outputNode = this.getHudReferenceById(aHUDId).outputNode;
+-
+-    let nodes = outputNode.getElementsByClassName("hud-msg-node");
+-
+-    for (let i = 0, n = nodes.length; i < n; ++i) {
+-      let node = nodes[i];
+-
+-      // hide nodes that match the strings
+-      let text = node.clipboardText;
+-
+-      // if the text matches the words in aSearchString...
+-      if (this.stringMatchesFilters(text, aSearchString)) {
+-        node.classList.remove("hud-filtered-by-string");
+-      }
+-      else {
+-        node.classList.add("hud-filtered-by-string");
+-      }
+-    }
+-
+-    this.regroupOutput(outputNode);
+-  },
+-
+-  /**
+    * Register a new Heads Up Display
+    *
+    * @returns void
+    */
+   registerDisplay: function HS_registerDisplay(aHUDId)
+   {
+     // register a display DOM node Id with the service.
+     if (!aHUDId){
+@@ -734,52 +506,16 @@ HUD_SERVICE.prototype =
+    * completes. Used by unit tests. The callback takes one argument: the HTTP
+    * activity object as received from the remote Web Console.
+    *
+    * @type function
+    */
+   lastFinishedRequestCallback: null,
+ 
+   /**
+-   * Opens a NetworkPanel.
+-   *
+-   * @param nsIDOMNode aNode
+-   *        The message node you want the panel to be anchored to.
+-   * @param object aHttpActivity
+-   *        The HTTP activity object that holds network request and response
+-   *        information. This object is given to the NetworkPanel constructor.
+-   * @return object
+-   *         The new NetworkPanel instance.
+-   */
+-  openNetworkPanel: function HS_openNetworkPanel(aNode, aHttpActivity)
+-  {
+-    let doc = aNode.ownerDocument;
+-    let parent = doc.getElementById("mainPopupSet");
+-    let netPanel = new NetworkPanel(parent, aHttpActivity);
+-    netPanel.linkNode = aNode;
+-    aNode._netPanel = netPanel;
+-
+-    let panel = netPanel.panel;
+-    panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
+-    panel.sizeTo(450, 500);
+-    panel.setAttribute("hudId", aHttpActivity.hudId);
+-
+-    panel.addEventListener("popuphiding", function HS_netPanel_onHide() {
+-      panel.removeEventListener("popuphiding", HS_netPanel_onHide);
+-
+-      aNode._panelOpen = false;
+-      aNode._netPanel = null;
+-    });
+-
+-    aNode._panelOpen = true;
+-
+-    return netPanel;
+-  },
+-
+-  /**
+    * Creates a generator that always returns a unique number for use in the
+    * indexes
+    *
+    * @returns Generator
+    */
+   createSequencer: function HS_createSequencer(aInt)
+   {
+     function sequencer(aInt)
+@@ -996,1239 +732,89 @@ HUD_SERVICE.prototype =
          }
          strings.push("[" + timestampString + "] " + item.clipboardText);
        }
@@ -42,29 +467,37 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -//////////////////////////////////////////////////////////////////////////
 -// HeadsUpDisplay
 -//////////////////////////////////////////////////////////////////////////
--
--/**
+ 
+ /**
 - * HeadsUpDisplay is an interactive console initialized *per tab*  that
 - * displays console log data as well as provides an interactive terminal to
-- * manipulate the current tab's document content.
-- *
-- * @param nsIDOMElement aTab
++ * A WebConsole instance is an interactive console initialized *per tab*
++ * that displays console log data as well as provides an interactive terminal to
+  * manipulate the current tab's document content.
+  *
++ * This object only wraps the iframe that holds the Web Console UI.
++ *
+  * @param nsIDOMElement aTab
 - *        The xul:tab for which you want the HeadsUpDisplay object.
-- */
++ *        The xul:tab for which you want the WebConsole object.
+  */
 -function HeadsUpDisplay(aTab)
--{
--  this.tab = aTab;
++function WebConsole(aTab, aCallback)
+ {
+   this.tab = aTab;
 -  this.hudId = "hud_" + this.tab.linkedPanel;
 -  this.chromeDocument = this.tab.ownerDocument;
 -  this.chromeWindow = this.chromeDocument.defaultView;
 -  this.notificationBox = this.chromeDocument.getElementById(this.tab.linkedPanel);
 -  this.browser = this.tab.linkedBrowser;
 -  this.messageManager = this.browser.messageManager;
--
+ 
 -  // Track callback functions registered for specific async requests sent to the
 -  // content process.
 -  this.asyncRequests = {};
--
++  this._onIframeLoad = this._onIframeLoad.bind(this);
++  this._onInitCallback = aCallback;
+ 
 -  // create a panel dynamically and attach to the parentNode
 -  this.createHUD();
 -
@@ -81,8 +514,9 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -  this._networkRequests = {};
 -
 -  this._setupMessageManager();
--}
--
++  this._init();
+ }
+ 
 -HeadsUpDisplay.prototype = {
 -  /**
 -   * Holds the network requests currently displayed by the Web Console. Each key
@@ -117,22 +551,31 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -   */
 -  _pruneCategoriesQueue: null,
 -
--  /**
--   * Message names that the HUD listens for. These messages come from the remote
--   * Web Console content script.
--   *
--   * @private
--   * @type array
--   */
--  _messageListeners: ["JSTerm:EvalObject", "WebConsole:ConsoleAPI",
--    "WebConsole:CachedMessages", "WebConsole:PageError", "JSTerm:EvalResult",
--    "JSTerm:AutocompleteProperties", "JSTerm:ClearOutput",
--    "JSTerm:InspectObject", "WebConsole:NetworkActivity",
--    "WebConsole:FileActivity", "WebConsole:LocationChange",
--    "JSTerm:NonNativeConsoleAPI"],
--
++WebConsole.prototype = {
+   /**
+    * Message names that the HUD listens for. These messages come from the remote
+    * Web Console content script.
+    *
+    * @private
+    * @type array
+    */
+   _messageListeners: ["JSTerm:EvalObject", "WebConsole:ConsoleAPI",
+     "WebConsole:CachedMessages", "WebConsole:PageError", "JSTerm:EvalResult",
+     "JSTerm:AutocompleteProperties", "JSTerm:ClearOutput",
+     "JSTerm:InspectObject", "WebConsole:NetworkActivity",
+     "WebConsole:FileActivity", "WebConsole:LocationChange",
+     "JSTerm:NonNativeConsoleAPI"],
+ 
 -  consolePanel: null,
--
++  _init: function WC__init()
++  {
++    let document = this.chromeDocument = this.tab.ownerDocument;
++    this.chromeWindow = document.defaultView;
++    this.browser = this.tab.linkedBrowser;
++    this.messageManager = this.browser.messageManager;
++    this.hudId = "hud_" + this.tab.linkedPanel;
++    this.notificationBox = document.getElementById(this.tab.linkedPanel);
+ 
 -  contentLocation: "",
 -
 -  /**
@@ -482,18 +925,24 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -  makeHUDNodes: function HUD_makeHUDNodes()
 -  {
 -    this.splitter = this.makeXULNode("splitter");
--    this.splitter.setAttribute("class", "hud-splitter");
--
++    this.splitter = document.createElement("splitter");
+     this.splitter.setAttribute("class", "hud-splitter");
+ 
 -    this.HUDBox = this.makeXULNode("vbox");
--    this.HUDBox.setAttribute("id", this.hudId);
--    this.HUDBox.setAttribute("class", "hud-box animated");
--    this.HUDBox.style.height = 0;
--    this.HUDBox.lastTimestamp = 0;
--
++    this.HUDBox = document.createElement("vbox");
+     this.HUDBox.setAttribute("id", this.hudId);
+     this.HUDBox.setAttribute("class", "hud-box animated");
+     this.HUDBox.style.height = 0;
+     this.HUDBox.lastTimestamp = 0;
+ 
 -    let outerWrap = this.makeXULNode("vbox");
 -    outerWrap.setAttribute("class", "hud-outer-wrapper");
 -    outerWrap.setAttribute("flex", "1");
--
++    this.iframe = document.createElement("iframe");
++    this.iframe.flex = 1;
++    this.iframe.addEventListener("load", this._onIframeLoad, true);
++    this.iframe.src = UI_IFRAME_URL;
+ 
 -    let consoleCommandSet = this.makeXULNode("commandset");
 -    outerWrap.appendChild(consoleCommandSet);
 -
@@ -557,21 +1006,24 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    this.HUDBox.appendChild(outerWrap);
 -
 -    return this.HUDBox;
--  },
--
++    this.notificationBox.appendChild(this.iframe);
+   },
+ 
 -  /**
 -   * sets the click events for all binary toggle filter buttons
 -   *
 -   * @returns void
 -   */
 -  setFilterTextBoxEvents: function HUD_setFilterTextBoxEvents()
--  {
++  _onIframeLoad: function WC__onIframeLoad()
+   {
 -    var filterBox = this.filterBox;
 -    function onChange()
 -    {
 -      // To improve responsiveness, we let the user finish typing before we
 -      // perform the search.
--
++    this.iframe.removeEventListener("load", this._onIframeLoad, true);
+ 
 -      if (this.timer == null) {
 -        let timerClass = Cc["@mozilla.org/timer;1"];
 -        this.timer = timerClass.createInstance(Ci.nsITimer);
@@ -591,15 +1043,18 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -
 -    filterBox.addEventListener("command", onChange, false);
 -    filterBox.addEventListener("input", onChange, false);
--  },
--
++    let window = this.iframeWindow = this.iframe.contentWindow.wrappedJSObject;
++    this.ui = new window.WebConsoleFrame(this, this._onIframeReady);
+   },
+ 
 -  /**
 -   * Make the filter toolbar where we can toggle logging filters
 -   *
 -   * @returns nsIDOMNode
 -   */
 -  makeFilterToolbar: function HUD_makeFilterToolbar()
--  {
++  _onIframeReady: function WC__onIframeReady()
+   {
 -    const BUTTONS = [
 -      {
 -        name: "PageNet",
@@ -1262,166 +1717,64 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    HUD_BOX_DOES_NOT_EXIST: "Heads Up Display does not exist",
 -    TAB_ID_REQUIRED: "Tab DOM ID is required",
 -    PARENTNODE_NOT_FOUND: "parentNode element not found"
--  },
--
--  /**
--   * Setup the message manager used to communicate with the Web Console content
--   * script. This method loads the content script, adds the message listeners
--   * and initializes the connection to the content script.
--   *
--   * @private
--   */
--  _setupMessageManager: function HUD__setupMessageManager()
--  {
--    this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
--
--    this._messageListeners.forEach(function(aName) {
--      this.messageManager.addMessageListener(aName, this);
--    }, this);
--
--    let message = {
--      features: ["ConsoleAPI", "JSTerm", "PageError", "NetworkMonitor",
--                 "LocationChange"],
--      cachedMessages: ["ConsoleAPI", "PageError"],
--      NetworkMonitor: { monitorFileActivity: true },
--      JSTerm: { notifyNonNativeConsoleAPI: true },
--      preferences: {
--        "NetworkMonitor.saveRequestAndResponseBodies":
--          this.saveRequestAndResponseBodies,
--      },
--    };
--    this.sendMessageToContent("WebConsole:Init", message);
--  },
--
--  /**
--   * Handler for all of the messages coming from the Web Console content script.
--   *
--   * @private
--   * @param object aMessage
--   *        A MessageManager object that holds the remote message.
--   */
--  receiveMessage: function HUD_receiveMessage(aMessage)
--  {
--    if (!aMessage.json || aMessage.json.hudId != this.hudId) {
--      return;
--    }
--
--    switch (aMessage.name) {
--      case "JSTerm:EvalResult":
--      case "JSTerm:EvalObject":
--      case "JSTerm:AutocompleteProperties":
--        this._receiveMessageWithCallback(aMessage.json);
--        break;
--      case "JSTerm:ClearOutput":
--        this.jsterm.clearOutput();
--        break;
--      case "JSTerm:InspectObject":
--        this.jsterm.handleInspectObject(aMessage.json);
--        break;
--      case "WebConsole:ConsoleAPI":
--        this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage,
--                           [aMessage.json]);
--        break;
--      case "WebConsole:PageError": {
--        let pageError = aMessage.json.pageError;
--        let category = this.categoryForScriptError(pageError);
--        this.outputMessage(category, this.reportPageError,
--                           [category, pageError]);
--        break;
--      }
--      case "WebConsole:CachedMessages":
--        this._displayCachedConsoleMessages(aMessage.json.messages);
--        this._onInitComplete();
--        break;
--      case "WebConsole:NetworkActivity":
--        this.handleNetworkActivity(aMessage.json);
--        break;
--      case "WebConsole:FileActivity":
--        this.outputMessage(CATEGORY_NETWORK, this.logFileActivity,
--                           [aMessage.json.uri]);
--        break;
--      case "WebConsole:LocationChange":
--        this.onLocationChange(aMessage.json);
--        break;
--      case "JSTerm:NonNativeConsoleAPI":
--        this.outputMessage(CATEGORY_JS, this.logWarningAboutReplacedAPI);
--        break;
--    }
--  },
--
--  /**
--   * Callback method for when the Web Console initialization is complete. For
--   * now this method sends the web-console-created notification using the
--   * nsIObserverService.
--   *
--   * @private
--   */
--  _onInitComplete: function HUD__onInitComplete()
--  {
--    let id = WebConsoleUtils.supportsString(this.hudId);
--    Services.obs.notifyObservers(id, "web-console-created", null);
--  },
--
--  /**
--   * Handler for messages that have an associated callback function. The
--   * this.sendMessageToContent() allows one to provide a function to be invoked
--   * when the content script replies to the message previously sent. This is the
--   * method that invokes the callback.
--   *
--   * @see this.sendMessageToContent
--   * @private
--   * @param object aResponse
--   *        Message object received from the content script.
--   */
--  _receiveMessageWithCallback:
--  function HUD__receiveMessageWithCallback(aResponse)
--  {
--    if (aResponse.id in this.asyncRequests) {
--      let request = this.asyncRequests[aResponse.id];
--      request.callback(aResponse, request.message);
--      delete this.asyncRequests[aResponse.id];
--    }
--    else {
--      Cu.reportError("receiveMessageWithCallback response for stale request " +
--                     "ID " + aResponse.id);
--    }
--  },
--
--  /**
--   * Send a message to the content script.
--   *
--   * @param string aName
--   *        The name of the message you want to send.
--   *
--   * @param object aMessage
--   *        The message object you want to send. This object needs to have no
--   *        cyclic references and it needs to be JSON-stringifiable.
--   *
--   * @param function [aCallback]
--   *        Optional function you want to have called when the content script
--   *        replies to your message. Your callback receives two arguments:
--   *        (1) the response object from the content script and (2) the message
--   *        you sent to the content script (which is aMessage here).
--   */
--  sendMessageToContent:
--  function HUD_sendMessageToContent(aName, aMessage, aCallback)
--  {
--    aMessage.hudId = this.hudId;
--    if (!("id" in aMessage)) {
--      aMessage.id = "HUDChrome-" + HUDService.sequenceId();
--    }
--
--    if (aCallback) {
--      this.asyncRequests[aMessage.id] = {
--        name: aName,
--        message: aMessage,
--        callback: aCallback,
--      };
--    }
--    this.messageManager.sendAsyncMessage(aName, aMessage);
--  },
--
--  /**
++    this._setupMessageManager();
+   },
+ 
+   /**
+    * Setup the message manager used to communicate with the Web Console content
+    * script. This method loads the content script, adds the message listeners
+    * and initializes the connection to the content script.
+    *
+    * @private
+@@ -2247,16 +833,17 @@ HeadsUpDisplay.prototype = {
+       cachedMessages: ["ConsoleAPI", "PageError"],
+       NetworkMonitor: { monitorFileActivity: true },
+       JSTerm: { notifyNonNativeConsoleAPI: true },
+       preferences: {
+         "NetworkMonitor.saveRequestAndResponseBodies":
+           this.saveRequestAndResponseBodies,
+       },
+     };
++
+     this.sendMessageToContent("WebConsole:Init", message);
+   },
+ 
+   /**
+    * Handler for all of the messages coming from the Web Console content script.
+    *
+    * @private
+    * @param object aMessage
+@@ -2317,16 +904,21 @@ HeadsUpDisplay.prototype = {
+    * nsIObserverService.
+    *
+    * @private
+    */
+   _onInitComplete: function HUD__onInitComplete()
+   {
+     let id = WebConsoleUtils.supportsString(this.hudId);
+     Services.obs.notifyObservers(id, "web-console-created", null);
++
++    if (this._onInitCallback) {
++      this._onInitCallback(this);
++      delete this._onInitCallback;
++    }
+   },
+ 
+   /**
+    * Handler for messages that have an associated callback function. The
+    * this.sendMessageToContent() allows one to provide a function to be invoked
+    * when the content script replies to the message previously sent. This is the
+    * method that invokes the callback.
+    *
+@@ -2379,2048 +971,56 @@ HeadsUpDisplay.prototype = {
+         message: aMessage,
+         callback: aCallback,
+       };
+     }
+     this.messageManager.sendAsyncMessage(aName, aMessage);
+   },
+ 
+   /**
 -   * Handle the "WebConsole:NetworkActivity" message coming from the remote Web
 -   * Console.
 -   *
@@ -1542,15 +1895,23 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -
 -  /**
 -   * Make a link given an output element.
--   *
--   * @param nsIDOMNode aNode
++   * Opens a NetworkPanel.
+    *
+    * @param nsIDOMNode aNode
 -   *        The message element you want to make a link for.
 -   * @param function aCallback
 -   *        The function you want invoked when the user clicks on the message
 -   *        element.
--   */
++   *        The message node you want the panel to be anchored to.
++   * @param object aHttpActivity
++   *        The HTTP activity object that holds network request and response
++   *        information. This object is given to the NetworkPanel constructor.
++   * @return object
++   *         The new NetworkPanel instance.
+    */
 -  makeOutputMessageLink: function HUD_makeOutputMessageLink(aNode, aCallback)
--  {
++  openNetworkPanel: function HS_openNetworkPanel(aNode, aHttpActivity)
+   {
 -    let linkNode;
 -    if (aNode.category === CATEGORY_NETWORK) {
 -      linkNode = aNode.querySelector(".webconsole-msg-link, .webconsole-msg-url");
@@ -1559,14 +1920,25 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -      linkNode = aNode.querySelector(".webconsole-msg-body");
 -      linkNode.classList.add("hud-clickable");
 -    }
--
++    let doc = aNode.ownerDocument;
++    let parent = doc.getElementById("mainPopupSet");
++    let netPanel = new NetworkPanel(parent, aHttpActivity);
++    netPanel.linkNode = aNode;
++    aNode._netPanel = netPanel;
+ 
 -    linkNode.setAttribute("aria-haspopup", "true");
--
++    let panel = netPanel.panel;
++    panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
++    panel.sizeTo(450, 500);
++    panel.setAttribute("hudId", aHttpActivity.hudId);
+ 
 -    aNode.addEventListener("mousedown", function(aEvent) {
 -      this._startX = aEvent.clientX;
 -      this._startY = aEvent.clientY;
 -    }, false);
--
++    panel.addEventListener("popuphiding", function HS_netPanel_onHide() {
++      panel.removeEventListener("popuphiding", HS_netPanel_onHide);
+ 
 -    aNode.addEventListener("click", function(aEvent) {
 -      if (aEvent.detail != 1 || aEvent.button != 0 ||
 -          (this._startX != aEvent.clientX &&
@@ -1974,23 +2346,35 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -      this.closeButtonOnCommand, false);
 -  },
 -};
- 
- /**
-  * Creates a DOM Node factory for XUL nodes - as well as textNodes
-  * @param aFactoryType "xul" or "text"
-  * @param ignored This parameter is currently ignored, and will be removed
-  * See bug 594304
-  * @param aDocument The document, the factory is to generate nodes from
-  * @return DOM Node Factory function
-@@ -2960,1021 +1025,16 @@ function NodeFactory(aFactoryType, ignor
-       return aDocument.createElement(aTag);
-     }
-   }
-   else {
-     throw new Error('NodeFactory: Unknown factory type: ' + aFactoryType);
-   }
- }
- 
+-
+-/**
+- * Creates a DOM Node factory for XUL nodes - as well as textNodes
+- * @param aFactoryType "xul" or "text"
+- * @param ignored This parameter is currently ignored, and will be removed
+- * See bug 594304
+- * @param aDocument The document, the factory is to generate nodes from
+- * @return DOM Node Factory function
+- */
+-function NodeFactory(aFactoryType, ignored, aDocument)
+-{
+-  // aDocument is presumed to be a XULDocument
+-  if (aFactoryType == "text") {
+-    return function factory(aText)
+-    {
+-      return aDocument.createTextNode(aText);
+-    }
+-  }
+-  else if (aFactoryType == "xul") {
+-    return function factory(aTag)
+-    {
+-      return aDocument.createElement(aTag);
+-    }
+-  }
+-  else {
+-    throw new Error('NodeFactory: Unknown factory type: ' + aFactoryType);
+-  }
+-}
+-
 -
 -/**
 - * Create a JSTerminal (a JavaScript command line). This is attached to an
@@ -2692,11 +3076,14 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -
 -    let items = matches.map(function(aMatch) {
 -      return { label: aMatch };
--    });
--
++      aNode._panelOpen = false;
++      aNode._netPanel = null;
+     });
+ 
 -    let popup = this.autocompletePopup;
 -    popup.setItems(items);
--
++    aNode._panelOpen = true;
+ 
 -    let completionType = this.lastCompletion.completionType;
 -    this.lastCompletion = {
 -      value: inputValue,
@@ -2993,45 +3380,562 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    delete this.hud;
 -    delete this.autocompletePopup;
 -    delete this.document;
--  },
--};
--
++    return netPanel;
+   },
+ };
+ 
  //////////////////////////////////////////////////////////////////////////////
  // Utility functions used by multiple callers
  //////////////////////////////////////////////////////////////////////////////
  
- /**
-  * ConsoleUtils: a collection of globally used functions
-  *
-  */
+-/**
+- * ConsoleUtils: a collection of globally used functions
+- *
+- */
+-ConsoleUtils = {
+-  /**
+-   * Flag to turn on and off scrolling.
+-   */
+-  scroll: true,
+-
+-  /**
+-   * Scrolls a node so that it's visible in its containing XUL "scrollbox"
+-   * element.
+-   *
+-   * @param nsIDOMNode aNode
+-   *        The node to make visible.
+-   * @returns void
+-   */
+-  scrollToVisible: function ConsoleUtils_scrollToVisible(aNode) {
+-    if (!this.scroll) {
+-      return;
+-    }
+-
+-    // Find the enclosing richlistbox node.
+-    let richListBoxNode = aNode.parentNode;
+-    while (richListBoxNode.tagName != "richlistbox") {
+-      richListBoxNode = richListBoxNode.parentNode;
+-    }
+-
+-    // Use the scroll box object interface to ensure the element is visible.
+-    let boxObject = richListBoxNode.scrollBoxObject;
+-    let nsIScrollBoxObject = boxObject.QueryInterface(Ci.nsIScrollBoxObject);
+-    nsIScrollBoxObject.ensureElementIsVisible(aNode);
+-  },
+-
+-  /**
+-   * Given a category and message body, creates a DOM node to represent an
+-   * incoming message. The timestamp is automatically added.
+-   *
+-   * @param nsIDOMDocument aDocument
+-   *        The document in which to create the node.
+-   * @param number aCategory
+-   *        The category of the message: one of the CATEGORY_* constants.
+-   * @param number aSeverity
+-   *        The severity of the message: one of the SEVERITY_* constants;
+-   * @param string|nsIDOMNode aBody
+-   *        The body of the message, either a simple string or a DOM node.
+-   * @param number aHUDId
+-   *        The HeadsUpDisplay ID.
+-   * @param string aSourceURL [optional]
+-   *        The URL of the source file that emitted the error.
+-   * @param number aSourceLine [optional]
+-   *        The line number on which the error occurred. If zero or omitted,
+-   *        there is no line number associated with this message.
+-   * @param string aClipboardText [optional]
+-   *        The text that should be copied to the clipboard when this node is
+-   *        copied. If omitted, defaults to the body text. If `aBody` is not
+-   *        a string, then the clipboard text must be supplied.
+-   * @param number aLevel [optional]
+-   *        The level of the console API message.
+-   * @param number aTimeStamp [optional]
+-   *        The timestamp to use for this message node. If omitted, the current
+-   *        date and time is used.
+-   * @return nsIDOMNode
+-   *         The message node: a XUL richlistitem ready to be inserted into
+-   *         the Web Console output node.
+-   */
+-  createMessageNode:
+-  function ConsoleUtils_createMessageNode(aDocument, aCategory, aSeverity,
+-                                          aBody, aHUDId, aSourceURL,
+-                                          aSourceLine, aClipboardText, aLevel,
+-                                          aTimeStamp) {
+-    if (typeof aBody != "string" && aClipboardText == null && aBody.innerText) {
+-      aClipboardText = aBody.innerText;
+-    }
+-
+-    // Make the icon container, which is a vertical box. Its purpose is to
+-    // ensure that the icon stays anchored at the top of the message even for
+-    // long multi-line messages.
+-    let iconContainer = aDocument.createElementNS(XUL_NS, "vbox");
+-    iconContainer.classList.add("webconsole-msg-icon-container");
+-    // Apply the curent group by indenting appropriately.
+-    let hud = HUDService.getHudReferenceById(aHUDId);
+-    iconContainer.style.marginLeft = hud.groupDepth * GROUP_INDENT + "px";
+-
+-    // Make the icon node. It's sprited and the actual region of the image is
+-    // determined by CSS rules.
+-    let iconNode = aDocument.createElementNS(XUL_NS, "image");
+-    iconNode.classList.add("webconsole-msg-icon");
+-    iconContainer.appendChild(iconNode);
+-
+-    // Make the spacer that positions the icon.
+-    let spacer = aDocument.createElementNS(XUL_NS, "spacer");
+-    spacer.setAttribute("flex", "1");
+-    iconContainer.appendChild(spacer);
+-
+-    // Create the message body, which contains the actual text of the message.
+-    let bodyNode = aDocument.createElementNS(XUL_NS, "description");
+-    bodyNode.setAttribute("flex", "1");
+-    bodyNode.classList.add("webconsole-msg-body");
+-
+-    // Store the body text, since it is needed later for the property tree
+-    // case.
+-    let body = aBody;
+-    // If a string was supplied for the body, turn it into a DOM node and an
+-    // associated clipboard string now.
+-    aClipboardText = aClipboardText ||
+-                     (aBody + (aSourceURL ? " @ " + aSourceURL : "") +
+-                              (aSourceLine ? ":" + aSourceLine : ""));
+-    if (!(aBody instanceof Ci.nsIDOMNode)) {
+-      aBody = aDocument.createTextNode(aLevel == "dir" ?
+-                                       aBody.resultString : aBody);
+-    }
+-
+-    if (!aBody.nodeType) {
+-      aBody = aDocument.createTextNode(aBody.toString());
+-    }
+-    if (typeof aBody == "string") {
+-      aBody = aDocument.createTextNode(aBody);
+-    }
+-
+-    bodyNode.appendChild(aBody);
+-
+-    let repeatContainer = aDocument.createElementNS(XUL_NS, "hbox");
+-    repeatContainer.setAttribute("align", "start");
+-    let repeatNode = aDocument.createElementNS(XUL_NS, "label");
+-    repeatNode.setAttribute("value", "1");
+-    repeatNode.classList.add("webconsole-msg-repeat");
+-    repeatContainer.appendChild(repeatNode);
+-
+-    // Create the timestamp.
+-    let timestampNode = aDocument.createElementNS(XUL_NS, "label");
+-    timestampNode.classList.add("webconsole-timestamp");
+-    let timestamp = aTimeStamp || Date.now();
+-    let timestampString = l10n.timestampString(timestamp);
+-    timestampNode.setAttribute("value", timestampString);
+-
+-    // Create the source location (e.g. www.example.com:6) that sits on the
+-    // right side of the message, if applicable.
+-    let locationNode;
+-    if (aSourceURL) {
+-      locationNode = this.createLocationNode(aDocument, aSourceURL,
+-                                             aSourceLine);
+-    }
+-
+-    // Create the containing node and append all its elements to it.
+-    let node = aDocument.createElementNS(XUL_NS, "richlistitem");
+-    node.clipboardText = aClipboardText;
+-    node.classList.add("hud-msg-node");
+-
+-    node.timestamp = timestamp;
+-    ConsoleUtils.setMessageType(node, aCategory, aSeverity);
+-
+-    node.appendChild(timestampNode);
+-    node.appendChild(iconContainer);
+-    // Display the object tree after the message node.
+-    if (aLevel == "dir") {
+-      // Make the body container, which is a vertical box, for grouping the text
+-      // and tree widgets.
+-      let bodyContainer = aDocument.createElement("vbox");
+-      bodyContainer.setAttribute("flex", "1");
+-      bodyContainer.appendChild(bodyNode);
+-      // Create the tree.
+-      let tree = createElement(aDocument, "tree", {
+-        flex: 1,
+-        hidecolumnpicker: "true"
+-      });
+-
+-      let treecols = aDocument.createElement("treecols");
+-      let treecol = createElement(aDocument, "treecol", {
+-        primary: "true",
+-        flex: 1,
+-        hideheader: "true",
+-        ignoreincolumnpicker: "true"
+-      });
+-      treecols.appendChild(treecol);
+-      tree.appendChild(treecols);
+-
+-      tree.appendChild(aDocument.createElement("treechildren"));
+-
+-      bodyContainer.appendChild(tree);
+-      node.appendChild(bodyContainer);
+-      node.classList.add("webconsole-msg-inspector");
+-      // Create the treeView object.
+-      let treeView = node.propertyTreeView = new PropertyTreeView();
+-
+-      treeView.data = {
+-        rootCacheId: body.cacheId,
+-        panelCacheId: body.cacheId,
+-        remoteObject: body.remoteObject,
+-        remoteObjectProvider: body.remoteObjectProvider,
+-      };
+-
+-      tree.setAttribute("rows", treeView.rowCount);
+-    }
+-    else {
+-      node.appendChild(bodyNode);
+-    }
+-    node.appendChild(repeatContainer);
+-    if (locationNode) {
+-      node.appendChild(locationNode);
+-    }
+-
+-    node.setAttribute("id", "console-msg-" + HUDService.sequenceId());
+-
+-    return node;
+-  },
+-
+-  /**
+-   * Adjusts the category and severity of the given message, clearing the old
+-   * category and severity if present.
+-   *
+-   * @param nsIDOMNode aMessageNode
+-   *        The message node to alter.
+-   * @param number aNewCategory
+-   *        The new category for the message; one of the CATEGORY_ constants.
+-   * @param number aNewSeverity
+-   *        The new severity for the message; one of the SEVERITY_ constants.
+-   * @return void
+-   */
+-  setMessageType:
+-  function ConsoleUtils_setMessageType(aMessageNode, aNewCategory,
+-                                       aNewSeverity) {
+-    // Remove the old CSS classes, if applicable.
+-    if ("category" in aMessageNode) {
+-      let oldCategory = aMessageNode.category;
+-      let oldSeverity = aMessageNode.severity;
+-      aMessageNode.classList.remove("webconsole-msg-" +
+-                                    CATEGORY_CLASS_FRAGMENTS[oldCategory]);
+-      aMessageNode.classList.remove("webconsole-msg-" +
+-                                    SEVERITY_CLASS_FRAGMENTS[oldSeverity]);
+-      let key = "hud-" + MESSAGE_PREFERENCE_KEYS[oldCategory][oldSeverity];
+-      aMessageNode.classList.remove(key);
+-    }
+-
+-    // Add in the new CSS classes.
+-    aMessageNode.category = aNewCategory;
+-    aMessageNode.severity = aNewSeverity;
+-    aMessageNode.classList.add("webconsole-msg-" +
+-                               CATEGORY_CLASS_FRAGMENTS[aNewCategory]);
+-    aMessageNode.classList.add("webconsole-msg-" +
+-                               SEVERITY_CLASS_FRAGMENTS[aNewSeverity]);
+-    let key = "hud-" + MESSAGE_PREFERENCE_KEYS[aNewCategory][aNewSeverity];
+-    aMessageNode.classList.add(key);
+-  },
+-
+-  /**
+-   * Creates the XUL label that displays the textual location of an incoming
+-   * message.
+-   *
+-   * @param nsIDOMDocument aDocument
+-   *        The document in which to create the node.
+-   * @param string aSourceURL
+-   *        The URL of the source file responsible for the error.
+-   * @param number aSourceLine [optional]
+-   *        The line number on which the error occurred. If zero or omitted,
+-   *        there is no line number associated with this message.
+-   * @return nsIDOMNode
+-   *         The new XUL label node, ready to be added to the message node.
+-   */
+-  createLocationNode:
+-  function ConsoleUtils_createLocationNode(aDocument, aSourceURL,
+-                                           aSourceLine) {
+-    let locationNode = aDocument.createElementNS(XUL_NS, "label");
+-
+-    // Create the text, which consists of an abbreviated version of the URL
+-    // plus an optional line number.
+-    let text = WebConsoleUtils.abbreviateSourceURL(aSourceURL);
+-    if (aSourceLine) {
+-      text += ":" + aSourceLine;
+-    }
+-    locationNode.setAttribute("value", text);
+-
+-    // Style appropriately.
+-    locationNode.setAttribute("crop", "center");
+-    locationNode.setAttribute("title", aSourceURL);
+-    locationNode.classList.add("webconsole-location");
+-    locationNode.classList.add("text-link");
+-
+-    // Make the location clickable.
+-    locationNode.addEventListener("click", function() {
+-      if (aSourceURL == "Scratchpad") {
+-        let win = Services.wm.getMostRecentWindow("devtools:scratchpad");
+-        if (win) {
+-          win.focus();
+-        }
+-        return;
+-      }
+-      let viewSourceUtils = aDocument.defaultView.gViewSourceUtils;
+-      viewSourceUtils.viewSource(aSourceURL, null, aDocument, aSourceLine);
+-    }, true);
+-
+-    return locationNode;
+-  },
+-
+-  /**
+-   * Applies the user's filters to a newly-created message node via CSS
+-   * classes.
+-   *
+-   * @param nsIDOMNode aNode
+-   *        The newly-created message node.
+-   * @param string aHUDId
+-   *        The ID of the HUD which this node is to be inserted into.
+-   * @return boolean
+-   *         True if the message was filtered or false otherwise.
+-   */
+-  filterMessageNode: function ConsoleUtils_filterMessageNode(aNode, aHUDId) {
+-    let isFiltered = false;
+-
+-    // Filter by the message type.
+-    let prefKey = MESSAGE_PREFERENCE_KEYS[aNode.category][aNode.severity];
+-    if (prefKey && !HUDService.getFilterState(aHUDId, prefKey)) {
+-      // The node is filtered by type.
+-      aNode.classList.add("hud-filtered-by-type");
+-      isFiltered = true;
+-    }
+-
+-    // Filter on the search string.
+-    let search = HUDService.getFilterStringByHUDId(aHUDId);
+-    let text = aNode.clipboardText;
+-
+-    // if string matches the filter text
+-    if (!HUDService.stringMatchesFilters(text, search)) {
+-      aNode.classList.add("hud-filtered-by-string");
+-      isFiltered = true;
+-    }
+-
+-    return isFiltered;
+-  },
+-
+-  /**
+-   * Merge the attributes of the two nodes that are about to be filtered.
+-   * Increment the number of repeats of aOriginal.
+-   *
+-   * @param nsIDOMNode aOriginal
+-   *        The Original Node. The one being merged into.
+-   * @param nsIDOMNode aFiltered
+-   *        The node being filtered out because it is repeated.
+-   */
+-  mergeFilteredMessageNode:
+-  function ConsoleUtils_mergeFilteredMessageNode(aOriginal, aFiltered) {
+-    // childNodes[3].firstChild is the node containing the number of repetitions
+-    // of a node.
+-    let repeatNode = aOriginal.childNodes[3].firstChild;
+-    if (!repeatNode) {
+-      return aOriginal; // no repeat node, return early.
+-    }
+-
+-    let occurrences = parseInt(repeatNode.getAttribute("value")) + 1;
+-    repeatNode.setAttribute("value", occurrences);
+-  },
+-
+-  /**
+-   * Filter the css node from the output node if it is a repeat. CSS messages
+-   * are merged with previous messages if they occurred in the past.
+-   *
+-   * @param nsIDOMNode aNode
+-   *        The message node to be filtered or not.
+-   * @param nsIDOMNode aOutput
+-   *        The outputNode of the HUD.
+-   * @returns boolean
+-   *         true if the message is filtered, false otherwise.
+-   */
+-  filterRepeatedCSS:
+-  function ConsoleUtils_filterRepeatedCSS(aNode, aOutput, aHUDId) {
+-    let hud = HUDService.getHudReferenceById(aHUDId);
+-
+-    // childNodes[2] is the description node containing the text of the message.
+-    let description = aNode.childNodes[2].textContent;
+-    let location;
+-
+-    // childNodes[4] represents the location (source URL) of the error message.
+-    // The full source URL is stored in the title attribute.
+-    if (aNode.childNodes[4]) {
+-      // browser_webconsole_bug_595934_message_categories.js
+-      location = aNode.childNodes[4].getAttribute("title");
+-    }
+-    else {
+-      location = "";
+-    }
+-
+-    let dupe = hud.cssNodes[description + location];
+-    if (!dupe) {
+-      // no matching nodes
+-      hud.cssNodes[description + location] = aNode;
+-      return false;
+-    }
+-
+-    this.mergeFilteredMessageNode(dupe, aNode);
+-
+-    return true;
+-  },
+-
+-  /**
+-   * Filter the console node from the output node if it is a repeat. Console
+-   * messages are filtered from the output if and only if they match the
+-   * immediately preceding message. The output node's last occurrence should
+-   * have its timestamp updated.
+-   *
+-   * @param nsIDOMNode aNode
+-   *        The message node to be filtered or not.
+-   * @param nsIDOMNode aOutput
+-   *        The outputNode of the HUD.
+-   * @return boolean
+-   *         true if the message is filtered, false otherwise.
+-   */
+-  filterRepeatedConsole:
+-  function ConsoleUtils_filterRepeatedConsole(aNode, aOutput) {
+-    let lastMessage = aOutput.lastChild;
+-
+-    // childNodes[2] is the description element
+-    if (lastMessage && lastMessage.childNodes[2] &&
+-        !aNode.classList.contains("webconsole-msg-inspector") &&
+-        aNode.childNodes[2].textContent ==
+-        lastMessage.childNodes[2].textContent) {
+-      this.mergeFilteredMessageNode(lastMessage, aNode);
+-      return true;
+-    }
+-
+-    return false;
+-  },
+-
+-  /**
+-   * Check if the given output node is scrolled to the bottom.
+-   *
+-   * @param nsIDOMNode aOutputNode
+-   * @return boolean
+-   *         True if the output node is scrolled to the bottom, or false
+-   *         otherwise.
+-   */
+-  isOutputScrolledToBottom:
+-  function ConsoleUtils_isOutputScrolledToBottom(aOutputNode)
+-  {
+-    let lastNodeHeight = aOutputNode.lastChild ?
+-                         aOutputNode.lastChild.clientHeight : 0;
+-    let scrollBox = aOutputNode.scrollBoxObject.element;
+-
+-    return scrollBox.scrollTop + scrollBox.clientHeight >=
+-           scrollBox.scrollHeight - lastNodeHeight / 2;
+-  },
+-};
+-
+ //////////////////////////////////////////////////////////////////////////
+ // HeadsUpDisplayUICommands
+ //////////////////////////////////////////////////////////////////////////
+ 
+ HeadsUpDisplayUICommands = {
+   refreshCommand: function UIC_refreshCommand() {
+     var window = HUDService.currentContext();
+     if (!window) {
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -0,0 +1,2942 @@
+@@ -0,0 +1,3400 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 +
++// The amount of time in milliseconds that must pass between messages to
++// trigger the display of a new group.
++const NEW_GROUP_DELAY = 5000;
++
++// The amount of time in milliseconds that we wait before performing a live
++// search.
++const SEARCH_DELAY = 200;
++
++// The number of lines that are displayed in the console output by default, for
++// each category. The user can change this number by adjusting the hidden
++// "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
++const DEFAULT_LOG_LIMIT = 200;
++
++// The various categories of messages. We start numbering at zero so we can
++// use these as indexes into the MESSAGE_PREFERENCE_KEYS matrix below.
++const CATEGORY_NETWORK = 0;
++const CATEGORY_CSS = 1;
++const CATEGORY_JS = 2;
++const CATEGORY_WEBDEV = 3;
++const CATEGORY_INPUT = 4;   // always on
++const CATEGORY_OUTPUT = 5;  // always on
++
++// The possible message severities. As before, we start at zero so we can use
++// these as indexes into MESSAGE_PREFERENCE_KEYS.
++const SEVERITY_ERROR = 0;
++const SEVERITY_WARNING = 1;
++const SEVERITY_INFO = 2;
++const SEVERITY_LOG = 3;
++
++// A mapping from the console API log event levels to the Web Console
++// severities.
++const LEVELS = {
++  error: SEVERITY_ERROR,
++  warn: SEVERITY_WARNING,
++  info: SEVERITY_INFO,
++  log: SEVERITY_LOG,
++  trace: SEVERITY_LOG,
++  debug: SEVERITY_LOG,
++  dir: SEVERITY_LOG,
++  group: SEVERITY_LOG,
++  groupCollapsed: SEVERITY_LOG,
++  groupEnd: SEVERITY_LOG,
++  time: SEVERITY_LOG,
++  timeEnd: SEVERITY_LOG
++};
++
++// The lowest HTTP response code (inclusive) that is considered an error.
++const MIN_HTTP_ERROR_CODE = 400;
++// The highest HTTP response code (inclusive) that is considered an error.
++const MAX_HTTP_ERROR_CODE = 599;
++
++// Constants used for defining the direction of JSTerm input history navigation.
++const HISTORY_BACK = -1;
++const HISTORY_FORWARD = 1;
++
++// The indent of a console group in pixels.
++const GROUP_INDENT = 12;
++
++// The number of messages to display in a single display update. If we display
++// too many messages at once we slow the Firefox UI too much.
++const MESSAGES_IN_INTERVAL = DEFAULT_LOG_LIMIT;
++
++// The delay between display updates - tells how often we should *try* to push
++// new messages to screen. This value is optimistic, updates won't always
++// happen. Keep this low so the Web Console output feels live.
++const OUTPUT_INTERVAL = 50; // milliseconds
++
++// When the output queue has more than MESSAGES_IN_INTERVAL items we throttle
++// output updates to this number of milliseconds. So during a lot of output we
++// update every N milliseconds given here.
++const THROTTLE_UPDATES = 1000; // milliseconds
++
 +/**
-+ * A WebConsole instance is an interactive console initialized *per tab*  that
-+ * displays console log data as well as provides an interactive terminal to
++ * A WebConsoleFrame instance is an interactive console initialized *per tab*
++ * that displays console log data as well as provides an interactive terminal to
 + * manipulate the current tab's document content.
 + *
-+ * @param nsIDOMElement aTab
-+ *        The xul:tab for which you want the WebConsole object.
++ * The WebConsoleFrame is responsible for the actual Web Console UI
++ * implementation.
++ *
++ * @param object aWebConsoleOwner
++ *        The WebConsole owner object.
 + */
-+function WebConsole(aTab)
++// TODO: update comments
++function WebConsoleFrame(aWebConsoleOwner, aCallback)
 +{
-+  this.tab = aTab;
-+  this.hudId = "hud_" + this.tab.linkedPanel;
-+  this.chromeDocument = this.tab.ownerDocument;
-+  this.chromeWindow = this.chromeDocument.defaultView;
-+  this.notificationBox = this.chromeDocument.getElementById(this.tab.linkedPanel);
-+  this.browser = this.tab.linkedBrowser;
-+  this.messageManager = this.browser.messageManager;
++  this.owner = aWebConsoleOwner;
 +
 +  // Track callback functions registered for specific async requests sent to the
 +  // content process.
@@ -3051,11 +3955,9 @@ new file mode 100644
 +  this.cssNodes = {};
 +
 +  this._networkRequests = {};
-+
-+  this._setupMessageManager();
 +}
 +
-+WebConsole.prototype = {
++WebConsoleFrame.prototype = {
 +  /**
 +   * Holds the network requests currently displayed by the Web Console. Each key
 +   * represents the connection ID and the value is network request information.
@@ -3088,20 +3990,6 @@ new file mode 100644
 +   * @type array
 +   */
 +  _pruneCategoriesQueue: null,
-+
-+  /**
-+   * Message names that the HUD listens for. These messages come from the remote
-+   * Web Console content script.
-+   *
-+   * @private
-+   * @type array
-+   */
-+  _messageListeners: ["JSTerm:EvalObject", "WebConsole:ConsoleAPI",
-+    "WebConsole:CachedMessages", "WebConsole:PageError", "JSTerm:EvalResult",
-+    "JSTerm:AutocompleteProperties", "JSTerm:ClearOutput",
-+    "JSTerm:InspectObject", "WebConsole:NetworkActivity",
-+    "WebConsole:FileActivity", "WebConsole:LocationChange",
-+    "JSTerm:NonNativeConsoleAPI"],
 +
 +  consolePanel: null,
 +
@@ -3453,15 +4341,6 @@ new file mode 100644
 +   */
 +  makeHUDNodes: function HUD_makeHUDNodes()
 +  {
-+    this.splitter = this.makeXULNode("splitter");
-+    this.splitter.setAttribute("class", "hud-splitter");
-+
-+    this.HUDBox = this.makeXULNode("vbox");
-+    this.HUDBox.setAttribute("id", this.hudId);
-+    this.HUDBox.setAttribute("class", "hud-box animated");
-+    this.HUDBox.style.height = 0;
-+    this.HUDBox.lastTimestamp = 0;
-+
 +    let outerWrap = this.makeXULNode("vbox");
 +    outerWrap.setAttribute("class", "hud-outer-wrapper");
 +    outerWrap.setAttribute("flex", "1");
@@ -4237,163 +5116,6 @@ new file mode 100644
 +  },
 +
 +  /**
-+   * Setup the message manager used to communicate with the Web Console content
-+   * script. This method loads the content script, adds the message listeners
-+   * and initializes the connection to the content script.
-+   *
-+   * @private
-+   */
-+  _setupMessageManager: function HUD__setupMessageManager()
-+  {
-+    this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
-+
-+    this._messageListeners.forEach(function(aName) {
-+      this.messageManager.addMessageListener(aName, this);
-+    }, this);
-+
-+    let message = {
-+      features: ["ConsoleAPI", "JSTerm", "PageError", "NetworkMonitor",
-+                 "LocationChange"],
-+      cachedMessages: ["ConsoleAPI", "PageError"],
-+      NetworkMonitor: { monitorFileActivity: true },
-+      JSTerm: { notifyNonNativeConsoleAPI: true },
-+      preferences: {
-+        "NetworkMonitor.saveRequestAndResponseBodies":
-+          this.saveRequestAndResponseBodies,
-+      },
-+    };
-+    this.sendMessageToContent("WebConsole:Init", message);
-+  },
-+
-+  /**
-+   * Handler for all of the messages coming from the Web Console content script.
-+   *
-+   * @private
-+   * @param object aMessage
-+   *        A MessageManager object that holds the remote message.
-+   */
-+  receiveMessage: function HUD_receiveMessage(aMessage)
-+  {
-+    if (!aMessage.json || aMessage.json.hudId != this.hudId) {
-+      return;
-+    }
-+
-+    switch (aMessage.name) {
-+      case "JSTerm:EvalResult":
-+      case "JSTerm:EvalObject":
-+      case "JSTerm:AutocompleteProperties":
-+        this._receiveMessageWithCallback(aMessage.json);
-+        break;
-+      case "JSTerm:ClearOutput":
-+        this.jsterm.clearOutput();
-+        break;
-+      case "JSTerm:InspectObject":
-+        this.jsterm.handleInspectObject(aMessage.json);
-+        break;
-+      case "WebConsole:ConsoleAPI":
-+        this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage,
-+                           [aMessage.json]);
-+        break;
-+      case "WebConsole:PageError": {
-+        let pageError = aMessage.json.pageError;
-+        let category = this.categoryForScriptError(pageError);
-+        this.outputMessage(category, this.reportPageError,
-+                           [category, pageError]);
-+        break;
-+      }
-+      case "WebConsole:CachedMessages":
-+        this._displayCachedConsoleMessages(aMessage.json.messages);
-+        this._onInitComplete();
-+        break;
-+      case "WebConsole:NetworkActivity":
-+        this.handleNetworkActivity(aMessage.json);
-+        break;
-+      case "WebConsole:FileActivity":
-+        this.outputMessage(CATEGORY_NETWORK, this.logFileActivity,
-+                           [aMessage.json.uri]);
-+        break;
-+      case "WebConsole:LocationChange":
-+        this.onLocationChange(aMessage.json);
-+        break;
-+      case "JSTerm:NonNativeConsoleAPI":
-+        this.outputMessage(CATEGORY_JS, this.logWarningAboutReplacedAPI);
-+        break;
-+    }
-+  },
-+
-+  /**
-+   * Callback method for when the Web Console initialization is complete. For
-+   * now this method sends the web-console-created notification using the
-+   * nsIObserverService.
-+   *
-+   * @private
-+   */
-+  _onInitComplete: function HUD__onInitComplete()
-+  {
-+    let id = WebConsoleUtils.supportsString(this.hudId);
-+    Services.obs.notifyObservers(id, "web-console-created", null);
-+  },
-+
-+  /**
-+   * Handler for messages that have an associated callback function. The
-+   * this.sendMessageToContent() allows one to provide a function to be invoked
-+   * when the content script replies to the message previously sent. This is the
-+   * method that invokes the callback.
-+   *
-+   * @see this.sendMessageToContent
-+   * @private
-+   * @param object aResponse
-+   *        Message object received from the content script.
-+   */
-+  _receiveMessageWithCallback:
-+  function HUD__receiveMessageWithCallback(aResponse)
-+  {
-+    if (aResponse.id in this.asyncRequests) {
-+      let request = this.asyncRequests[aResponse.id];
-+      request.callback(aResponse, request.message);
-+      delete this.asyncRequests[aResponse.id];
-+    }
-+    else {
-+      Cu.reportError("receiveMessageWithCallback response for stale request " +
-+                     "ID " + aResponse.id);
-+    }
-+  },
-+
-+  /**
-+   * Send a message to the content script.
-+   *
-+   * @param string aName
-+   *        The name of the message you want to send.
-+   *
-+   * @param object aMessage
-+   *        The message object you want to send. This object needs to have no
-+   *        cyclic references and it needs to be JSON-stringifiable.
-+   *
-+   * @param function [aCallback]
-+   *        Optional function you want to have called when the content script
-+   *        replies to your message. Your callback receives two arguments:
-+   *        (1) the response object from the content script and (2) the message
-+   *        you sent to the content script (which is aMessage here).
-+   */
-+  sendMessageToContent:
-+  function HUD_sendMessageToContent(aName, aMessage, aCallback)
-+  {
-+    aMessage.hudId = this.hudId;
-+    if (!("id" in aMessage)) {
-+      aMessage.id = "HUDChrome-" + HUDService.sequenceId();
-+    }
-+
-+    if (aCallback) {
-+      this.asyncRequests[aMessage.id] = {
-+        name: aName,
-+        message: aMessage,
-+        callback: aCallback,
-+      };
-+    }
-+    this.messageManager.sendAsyncMessage(aName, aMessage);
-+  },
-+
-+  /**
 +   * Handle the "WebConsole:NetworkActivity" message coming from the remote Web
 +   * Console.
 +   *
@@ -4882,6 +5604,109 @@ new file mode 100644
 +    if (aNode.parentNode) {
 +      aNode.parentNode.removeChild(aNode);
 +    }
++  },
++
++  /**
++   * Splits the given console messages into groups based on their timestamps.
++   *
++   * @param nsIDOMNode aOutputNode
++   *        The output node to alter.
++   * @returns void
++   */
++  regroupOutput: function HS_regroupOutput(aOutputNode)
++  {
++    // Go through the nodes and adjust the placement of "webconsole-new-group"
++    // classes.
++    let nodes = aOutputNode.querySelectorAll(".hud-msg-node" +
++      ":not(.hud-filtered-by-string):not(.hud-filtered-by-type)");
++    let lastTimestamp;
++    for (let i = 0, n = nodes.length; i < n; i++) {
++      let thisTimestamp = nodes[i].timestamp;
++      if (lastTimestamp != null &&
++          thisTimestamp >= lastTimestamp + NEW_GROUP_DELAY) {
++        nodes[i].classList.add("webconsole-new-group");
++      }
++      else {
++        nodes[i].classList.remove("webconsole-new-group");
++      }
++      lastTimestamp = thisTimestamp;
++    }
++  },
++
++  /**
++   * Turns the display of log nodes on and off appropriately to reflect the
++   * adjustment of the message type filter named by @aPrefKey.
++   *
++   * @param string aHUDId
++   *        The ID of the HUD to alter.
++   * @param string aPrefKey
++   *        The preference key for the message type being filtered: one of the
++   *        values in the MESSAGE_PREFERENCE_KEYS table.
++   * @param boolean aState
++   *        True if the filter named by @aMessageType is being turned on; false
++   *        otherwise.
++   * @returns void
++   */
++  adjustVisibilityForMessageType:
++  function HS_adjustVisibilityForMessageType(aHUDId, aPrefKey, aState)
++  {
++    let outputNode = this.getHudReferenceById(aHUDId).outputNode;
++    let doc = outputNode.ownerDocument;
++
++    // Look for message nodes ("hud-msg-node") with the given preference key
++    // ("hud-msg-error", "hud-msg-cssparser", etc.) and add or remove the
++    // "hud-filtered-by-type" class, which turns on or off the display.
++
++    let xpath = ".//*[contains(@class, 'hud-msg-node') and " +
++      "contains(concat(@class, ' '), 'hud-" + aPrefKey + " ')]";
++    let result = doc.evaluate(xpath, outputNode, null,
++      Ci.nsIDOMXPathResult.UNORDERED_NODE_SNAPSHOT_TYPE, null);
++    for (let i = 0; i < result.snapshotLength; i++) {
++      let node = result.snapshotItem(i);
++      if (aState) {
++        node.classList.remove("hud-filtered-by-type");
++      }
++      else {
++        node.classList.add("hud-filtered-by-type");
++      }
++    }
++
++    this.regroupOutput(outputNode);
++  },
++
++  /**
++   * Turns the display of log nodes on and off appropriately to reflect the
++   * adjustment of the search string.
++   *
++   * @param string aHUDId
++   *        The ID of the HUD to alter.
++   * @param string aSearchString
++   *        The new search string.
++   * @returns void
++   */
++  adjustVisibilityOnSearchStringChange:
++  function HS_adjustVisibilityOnSearchStringChange(aHUDId, aSearchString)
++  {
++    let outputNode = this.getHudReferenceById(aHUDId).outputNode;
++
++    let nodes = outputNode.getElementsByClassName("hud-msg-node");
++
++    for (let i = 0, n = nodes.length; i < n; ++i) {
++      let node = nodes[i];
++
++      // hide nodes that match the strings
++      let text = node.clipboardText;
++
++      // if the text matches the words in aSearchString...
++      if (this.stringMatchesFilters(text, aSearchString)) {
++        node.classList.remove("hud-filtered-by-string");
++      }
++      else {
++        node.classList.add("hud-filtered-by-string");
++      }
++    }
++
++    this.regroupOutput(outputNode);
 +  },
 +
 +  /**
@@ -5951,9 +6776,492 @@ new file mode 100644
 +  },
 +};
 +
++/**
++ * ConsoleUtils: a collection of globally used functions
++ *
++ */
++ConsoleUtils = {
++  /**
++   * Flag to turn on and off scrolling.
++   */
++  scroll: true,
++
++  /**
++   * Scrolls a node so that it's visible in its containing XUL "scrollbox"
++   * element.
++   *
++   * @param nsIDOMNode aNode
++   *        The node to make visible.
++   * @returns void
++   */
++  scrollToVisible: function ConsoleUtils_scrollToVisible(aNode) {
++    if (!this.scroll) {
++      return;
++    }
++
++    // Find the enclosing richlistbox node.
++    let richListBoxNode = aNode.parentNode;
++    while (richListBoxNode.tagName != "richlistbox") {
++      richListBoxNode = richListBoxNode.parentNode;
++    }
++
++    // Use the scroll box object interface to ensure the element is visible.
++    let boxObject = richListBoxNode.scrollBoxObject;
++    let nsIScrollBoxObject = boxObject.QueryInterface(Ci.nsIScrollBoxObject);
++    nsIScrollBoxObject.ensureElementIsVisible(aNode);
++  },
++
++  /**
++   * Given a category and message body, creates a DOM node to represent an
++   * incoming message. The timestamp is automatically added.
++   *
++   * @param nsIDOMDocument aDocument
++   *        The document in which to create the node.
++   * @param number aCategory
++   *        The category of the message: one of the CATEGORY_* constants.
++   * @param number aSeverity
++   *        The severity of the message: one of the SEVERITY_* constants;
++   * @param string|nsIDOMNode aBody
++   *        The body of the message, either a simple string or a DOM node.
++   * @param number aHUDId
++   *        The HeadsUpDisplay ID.
++   * @param string aSourceURL [optional]
++   *        The URL of the source file that emitted the error.
++   * @param number aSourceLine [optional]
++   *        The line number on which the error occurred. If zero or omitted,
++   *        there is no line number associated with this message.
++   * @param string aClipboardText [optional]
++   *        The text that should be copied to the clipboard when this node is
++   *        copied. If omitted, defaults to the body text. If `aBody` is not
++   *        a string, then the clipboard text must be supplied.
++   * @param number aLevel [optional]
++   *        The level of the console API message.
++   * @param number aTimeStamp [optional]
++   *        The timestamp to use for this message node. If omitted, the current
++   *        date and time is used.
++   * @return nsIDOMNode
++   *         The message node: a XUL richlistitem ready to be inserted into
++   *         the Web Console output node.
++   */
++  createMessageNode:
++  function ConsoleUtils_createMessageNode(aDocument, aCategory, aSeverity,
++                                          aBody, aHUDId, aSourceURL,
++                                          aSourceLine, aClipboardText, aLevel,
++                                          aTimeStamp) {
++    if (typeof aBody != "string" && aClipboardText == null && aBody.innerText) {
++      aClipboardText = aBody.innerText;
++    }
++
++    // Make the icon container, which is a vertical box. Its purpose is to
++    // ensure that the icon stays anchored at the top of the message even for
++    // long multi-line messages.
++    let iconContainer = aDocument.createElementNS(XUL_NS, "vbox");
++    iconContainer.classList.add("webconsole-msg-icon-container");
++    // Apply the curent group by indenting appropriately.
++    let hud = HUDService.getHudReferenceById(aHUDId);
++    iconContainer.style.marginLeft = hud.groupDepth * GROUP_INDENT + "px";
++
++    // Make the icon node. It's sprited and the actual region of the image is
++    // determined by CSS rules.
++    let iconNode = aDocument.createElementNS(XUL_NS, "image");
++    iconNode.classList.add("webconsole-msg-icon");
++    iconContainer.appendChild(iconNode);
++
++    // Make the spacer that positions the icon.
++    let spacer = aDocument.createElementNS(XUL_NS, "spacer");
++    spacer.setAttribute("flex", "1");
++    iconContainer.appendChild(spacer);
++
++    // Create the message body, which contains the actual text of the message.
++    let bodyNode = aDocument.createElementNS(XUL_NS, "description");
++    bodyNode.setAttribute("flex", "1");
++    bodyNode.classList.add("webconsole-msg-body");
++
++    // Store the body text, since it is needed later for the property tree
++    // case.
++    let body = aBody;
++    // If a string was supplied for the body, turn it into a DOM node and an
++    // associated clipboard string now.
++    aClipboardText = aClipboardText ||
++                     (aBody + (aSourceURL ? " @ " + aSourceURL : "") +
++                              (aSourceLine ? ":" + aSourceLine : ""));
++    if (!(aBody instanceof Ci.nsIDOMNode)) {
++      aBody = aDocument.createTextNode(aLevel == "dir" ?
++                                       aBody.resultString : aBody);
++    }
++
++    if (!aBody.nodeType) {
++      aBody = aDocument.createTextNode(aBody.toString());
++    }
++    if (typeof aBody == "string") {
++      aBody = aDocument.createTextNode(aBody);
++    }
++
++    bodyNode.appendChild(aBody);
++
++    let repeatContainer = aDocument.createElementNS(XUL_NS, "hbox");
++    repeatContainer.setAttribute("align", "start");
++    let repeatNode = aDocument.createElementNS(XUL_NS, "label");
++    repeatNode.setAttribute("value", "1");
++    repeatNode.classList.add("webconsole-msg-repeat");
++    repeatContainer.appendChild(repeatNode);
++
++    // Create the timestamp.
++    let timestampNode = aDocument.createElementNS(XUL_NS, "label");
++    timestampNode.classList.add("webconsole-timestamp");
++    let timestamp = aTimeStamp || Date.now();
++    let timestampString = l10n.timestampString(timestamp);
++    timestampNode.setAttribute("value", timestampString);
++
++    // Create the source location (e.g. www.example.com:6) that sits on the
++    // right side of the message, if applicable.
++    let locationNode;
++    if (aSourceURL) {
++      locationNode = this.createLocationNode(aDocument, aSourceURL,
++                                             aSourceLine);
++    }
++
++    // Create the containing node and append all its elements to it.
++    let node = aDocument.createElementNS(XUL_NS, "richlistitem");
++    node.clipboardText = aClipboardText;
++    node.classList.add("hud-msg-node");
++
++    node.timestamp = timestamp;
++    ConsoleUtils.setMessageType(node, aCategory, aSeverity);
++
++    node.appendChild(timestampNode);
++    node.appendChild(iconContainer);
++    // Display the object tree after the message node.
++    if (aLevel == "dir") {
++      // Make the body container, which is a vertical box, for grouping the text
++      // and tree widgets.
++      let bodyContainer = aDocument.createElement("vbox");
++      bodyContainer.setAttribute("flex", "1");
++      bodyContainer.appendChild(bodyNode);
++      // Create the tree.
++      let tree = createElement(aDocument, "tree", {
++        flex: 1,
++        hidecolumnpicker: "true"
++      });
++
++      let treecols = aDocument.createElement("treecols");
++      let treecol = createElement(aDocument, "treecol", {
++        primary: "true",
++        flex: 1,
++        hideheader: "true",
++        ignoreincolumnpicker: "true"
++      });
++      treecols.appendChild(treecol);
++      tree.appendChild(treecols);
++
++      tree.appendChild(aDocument.createElement("treechildren"));
++
++      bodyContainer.appendChild(tree);
++      node.appendChild(bodyContainer);
++      node.classList.add("webconsole-msg-inspector");
++      // Create the treeView object.
++      let treeView = node.propertyTreeView = new PropertyTreeView();
++
++      treeView.data = {
++        rootCacheId: body.cacheId,
++        panelCacheId: body.cacheId,
++        remoteObject: body.remoteObject,
++        remoteObjectProvider: body.remoteObjectProvider,
++      };
++
++      tree.setAttribute("rows", treeView.rowCount);
++    }
++    else {
++      node.appendChild(bodyNode);
++    }
++    node.appendChild(repeatContainer);
++    if (locationNode) {
++      node.appendChild(locationNode);
++    }
++
++    node.setAttribute("id", "console-msg-" + HUDService.sequenceId());
++
++    return node;
++  },
++
++  /**
++   * Adjusts the category and severity of the given message, clearing the old
++   * category and severity if present.
++   *
++   * @param nsIDOMNode aMessageNode
++   *        The message node to alter.
++   * @param number aNewCategory
++   *        The new category for the message; one of the CATEGORY_ constants.
++   * @param number aNewSeverity
++   *        The new severity for the message; one of the SEVERITY_ constants.
++   * @return void
++   */
++  setMessageType:
++  function ConsoleUtils_setMessageType(aMessageNode, aNewCategory,
++                                       aNewSeverity) {
++    // Remove the old CSS classes, if applicable.
++    if ("category" in aMessageNode) {
++      let oldCategory = aMessageNode.category;
++      let oldSeverity = aMessageNode.severity;
++      aMessageNode.classList.remove("webconsole-msg-" +
++                                    CATEGORY_CLASS_FRAGMENTS[oldCategory]);
++      aMessageNode.classList.remove("webconsole-msg-" +
++                                    SEVERITY_CLASS_FRAGMENTS[oldSeverity]);
++      let key = "hud-" + MESSAGE_PREFERENCE_KEYS[oldCategory][oldSeverity];
++      aMessageNode.classList.remove(key);
++    }
++
++    // Add in the new CSS classes.
++    aMessageNode.category = aNewCategory;
++    aMessageNode.severity = aNewSeverity;
++    aMessageNode.classList.add("webconsole-msg-" +
++                               CATEGORY_CLASS_FRAGMENTS[aNewCategory]);
++    aMessageNode.classList.add("webconsole-msg-" +
++                               SEVERITY_CLASS_FRAGMENTS[aNewSeverity]);
++    let key = "hud-" + MESSAGE_PREFERENCE_KEYS[aNewCategory][aNewSeverity];
++    aMessageNode.classList.add(key);
++  },
++
++  /**
++   * Creates the XUL label that displays the textual location of an incoming
++   * message.
++   *
++   * @param nsIDOMDocument aDocument
++   *        The document in which to create the node.
++   * @param string aSourceURL
++   *        The URL of the source file responsible for the error.
++   * @param number aSourceLine [optional]
++   *        The line number on which the error occurred. If zero or omitted,
++   *        there is no line number associated with this message.
++   * @return nsIDOMNode
++   *         The new XUL label node, ready to be added to the message node.
++   */
++  createLocationNode:
++  function ConsoleUtils_createLocationNode(aDocument, aSourceURL,
++                                           aSourceLine) {
++    let locationNode = aDocument.createElementNS(XUL_NS, "label");
++
++    // Create the text, which consists of an abbreviated version of the URL
++    // plus an optional line number.
++    let text = WebConsoleUtils.abbreviateSourceURL(aSourceURL);
++    if (aSourceLine) {
++      text += ":" + aSourceLine;
++    }
++    locationNode.setAttribute("value", text);
++
++    // Style appropriately.
++    locationNode.setAttribute("crop", "center");
++    locationNode.setAttribute("title", aSourceURL);
++    locationNode.classList.add("webconsole-location");
++    locationNode.classList.add("text-link");
++
++    // Make the location clickable.
++    locationNode.addEventListener("click", function() {
++      if (aSourceURL == "Scratchpad") {
++        let win = Services.wm.getMostRecentWindow("devtools:scratchpad");
++        if (win) {
++          win.focus();
++        }
++        return;
++      }
++      let viewSourceUtils = aDocument.defaultView.gViewSourceUtils;
++      viewSourceUtils.viewSource(aSourceURL, null, aDocument, aSourceLine);
++    }, true);
++
++    return locationNode;
++  },
++
++  /**
++   * Applies the user's filters to a newly-created message node via CSS
++   * classes.
++   *
++   * @param nsIDOMNode aNode
++   *        The newly-created message node.
++   * @param string aHUDId
++   *        The ID of the HUD which this node is to be inserted into.
++   * @return boolean
++   *         True if the message was filtered or false otherwise.
++   */
++  filterMessageNode: function ConsoleUtils_filterMessageNode(aNode, aHUDId) {
++    let isFiltered = false;
++
++    // Filter by the message type.
++    let prefKey = MESSAGE_PREFERENCE_KEYS[aNode.category][aNode.severity];
++    if (prefKey && !HUDService.getFilterState(aHUDId, prefKey)) {
++      // The node is filtered by type.
++      aNode.classList.add("hud-filtered-by-type");
++      isFiltered = true;
++    }
++
++    // Filter on the search string.
++    let search = HUDService.getFilterStringByHUDId(aHUDId);
++    let text = aNode.clipboardText;
++
++    // if string matches the filter text
++    if (!HUDService.stringMatchesFilters(text, search)) {
++      aNode.classList.add("hud-filtered-by-string");
++      isFiltered = true;
++    }
++
++    return isFiltered;
++  },
++
++  /**
++   * Merge the attributes of the two nodes that are about to be filtered.
++   * Increment the number of repeats of aOriginal.
++   *
++   * @param nsIDOMNode aOriginal
++   *        The Original Node. The one being merged into.
++   * @param nsIDOMNode aFiltered
++   *        The node being filtered out because it is repeated.
++   */
++  mergeFilteredMessageNode:
++  function ConsoleUtils_mergeFilteredMessageNode(aOriginal, aFiltered) {
++    // childNodes[3].firstChild is the node containing the number of repetitions
++    // of a node.
++    let repeatNode = aOriginal.childNodes[3].firstChild;
++    if (!repeatNode) {
++      return aOriginal; // no repeat node, return early.
++    }
++
++    let occurrences = parseInt(repeatNode.getAttribute("value")) + 1;
++    repeatNode.setAttribute("value", occurrences);
++  },
++
++  /**
++   * Filter the css node from the output node if it is a repeat. CSS messages
++   * are merged with previous messages if they occurred in the past.
++   *
++   * @param nsIDOMNode aNode
++   *        The message node to be filtered or not.
++   * @param nsIDOMNode aOutput
++   *        The outputNode of the HUD.
++   * @returns boolean
++   *         true if the message is filtered, false otherwise.
++   */
++  filterRepeatedCSS:
++  function ConsoleUtils_filterRepeatedCSS(aNode, aOutput, aHUDId) {
++    let hud = HUDService.getHudReferenceById(aHUDId);
++
++    // childNodes[2] is the description node containing the text of the message.
++    let description = aNode.childNodes[2].textContent;
++    let location;
++
++    // childNodes[4] represents the location (source URL) of the error message.
++    // The full source URL is stored in the title attribute.
++    if (aNode.childNodes[4]) {
++      // browser_webconsole_bug_595934_message_categories.js
++      location = aNode.childNodes[4].getAttribute("title");
++    }
++    else {
++      location = "";
++    }
++
++    let dupe = hud.cssNodes[description + location];
++    if (!dupe) {
++      // no matching nodes
++      hud.cssNodes[description + location] = aNode;
++      return false;
++    }
++
++    this.mergeFilteredMessageNode(dupe, aNode);
++
++    return true;
++  },
++
++  /**
++   * Filter the console node from the output node if it is a repeat. Console
++   * messages are filtered from the output if and only if they match the
++   * immediately preceding message. The output node's last occurrence should
++   * have its timestamp updated.
++   *
++   * @param nsIDOMNode aNode
++   *        The message node to be filtered or not.
++   * @param nsIDOMNode aOutput
++   *        The outputNode of the HUD.
++   * @return boolean
++   *         true if the message is filtered, false otherwise.
++   */
++  filterRepeatedConsole:
++  function ConsoleUtils_filterRepeatedConsole(aNode, aOutput) {
++    let lastMessage = aOutput.lastChild;
++
++    // childNodes[2] is the description element
++    if (lastMessage && lastMessage.childNodes[2] &&
++        !aNode.classList.contains("webconsole-msg-inspector") &&
++        aNode.childNodes[2].textContent ==
++        lastMessage.childNodes[2].textContent) {
++      this.mergeFilteredMessageNode(lastMessage, aNode);
++      return true;
++    }
++
++    return false;
++  },
++
++  /**
++   * Check if the given output node is scrolled to the bottom.
++   *
++   * @param nsIDOMNode aOutputNode
++   * @return boolean
++   *         True if the output node is scrolled to the bottom, or false
++   *         otherwise.
++   */
++  isOutputScrolledToBottom:
++  function ConsoleUtils_isOutputScrolledToBottom(aOutputNode)
++  {
++    let lastNodeHeight = aOutputNode.lastChild ?
++                         aOutputNode.lastChild.clientHeight : 0;
++    let scrollBox = aOutputNode.scrollBoxObject.element;
++
++    return scrollBox.scrollTop + scrollBox.clientHeight >=
++           scrollBox.scrollHeight - lastNodeHeight / 2;
++  },
++};
++
++/**
++ * Ensures that the number of message nodes of type aCategory don't exceed that
++ * category's line limit by removing old messages as needed.
++ *
++ * @param aHUDId aHUDId
++ *        The HeadsUpDisplay ID.
++ * @param integer aCategory
++ *        The category of message nodes to limit.
++ * @return number
++ *         The number of removed nodes.
++ */
++function pruneConsoleOutputIfNecessary(aHUDId, aCategory)
++{
++  let hudRef = HUDService.getHudReferenceById(aHUDId);
++  let outputNode = hudRef.outputNode;
++  let logLimit = hudRef.logLimitForCategory(aCategory);
++
++  let messageNodes = outputNode.getElementsByClassName("webconsole-msg-" +
++      CATEGORY_CLASS_FRAGMENTS[aCategory]);
++  let n = Math.max(0, messageNodes.length - logLimit);
++  let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
++  toRemove.forEach(hudRef.removeOutputMessage, hudRef);
++
++  return n;
++}
 diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webconsole/webconsole.xul
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/webconsole.xul
-@@ -0,0 +1,1 @@
-+aa
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- This Source Code Form is subject to the terms of the Mozilla Public
++   - License, v. 2.0. If a copy of the MPL was not distributed with this
++   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
++<?xml-stylesheet href="chrome://browser/skin/" type="text/css"?>
++<?xml-stylesheet href="chrome://browser/skin/devtools/webconsole.css"
++                 type="text/css"?>
++                 <!--<!DOCTYPE window [
++<!ENTITY % webConsoleDTD SYSTEM "chrome://browser/locale/devtools/webconsole.dtd">
++ %webConsoleDTD;
++]>-->
++<?xul-overlay href="chrome://global/content/editMenuOverlay.xul"?>
++<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
++  <script type="text/javascript" src="chrome://global/content/globalOverlay.js"/>
++  <script type="text/javascript" src="webconsole.js"/>
++
++</window>
