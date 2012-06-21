@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 7489a41d60373f5f2d1044a10c018e78c8a5d02d
+# Parent df2e5f99504a2e465d4f05f561c6f7f467fafc06
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1340225715 -10800
+# Date 1340291851 -10800
 
 Bug 688981 - Place the web console in its own iframe
 
@@ -38,7 +38,7 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
      content/browser/inspector.html                (highlighter/inspector.html)
      content/browser/NetworkPanel.xhtml            (webconsole/NetworkPanel.xhtml)
      content/browser/devtools/HUDService-content.js (webconsole/HUDService-content.js)
-+*   content/browser/devtools/webconsole.js        (webconsole/webconsole.js)
++    content/browser/devtools/webconsole.js        (webconsole/webconsole.js)
 +*   content/browser/devtools/webconsole.xul       (webconsole/webconsole.xul)
  *   content/browser/scratchpad.xul                (scratchpad/scratchpad.xul)
      content/browser/scratchpad.js                 (scratchpad/scratchpad.js)
@@ -51,7 +51,16 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -8,33 +8,17 @@ const Cc = Components.classes;
+@@ -1,40 +1,26 @@
+ /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+ /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
++"use strict";
++
+ const Cc = Components.classes;
  const Ci = Components.interfaces;
  const Cu = Components.utils;
  
@@ -86,7 +95,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    return WebConsoleUtils.l10n;
  });
  
-@@ -44,229 +28,65 @@ function LogFactory(aMessagePrefix)
+@@ -44,230 +30,66 @@ function LogFactory(aMessagePrefix)
      var _msg = aMessagePrefix + " " + aMessage + "\n";
      dump(_msg);
    }
@@ -301,6 +310,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    // These methods access the "this" object, but they're registered as
    // event listeners. So we hammer in the "this" binding.
    this.onTabClose = this.onTabClose.bind(this);
+   this.onTabSelect = this.onTabSelect.bind(this);
    this.onWindowUnload = this.onWindowUnload.bind(this);
  
    // Remembers the last console height, in pixels.
@@ -320,7 +330,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  HUD_SERVICE.prototype =
  {
    /**
-@@ -310,28 +130,22 @@ HUD_SERVICE.prototype =
+@@ -311,29 +133,23 @@ HUD_SERVICE.prototype =
        return this.hudReferences[hudId];
      }
  
@@ -331,6 +341,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
 -    // TODO: check that this works as intended
      gBrowser.tabContainer.addEventListener("TabClose", this.onTabClose, false);
+     gBrowser.tabContainer.addEventListener("TabSelect", this.onTabSelect, false);
      window.addEventListener("unload", this.onWindowUnload, false);
  
 -    this.registerDisplay(hudId);
@@ -350,7 +361,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      return hud;
    },
-@@ -351,17 +165,40 @@ HUD_SERVICE.prototype =
+@@ -353,17 +169,41 @@ HUD_SERVICE.prototype =
      if (!(hudId in this.hudReferences)) {
        return;
      }
@@ -381,6 +392,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      let gBrowser = window.gBrowser;
 +      let tabContainer = gBrowser.tabContainer;
 +      tabContainer.removeEventListener("TabClose", this.onTabClose, false);
++      tabContainer.removeEventListener("TabSelect", this.onTabSelect, false);
 +
 +      this.suspend();
 +    }
@@ -392,7 +404,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      let id = WebConsoleUtils.supportsString(hudId);
      Services.obs.notifyObservers(id, "web-console-destroyed", null);
-@@ -376,257 +213,16 @@ HUD_SERVICE.prototype =
+@@ -378,258 +218,16 @@ HUD_SERVICE.prototype =
    {
      if (!this.sequencer) {
        this.sequencer = this.createSequencer(-1);
@@ -636,6 +648,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -      let gBrowser = window.gBrowser;
 -      let tabContainer = gBrowser.tabContainer;
 -      tabContainer.removeEventListener("TabClose", this.onTabClose, false);
+-      tabContainer.removeEventListener("TabSelect", this.onTabSelect, false);
 -
 -      this.suspend();
 -    }
@@ -650,7 +663,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    wakeup: function HS_wakeup()
    {
      if (Object.keys(this.hudReferences).length > 0) {
-@@ -639,17 +235,16 @@ HUD_SERVICE.prototype =
+@@ -642,17 +240,16 @@ HUD_SERVICE.prototype =
    /**
     * Suspend Web Console activity. This is called when all Web Consoles are
     * closed.
@@ -668,7 +681,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Shutdown all HeadsUpDisplays on quit-application-granted.
     *
-@@ -702,84 +297,25 @@ HUD_SERVICE.prototype =
+@@ -705,84 +302,25 @@ HUD_SERVICE.prototype =
     * @returns Object
     */
    getHudReferenceById: function HS_getHudReferenceById(aId)
@@ -753,9 +766,9 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    createSequencer: function HS_createSequencer(aInt)
    {
      function sequencer(aInt)
-@@ -822,52 +358,31 @@ HUD_SERVICE.prototype =
- 
+@@ -837,52 +375,31 @@ HUD_SERVICE.prototype =
      tabContainer.removeEventListener("TabClose", this.onTabClose, false);
+     tabContainer.removeEventListener("TabSelect", this.onTabSelect, false);
  
      let tab = tabContainer.firstChild;
      while (tab != null) {
@@ -807,7 +820,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }
  
      switch (aDirection) {
-@@ -888,279 +403,318 @@ HUD_SERVICE.prototype =
+@@ -903,279 +420,319 @@ HUD_SERVICE.prototype =
     * Disables all animation for a console, for unit testing. After this call,
     * the console will instantly take on a reasonable height, and the close
     * animation will not occur.
@@ -1069,12 +1082,14 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    this.iframe = this.chromeDocument.createElement("iframe");
 +    this.iframe.setAttribute("id", this.hudId);
 +    this.iframe.setAttribute("class", "hud-box animated");
++    this.iframe.setAttribute("tooltip", "aHTMLTooltip");
 +    this.iframe.style.height = 0;
 +    this.iframe.addEventListener("load", this._onIframeLoad, true);
 +    this.iframe.setAttribute("src", UI_IFRAME_URL);
 +
 +    let position = Services.prefs.getCharPref("devtools.webconsole.position");
 +    this.positionConsole(position);
++    this._currentUIPosition = position;
 +  },
 +
 +  _onIframeLoad: function WC__onIframeLoad()
@@ -1082,8 +1097,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    this.iframe.removeEventListener("load", this._onIframeLoad, true);
 +
 +    this.iframeWindow = this.iframe.contentWindow.wrappedJSObject;
-+    this.ui = new this.iframeWindow.WebConsoleFrame(this);
-+    this.ui.positionConsole(this._currentUIPosition, this.iframeWindow);
++    this.ui = new this.iframeWindow.WebConsoleFrame(this, this._currentUIPosition);
 +    this._setupMessageManager();
 +  },
  
@@ -1276,7 +1290,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      catch (ex) {}
  
      let left = 0;
-@@ -1193,27 +747,22 @@ HeadsUpDisplay.prototype = {
+@@ -1208,27 +765,22 @@ HeadsUpDisplay.prototype = {
  
      let onPopupShown = (function HUD_onPopupShown() {
        panel.removeEventListener("popupshown", onPopupShown, false);
@@ -1307,7 +1321,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        if (aEvent.target != panel) {
          return;
        }
-@@ -1235,25 +784,25 @@ HeadsUpDisplay.prototype = {
+@@ -1250,25 +802,25 @@ HeadsUpDisplay.prototype = {
          HUDService.deactivateHUDForContext(this.tab, false);
        }
      }).bind(this);
@@ -1335,7 +1349,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      space.setAttribute("flex", "1");
  
      let resizer = this.chromeDocument.createElement("resizer");
-@@ -1262,1232 +811,108 @@ HeadsUpDisplay.prototype = {
+@@ -1277,1233 +829,108 @@ HeadsUpDisplay.prototype = {
  
      bottomBox.appendChild(space);
      bottomBox.appendChild(resizer);
@@ -1482,14 +1496,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -   *
 -   */
 -  jsterm: null,
-+  _afterPositionConsole:
-+  function WCF__afterPositionConsole(aPosition, aLastIndex)
-+  {
-+    let onLoad = function _onLoad() {
-+      this.iframe.removeEventListener("load", onLoad, true);
-+      this.iframeWindow = this.iframe.contentWindow.wrappedJSObject;
-+      this.ui && this.ui.positionConsole(aPosition, this.iframeWindow);
- 
+-
 -  /**
 -   * Display cached messages that may have been collected before the UI is
 -   * displayed.
@@ -1501,11 +1508,14 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -   */
 -  _displayCachedConsoleMessages:
 -  function HUD__displayCachedConsoleMessages(aRemoteMessages)
--  {
++  _afterPositionConsole:
++  function WCF__afterPositionConsole(aPosition, aLastIndex)
+   {
 -    if (!aRemoteMessages.length) {
--      return;
--    }
--
++    if (!this.ui) {
+       return;
+     }
+ 
 -    aRemoteMessages.forEach(function(aMessage) {
 -      switch (aMessage._type) {
 -        case "PageError": {
@@ -1521,7 +1531,11 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -      }
 -    }, this);
 -  },
--
++    let onLoad = function() {
++      this.iframe.removeEventListener("load", onLoad, true);
++      this.iframeWindow = this.iframe.contentWindow.wrappedJSObject;
++      this.ui.positionConsole(aPosition, this.iframeWindow);
+ 
 -  /**
 -   * Shortcut to make XUL nodes
 -   *
@@ -2445,10 +2459,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -      let request = this.asyncRequests[aResponse.id];
 -      request.callback(aResponse, request.message);
 -      delete this.asyncRequests[aResponse.id];
-+    if (this._currentUIPosition) {
-+      this.iframe.addEventListener("load", onLoad, true);
-     }
-     else {
+-    }
+-    else {
 -      Cu.reportError("receiveMessageWithCallback response for stale request " +
 -                     "ID " + aResponse.id);
 -    }
@@ -2588,8 +2600,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -
 -    if (messageNode._netPanel) {
 -      messageNode._netPanel.update();
-+      onLoad();
-     }
+-    }
++    this.iframe.addEventListener("load", onLoad, true);
    },
  
    /**
@@ -2597,7 +2609,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * opened in a panel the panel title is updated.
     *
     * @param object aMessage
-@@ -2498,1926 +923,73 @@ HeadsUpDisplay.prototype = {
+    *        The message received from the content script. It needs to hold two
+@@ -2513,1934 +940,81 @@ HeadsUpDisplay.prototype = {
    {
      this.contentLocation = aMessage.location;
      if (this.consolePanel) {
@@ -4543,8 +4556,17 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  // HeadsUpDisplayUICommands
  //////////////////////////////////////////////////////////////////////////
  
- HeadsUpDisplayUICommands = {
-@@ -4475,110 +1047,16 @@ HeadsUpDisplayUICommands = {
+-HeadsUpDisplayUICommands = {
++var HeadsUpDisplayUICommands = {
+   refreshCommand: function UIC_refreshCommand() {
+     var window = HUDService.currentContext();
+     if (!window) {
+       return;
+     }
+ 
+     let command = window.document.getElementById("Tools:WebConsole");
+     if (this.getOpenHUD() != null) {
+@@ -4490,110 +1064,16 @@ HeadsUpDisplayUICommands = {
     *         The hudId or null if the active chrome window has no open Web
     *         Console.
     */
@@ -4655,7 +4677,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  let WebConsoleObserver = {
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
-@@ -4596,102 +1074,13 @@ let WebConsoleObserver = {
+@@ -4611,102 +1091,13 @@ let WebConsoleObserver = {
    },
  
    uninit: function WCO_uninit()
@@ -4758,6 +4780,33 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    return new HUD_SERVICE();
  });
  
+diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
+--- a/browser/devtools/webconsole/Makefile.in
++++ b/browser/devtools/webconsole/Makefile.in
+@@ -6,22 +6,19 @@
+ DEPTH		= ../../..
+ topsrcdir	= @top_srcdir@
+ srcdir		= @srcdir@
+ VPATH		= @srcdir@
+ 
+ include $(DEPTH)/config/autoconf.mk
+ 
+ EXTRA_JS_MODULES = \
++		HUDService.jsm \
+ 		PropertyPanel.jsm \
+ 		NetworkHelper.jsm \
+ 		NetworkPanel.jsm \
+ 		AutocompletePopup.jsm \
+ 		WebConsoleUtils.jsm \
+ 		$(NULL)
+ 
+-EXTRA_PP_JS_MODULES = \
+-		HUDService.jsm \
+-		$(NULL)
+-
+ TEST_DIRS = test
+ 
+ include $(topsrcdir)/config/rules.mk
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_579412_input_focus.js b/browser/devtools/webconsole/test/browser_webconsole_bug_579412_input_focus.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_579412_input_focus.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_579412_input_focus.js
@@ -4993,7 +5042,8 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_586388_sele
 +  let contextMenu = hud.ui.document.getElementById(contextMenuId);
    ok(contextMenu != null, "the output node has a context menu");
  
-   let selectAllItem = contextMenu.querySelector("*[buttonType=\"selectAll\"]");
+-  let selectAllItem = contextMenu.querySelector("*[buttonType=\"selectAll\"]");
++  let selectAllItem = contextMenu.querySelector("*[command='cmd_selectAll']");
    ok(selectAllItem != null,
       "the context menu on the output node has a \"Select All\" item");
  
@@ -5059,7 +5109,8 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_outp
 +  let contextMenu = HUD.ui.document.getElementById(contextMenuId);
    ok(contextMenu, "the output node has a context menu");
  
-   let copyItem = contextMenu.querySelector("*[buttonType=\"copy\"]");
+-  let copyItem = contextMenu.querySelector("*[buttonType=\"copy\"]");
++  let copyItem = contextMenu.querySelector("*[command='cmd_copy']");
    ok(copyItem, "the context menu on the output node has a \"Copy\" item");
  
 -  let commandEvent = document.createEvent("XULCommandEvent");
@@ -5649,7 +5700,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601909_reme
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
-@@ -14,67 +14,82 @@ function test()
+@@ -14,67 +14,81 @@ function test()
  {
    // open tab 1
    addTab("data:text/html;charset=utf-8,Web Console test for bug 602572: log bodies checkbox. tab 1");
@@ -5691,8 +5742,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_
  
 -  menuitems[1] = huds[1].HUDBox.querySelector("menuitem[buttonType=saveBodies]");
 -  menupopups[1] = huds[1].HUDBox.querySelector("menupopup");
-+  menuitems[1] = huds[1].ui.rootElement
-+                 .querySelector("menuitem[buttonType=saveBodies]");
++  menuitems[1] = huds[1].ui.rootElement.querySelector("#saveBodies");
 +  menupopups[1] = huds[1].ui.rootElement.querySelector("menupopup");
  
    // Open the context menu from tab 2.
@@ -5741,7 +5791,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_
    is(menuitems[1].getAttribute("checked"), "true", "menuitems[1] is checked");
  
    menupopups[1].addEventListener("popuphidden", function _onhidden(aEvent) {
-@@ -84,49 +99,59 @@ function onpopupshown2b(aEvent)
+@@ -84,49 +98,58 @@ function onpopupshown2b(aEvent)
      gBrowser.selectedTab = tabs[0];
      waitForFocus(function() {
        // Find the relevant elements in the Web Console of tab 1.
@@ -5755,8 +5805,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_
 +      info("iframe1 height " + huds[0].iframe.clientHeight);
 +      info("iframe1 root height " + huds[0].ui.rootElement.clientHeight);
 +
-+      menuitems[0] = huds[0].ui.rootElement
-+                     .querySelector("menuitem[buttonType=saveBodies]");
++      menuitems[0] = huds[0].ui.rootElement.querySelector("#saveBodies");
 +      menupopups[0] = huds[0].ui.rootElement.querySelector("menupopup");
  
        menupopups[0].addEventListener("popupshown", onpopupshown1, false);
@@ -5808,7 +5857,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_
  
    is(menuitems[1].getAttribute("checked"), "true", "menuitems[1] is checked");
  
-@@ -135,10 +160,13 @@ function onpopupshown2c(aEvent)
+@@ -135,10 +158,13 @@ function onpopupshown2c(aEvent)
  
      // Done!
      huds = menuitems = menupopups = tabs = null;
@@ -7082,11 +7131,32 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_position_ui.js 
    hudRef.positionConsole = positionConsole;
  }
  
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -1,17 +1,16 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ let tempScope = {};
+ Cu.import("resource:///modules/HUDService.jsm", tempScope);
+ let HUDService = tempScope.HUDService;
+-let ConsoleUtils = tempScope.ConsoleUtils;
+ Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
+ let WebConsoleUtils = tempScope.WebConsoleUtils;
+ 
+ function log(aMsg)
+ {
+   dump("*** WebConsoleTest: " + aMsg + "\n");
+ }
+ 
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -0,0 +1,3139 @@
+@@ -0,0 +1,3153 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -7249,12 +7319,10 @@ new file mode 100644
 + *        The WebConsole owner object.
 + */
 +// TODO: update comments
-+function WebConsoleFrame(aWebConsoleOwner)
++function WebConsoleFrame(aWebConsoleOwner, aPosition)
 +{
 +  this.owner = aWebConsoleOwner;
 +  this.hudId = this.owner.hudId;
-+  this.window = window;
-+  this.document = document;
 +
 +  this._cssNodes = {};
 +  this._outputQueue = [];
@@ -7265,8 +7333,8 @@ new file mode 100644
 +  this._onPositionConsoleCommand = this._onPositionConsoleCommand.bind(this);
 +
 +  this._initDefaultFilterPrefs();
-+  this._initUI();
 +  this._commandController = new CommandController(this);
++  this.positionConsole(aPosition, window);
 +
 +  // create the JSTerm input element
 +  this.jsterm = new JSTerm(this);
@@ -7456,6 +7524,13 @@ new file mode 100644
 +    let saveBodies = doc.getElementById("saveBodies");
 +    saveBodies.addEventListener("command", function() {
 +      this.saveRequestAndResponseBodies = !this.saveRequestAndResponseBodies;
++    }.bind(this));
++    saveBodies.setAttribute("checked", this.saveRequestAndResponseBodies);
++
++    let contextMenuId = this.outputNode.getAttribute("context");
++    let contextMenu = doc.getElementById(contextMenuId);
++    contextMenu.addEventListener("popupshowing", function() {
++      saveBodies.setAttribute("checked", this.saveRequestAndResponseBodies);
 +    }.bind(this));
 +
 +    this.closeButton = doc.getElementsByClassName("webconsole-close-button")[0];
@@ -7756,7 +7831,10 @@ new file mode 100644
 +    // register the controller to handle "select all" properly
 +    this.window.controllers.insertControllerAt(0, this._commandController);
 +
-+    //let outerWrap = this.jsTermParentNode.parentNode;
++    let oldOutputNode = this.outputNode;
++
++    this._initUI();
++    this.jsterm && this.jsterm._initUI();
 +
 +    this.closeButton.hidden = aPosition == "window";
 +
@@ -7766,11 +7844,13 @@ new file mode 100644
 +    }
 +    this.positionMenuitems.last = this.positionMenuitems[aPosition];
 +
-+    //this.rootElement.appendChild(outerWrap);
-+
-+    if (this.jsterm) {
-+      this.jsterm.inputNode.focus();
++    if (oldOutputNode && oldOutputNode.childNodes.length) {
++      let parentNode = this.outputNode.parentNode;
++      parentNode.replaceChild(oldOutputNode, this.outputNode);
++      this.outputNode = oldOutputNode;
 +    }
++
++    this.jsterm && this.jsterm.inputNode.focus();
 +  },
 +
 +  /**
@@ -8012,6 +8092,7 @@ new file mode 100644
 +    urlNode.setAttribute("crop", "center");
 +    urlNode.setAttribute("flex", "1");
 +    urlNode.setAttribute("title", request.url);
++    urlNode.setAttribute("tooltiptext", request.url);
 +    urlNode.setAttribute("value", request.url);
 +    urlNode.classList.add("hud-clickable");
 +    urlNode.classList.add("webconsole-msg-body-piece");
@@ -8093,6 +8174,7 @@ new file mode 100644
 +    urlNode.setAttribute("crop", "center");
 +    urlNode.setAttribute("flex", "1");
 +    urlNode.setAttribute("title", aFileURI);
++    urlNode.setAttribute("tooltiptext", aFileURI);
 +    urlNode.setAttribute("value", aFileURI);
 +    urlNode.classList.add("hud-clickable");
 +    urlNode.classList.add("webconsole-msg-url");
@@ -9070,6 +9152,7 @@ new file mode 100644
 +    // Style appropriately.
 +    locationNode.setAttribute("crop", "center");
 +    locationNode.setAttribute("title", aSourceURL);
++    locationNode.setAttribute("tooltiptext", aSourceURL);
 +    locationNode.classList.add("webconsole-location");
 +    locationNode.classList.add("text-link");
 +
@@ -9162,7 +9245,9 @@ new file mode 100644
 +  this.autocompletePopup = new AutocompletePopup(this.hud.owner.chromeDocument);
 +  this.autocompletePopup.onSelect = this.onAutocompleteSelect.bind(this);
 +  this.autocompletePopup.onClick = this.acceptProposedCompletion.bind(this);
-+  this.init();
++  this._keyPress = this.keyPress.bind(this);
++  this._inputEventHandler = this.inputEventHandler.bind(this);
++  this._initUI();
 +}
 +
 +JSTerm.prototype = {
@@ -9172,20 +9257,19 @@ new file mode 100644
 +  COMPLETE_HINT_ONLY: 2,
 +
 +  /**
-+   * Initialize the JSTerminal instance.
++   * Initialize the JSTerminal UI.
++   * @private
 +   */
-+  init: function JST_init()
++  _initUI: function JST__initUI()
 +  {
 +    let doc = this.hud.document;
 +    this.completeNode = doc.getElementsByClassName("jsterm-complete-node")[0];
 +    this.inputNode = doc.getElementsByClassName("jsterm-input-node")[0];
-+
-+    this._keyPress = this.keyPress.bind(this);
-+    this._inputEventHandler = this.inputEventHandler.bind(this);
-+
 +    this.inputNode.addEventListener("keypress", this._keyPress, false);
 +    this.inputNode.addEventListener("input", this._inputEventHandler, false);
 +    this.inputNode.addEventListener("keyup", this._inputEventHandler, false);
++
++    this.lastInputValue && this.setInputValue(this.lastInputValue);
 +  },
 +
 +  get outputNode() this.hud.outputNode,
@@ -10201,7 +10285,7 @@ new file mode 100644
 +    switch (aCommand) {
 +      case "cmd_copy":
 +        // Only enable "copy" if nodes are selected.
-+        return outputNode.selectedCount > 0;
++        return this.owner.outputNode.selectedCount > 0;
 +      case "cmd_selectAll":
 +        return true;
 +    }
@@ -10230,7 +10314,7 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/webconsole.xul
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,123 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!-- This Source Code Form is subject to the terms of the Mozilla Public
 +   - License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -10266,12 +10350,13 @@ new file mode 100644
 +    <vbox class="hud-console-wrapper" flex="1">
 +      <toolbar id="viewGroup" class="hud-console-filter-toolbar" mode="full">
 +#ifdef XP_MACOSX
-+        <toolbarbutton class="webconsole-close-button"/>
++        <toolbarbutton class="webconsole-close-button"
++                       tooltiptext="&btnClose.tooltip;"/>
 +#endif
 +
 +        <toolbarbutton label="&btnPageNet.label;" type="menu-button"
 +                       category="net" class="webconsole-filter-button"
-+                       tooltip="&btnPageNet.tooltip;">
++                       tooltiptext="&btnPageNet.tooltip;">
 +          <menupopup>
 +            <menuitem label="&btnConsoleErrors;" type="checkbox" autocheck="false"
 +                      prefKey="network"/>
@@ -10281,32 +10366,32 @@ new file mode 100644
 +        </toolbarbutton>
 +        <toolbarbutton label="&btnPageCSS.label;" type="menu-button"
 +                       category="css" class="webconsole-filter-button"
-+                       tooltip="&btnPageCSS.tooltip;">
++                       tooltiptext="&btnPageCSS.tooltip;">
 +          <menupopup>
 +            <menuitem label="&btnConsoleErrors;" type="checkbox" autocheck="false"
 +                      prefKey="csserror"/>
-+            <menuitem label="&btnConsoleWarnings;" type="checkbox" autocheck="false"
-+                      prefKey="cssparser"/>
++            <menuitem label="&btnConsoleWarnings;" type="checkbox"
++                      autocheck="false" prefKey="cssparser"/>
 +          </menupopup>
 +        </toolbarbutton>
 +        <toolbarbutton label="&btnPageJS.label;" type="menu-button"
 +                       category="js" class="webconsole-filter-button"
-+                       tooltip="&btnPageJS.tooltip;">
++                       tooltiptext="&btnPageJS.tooltip;">
 +          <menupopup>
-+            <menuitem label="&btnConsoleErrors;" type="checkbox" autocheck="false"
-+                      prefKey="exception"/>
-+            <menuitem label="&btnConsoleWarnings;" type="checkbox" autocheck="false"
-+                      prefKey="jswarn"/>
++            <menuitem label="&btnConsoleErrors;" type="checkbox"
++                      autocheck="false" prefKey="exception"/>
++            <menuitem label="&btnConsoleWarnings;" type="checkbox"
++                      autocheck="false" prefKey="jswarn"/>
 +          </menupopup>
 +        </toolbarbutton>
 +        <toolbarbutton label="&btnPageLogging.label;" type="menu-button"
 +                       category="logging" class="webconsole-filter-button"
-+                       tooltip="&btnPageLogging.tooltip;">
++                       tooltiptext="&btnPageLogging.tooltip;">
 +          <menupopup>
-+            <menuitem label="&btnConsoleErrors;" type="checkbox" autocheck="false"
-+                      prefKey="error"/>
-+            <menuitem label="&btnConsoleWarnings;" type="checkbox" autocheck="false"
-+                      prefKey="warn"/>
++            <menuitem label="&btnConsoleErrors;" type="checkbox"
++                      autocheck="false" prefKey="error"/>
++            <menuitem label="&btnConsoleWarnings;" type="checkbox"
++                      autocheck="false" prefKey="warn"/>
 +            <menuitem label="&btnConsoleInfo;" type="checkbox" autocheck="false"
 +                      prefKey="info"/>
 +            <menuitem label="&btnConsoleLog;" type="checkbox" autocheck="false"
@@ -10317,34 +10402,30 @@ new file mode 100644
 +        <spacer flex="1"/>
 +
 +        <toolbarbutton label="&btnPosition.label;" type="menu"
-+                       tooltip="&btnPosition.tooltip;">
++                       tooltiptext="&btnPosition.tooltip;">
 +          <menupopup>
-+            <menuitem label="&positionMenu.above;" type="checkbox" autocheck="false"
-+                      consolePosition="above"/>
-+            <menuitem label="&positionMenu.below;" type="checkbox" autocheck="false"
-+                      consolePosition="below"/>
-+            <menuitem label="&positionMenu.window;" type="checkbox" autocheck="false"
-+                      consolePosition="window"/>
++            <menuitem label="&positionMenu.above;" type="checkbox"
++                      autocheck="false" consolePosition="above"/>
++            <menuitem label="&positionMenu.below;" type="checkbox"
++                      autocheck="false" consolePosition="below"/>
++            <menuitem label="&positionMenu.window;" type="checkbox"
++                      autocheck="false" consolePosition="window"/>
 +          </menupopup>
 +        </toolbarbutton>
 +
 +        <textbox class="compact hud-filter-box" type="search"
 +                 placeholder="&filterBox.placeholder;"/>
 +        <toolbarbutton class="webconsole-clear-console-button"
-+                       label="&btnClear;"/>
++                       label="&btnClear.label;" tooltiptext="&btnClear.tooltip;"/>
 +
 +#ifndef XP_MACOSX
-+        <toolbarbutton class="webconsole-close-button"/>
++        <toolbarbutton class="webconsole-close-button"
++                       tooltiptext="&btnClose.tooltip;"/>
 +#endif
 +      </toolbar>
-+      <hbox class="gcliterm-display" flex="1">
-+        <vbox class="gcliterm-hint-parent" flex="0" pack="end" hidden="true">
-+          <vbox class="gcliterm-hint-node"/>
-+        </vbox>
-+        <richlistbox class="hud-output-node" orient="vertical" flex="1"
-+                     seltype="multiple" context="output-contextmenu"
-+                     style="direction:ltr;"></richlistbox>
-+      </hbox>
++      <richlistbox class="hud-output-node" orient="vertical" flex="1"
++                   seltype="multiple" context="output-contextmenu"
++                   style="direction:ltr;"/>
 +      <hbox class="jsterm-input-container" style="direction:ltr">
 +        <stack class="jsterm-stack-node" flex="1">
 +          <textbox class="jsterm-complete-node" multiline="true" rows="1"
@@ -10360,7 +10441,7 @@ new file mode 100644
 diff --git a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
 --- a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
 +++ b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
-@@ -3,24 +3,76 @@
+@@ -3,24 +3,78 @@
     - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
  
  <!-- LOCALIZATION NOTE : FILE The correct localization of this file might be to
@@ -10409,7 +10490,7 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd b/brow
 +  -  the page for debugging purposes, using calls such console.log() and
 +  -  console.error(). -->
 +<!ENTITY btnPageLogging.label   "Logging">
-+<!ENTITY btnPageLogging.tooltip "Log messages sent to the 'console' object">
++<!ENTITY btnPageLogging.tooltip "Log messages sent to the window.console object">
 +<!ENTITY btnConsoleErrors       "Errors">
 +<!ENTITY btnConsoleInfo         "Info">
 +<!ENTITY btnConsoleWarnings     "Warnings">
@@ -10436,7 +10517,9 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd b/brow
 +<!ENTITY positionMenu.window   "Window">
 +
 +<!ENTITY filterBox.placeholder "Filter">
-+<!ENTITY btnClear              "Clear">
++<!ENTITY btnClear.label        "Clear">
++<!ENTITY btnClear.tooltip      "Clear the Web Console output">
++<!ENTITY btnClose.tooltip      "Close the Web Console">
 diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 --- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
