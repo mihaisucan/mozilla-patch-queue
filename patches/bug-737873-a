@@ -1,0 +1,111 @@
+# HG changeset patch
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1340795860 -10800
+# Node ID a41a336d9bc2528a36eff818e2c86a968f373a06
+# Parent e42cc35e45cc57d4984b8530ede60cf696dbebe6
+Bug 737873 - make HUDService-content send the new page location earlier
+
+diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
+--- a/browser/devtools/webconsole/HUDService-content.js
++++ b/browser/devtools/webconsole/HUDService-content.js
+@@ -284,17 +284,18 @@ let Manager = {
+         ConsoleListener.init(aMessage);
+         break;
+       case "NetworkMonitor":
+         NetworkMonitor.init(aMessage);
+         break;
+       case "LocationChange":
+         ConsoleProgressListener.startMonitor(ConsoleProgressListener
+                                              .MONITOR_LOCATION_CHANGE);
+-        ConsoleProgressListener.sendLocation();
++        ConsoleProgressListener.sendLocation(this.window.location.href,
++                                             this.window.document.title);
+         break;
+       default:
+         Cu.reportError("Web Console content: unknown feature " + aFeature);
+         break;
+     }
+ 
+     this._enabledFeatures.push(aFeature);
+   },
+@@ -2220,17 +2221,17 @@ let NetworkMonitor = {
+     let entry = aHttpActivity.log.entries[0];
+     let harTimings = entry.timings;
+ 
+     // Not clear how we can determine "blocked" time.
+     harTimings.blocked = -1;
+ 
+     // DNS timing information is available only in when the DNS record is not
+     // cached.
+-    harTimings.dns = timings.STATUS_RESOLVING ?
++    harTimings.dns = timings.STATUS_RESOLVING && timings.STATUS_RESOLVED ?
+                      timings.STATUS_RESOLVED.last -
+                      timings.STATUS_RESOLVING.first : -1;
+ 
+     if (timings.STATUS_CONNECTING_TO && timings.STATUS_CONNECTED_TO) {
+       harTimings.connect = timings.STATUS_CONNECTED_TO.last -
+                            timings.STATUS_CONNECTING_TO.first;
+     }
+     else if (timings.STATUS_SENDING_TO) {
+@@ -2466,44 +2467,56 @@ let ConsoleProgressListener = {
+    * Check if the current window.top location is changing, given the arguments
+    * of nsIWebProgressListener.onStateChange. If that is the case, the remote
+    * Web Console instance is notified.
+    * @private
+    */
+   _checkLocationChange:
+   function CPL__checkLocationChange(aProgress, aRequest, aState, aStatus)
+   {
++    let isStart = aState & Ci.nsIWebProgressListener.STATE_START;
+     let isStop = aState & Ci.nsIWebProgressListener.STATE_STOP;
+     let isNetwork = aState & Ci.nsIWebProgressListener.STATE_IS_NETWORK;
+     let isWindow = aState & Ci.nsIWebProgressListener.STATE_IS_WINDOW;
+ 
+     // Skip non-interesting states.
+-    if (!isStop || !isNetwork || !isWindow ||
++    if (!isNetwork || !isWindow ||
+         aProgress.DOMWindow != Manager.window) {
+       return;
+     }
+ 
+-    this.sendLocation();
++    if (isStart && aRequest instanceof Ci.nsIChannel) {
++      this.sendLocation(aRequest.URI.spec, "");
++    }
++    else if (isStop) {
++      this.sendLocation(Manager.window.location.href,
++                        Manager.window.document.title);
++    }
+   },
+ 
+   onLocationChange: function() {},
+   onStatusChange: function() {},
+   onProgressChange: function() {},
+   onSecurityChange: function() {},
+ 
+   /**
+    * Send the location of the current top window to the remote Web Console.
+    * A "WebConsole:LocationChange" message is sent. The JSON object holds two
+    * properties: location and title.
++   *
++   * @param string aLocation
++   *        Current page address.
++   * @param string aTitle
++   *        Current page title.
+    */
+-  sendLocation: function CPL_sendLocation()
++  sendLocation: function CPL_sendLocation(aLocation, aTitle)
+   {
+     let message = {
+-      "location": Manager.window.location.href,
+-      "title": Manager.window.document.title,
++      "location": aLocation,
++      "title": aTitle,
+     };
+     Manager.sendMessage("WebConsole:LocationChange", message);
+   },
+ 
+   /**
+    * Destroy the ConsoleProgressListener.
+    */
+   destroy: function CPL_destroy()

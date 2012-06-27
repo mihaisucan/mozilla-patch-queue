@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent cb2904476d146bce98091f77d1246350d673afca
+# Parent 44220384c934ab37cd315c56cb06fa87d1e648a8
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1340621422 -10800
+# Date 1340821055 -10800
 
 Bug 688981 - Place the web console in its own iframe; try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitest-o -t none
 
@@ -48,6 +48,31 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
      content/browser/devtools/csshtmltree.xul      (styleinspector/csshtmltree.xul)
      content/browser/devtools/cssruleview.xul      (styleinspector/cssruleview.xul)
      content/browser/devtools/styleinspector.css   (styleinspector/styleinspector.css)
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+--- a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+@@ -150,19 +150,19 @@ function test() {
+         return hud.outputNode.textContent.indexOf("foobarBug762996click") > -1;
+       },
+       success: doClearConsoleButton.bind(null, hud),
+       failure: finish,
+     };
+   }
+ 
+   function doClearConsoleButton(hud) {
+-    let clearButton = hud.HUDBox
++    let clearButton = hud.ui.rootElement
+                       .querySelector(".webconsole-clear-console-button");
+-    EventUtils.synthesizeMouse(clearButton, 2, 2, {}, window);
++    EventUtils.synthesizeMouse(clearButton, 2, 2, {}, hud.iframeWindow);
+ 
+     is(hud.outputNode.textContent.indexOf("foobarBug762996click"), -1,
+        "clear console button worked");
+     is(getErrorsCount(), 0, "page errors counter has been reset");
+ 
+     doPageReload(hud);
+   }
+ 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
@@ -1253,7 +1278,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        if (aEvent.target != panel) {
          return;
        }
-@@ -1250,1095 +721,224 @@ HeadsUpDisplay.prototype = {
+@@ -1250,1096 +721,232 @@ HeadsUpDisplay.prototype = {
          HUDService.deactivateHUDForContext(this.tab, false);
        }
      }).bind(this);
@@ -1464,7 +1489,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    aRemoteMessages.forEach(function(aMessage) {
 -      switch (aMessage._type) {
 -        case "PageError": {
--          let category = this.categoryForScriptError(aMessage.category);
+-          let category = this.categoryForScriptError(aMessage);
 -          this.outputMessage(category, this.reportPageError,
 -                             [category, aMessage]);
 -          break;
@@ -1597,13 +1622,15 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    }.bind(this));
    },
  
--  /**
+   /**
 -   * sets the click events for all binary toggle filter buttons
 -   *
 -   * @returns void
--   */
++   * The clear output button handler.
+    */
 -  setFilterTextBoxEvents: function HUD_setFilterTextBoxEvents()
--  {
++  onClearButton: function WC_onClearButton()
+   {
 -    var filterBox = this.filterBox;
 -    function onChange()
 -    {
@@ -1902,6 +1929,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    function HUD_clearButton_onCommand() {
 -      let hud = HUDService.getHudReferenceById(hudId);
 -      hud.jsterm.clearOutput(true);
+-      hud.chromeWindow.DeveloperToolbar.resetErrorsCount(hud.tab);
 -    }
 -
 -    let clearButton = this.makeXULNode("toolbarbutton");
@@ -2300,7 +2328,9 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -    HUD_BOX_DOES_NOT_EXIST: "Heads Up Display does not exist",
 -    TAB_ID_REQUIRED: "Tab DOM ID is required",
 -    PARENTNODE_NOT_FOUND: "parentNode element not found"
--  },
++    this.ui.jsterm.clearOutput(true);
++    this.chromeWindow.DeveloperToolbar.resetErrorsCount(this.tab);
+   },
  
    /**
     * Setup the message manager used to communicate with the Web Console content
@@ -2408,7 +2438,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * Handler for messages that have an associated callback function. The
     * this.sendMessageToContent() allows one to provide a function to be invoked
-@@ -2346,22 +946,22 @@ HeadsUpDisplay.prototype = {
+@@ -2347,22 +954,22 @@ HeadsUpDisplay.prototype = {
     * method that invokes the callback.
     *
     * @see this.sendMessageToContent
@@ -2435,7 +2465,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    },
  
    /**
-@@ -2376,2071 +976,109 @@ HeadsUpDisplay.prototype = {
+@@ -2377,2071 +984,109 @@ HeadsUpDisplay.prototype = {
     *
     * @param function [aCallback]
     *        Optional function you want to have called when the content script
@@ -4526,7 +4556,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
      let command = window.document.getElementById("Tools:WebConsole");
      if (this.getOpenHUD() != null) {
-@@ -4490,110 +1128,16 @@ HeadsUpDisplayUICommands = {
+@@ -4491,110 +1136,16 @@ HeadsUpDisplayUICommands = {
     *         The hudId or null if the active chrome window has no open Web
     *         Console.
     */
@@ -4637,7 +4667,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
  let WebConsoleObserver = {
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
-@@ -4611,102 +1155,13 @@ let WebConsoleObserver = {
+@@ -4612,102 +1163,13 @@ let WebConsoleObserver = {
    },
  
    uninit: function WCO_uninit()
@@ -5835,7 +5865,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
-@@ -94,14 +94,14 @@ function performTest() {
+@@ -94,18 +94,17 @@ function performTest() {
      name: "jsterm output message",
      validatorFn: function()
      {
@@ -5844,10 +5874,17 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_clos
      successFn: function()
      {
        let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
--      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
--      EventUtils.synthesizeMouse(networkLink, 2, 2, {});
-+      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {}, HUD.iframeWindow);
-+      EventUtils.synthesizeMouse(networkLink, 2, 2, {}, HUD.iframeWindow);
+-      EventUtils.sendMouseEvent({ type: "mousedown" }, jstermMessage);
+-      EventUtils.sendMouseEvent({ type: "mouseup" }, jstermMessage);
+-      EventUtils.sendMouseEvent({ type: "click" }, jstermMessage);
+-      EventUtils.sendMouseEvent({ type: "mousedown" }, networkLink);
+-      EventUtils.sendMouseEvent({ type: "mouseup" }, networkLink);
+-      EventUtils.sendMouseEvent({ type: "click" }, networkLink);
++      EventUtils.sendMouseEvent({ type: "mousedown" }, jstermMessage, HUD.iframeWindow);
++      EventUtils.sendMouseEvent({ type: "click" }, jstermMessage, HUD.iframeWindow);
++      EventUtils.sendMouseEvent({ type: "mousedown" }, networkLink, HUD.iframeWindow);
++      EventUtils.sendMouseEvent({ type: "mouseup" }, networkLink, HUD.iframeWindow);
++      EventUtils.sendMouseEvent({ type: "click" }, networkLink, HUD.iframeWindow);
      },
      failureFn: finishTest,
    });
@@ -5855,7 +5892,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_clos
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_private_browsing.js
-@@ -119,18 +119,18 @@ function performTest() {
+@@ -119,22 +119,22 @@ function performTest() {
      name: "jsterm output message",
      validatorFn: function()
      {
@@ -5864,10 +5901,18 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_priv
      successFn: function()
      {
        let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
--      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {});
--      EventUtils.synthesizeMouse(networkLink, 2, 2, {});
-+      EventUtils.synthesizeMouse(jstermMessage, 2, 2, {}, HUD.iframeWindow);
-+      EventUtils.synthesizeMouse(networkLink, 2, 2, {}, HUD.iframeWindow);
+-      EventUtils.sendMouseEvent({ type: "mousedown" }, jstermMessage);
+-      EventUtils.sendMouseEvent({ type: "mouseup" }, jstermMessage);
+-      EventUtils.sendMouseEvent({ type: "click" }, jstermMessage);
+-      EventUtils.sendMouseEvent({ type: "mousedown" }, networkLink);
+-      EventUtils.sendMouseEvent({ type: "mouseup" }, networkLink);
+-      EventUtils.sendMouseEvent({ type: "click" }, networkLink);
++      EventUtils.sendMouseEvent({ type: "mousedown" }, jstermMessage, HUD.iframeWindow);
++      EventUtils.sendMouseEvent({ type: "mouseup" }, jstermMessage, HUD.iframeWindow);
++      EventUtils.sendMouseEvent({ type: "click" }, jstermMessage, HUD.iframeWindow);
++      EventUtils.sendMouseEvent({ type: "mousedown" }, networkLink, HUD.iframeWindow);
++      EventUtils.sendMouseEvent({ type: "mouseup" }, networkLink, HUD.iframeWindow);
++      EventUtils.sendMouseEvent({ type: "click" }, networkLink, HUD.iframeWindow);
      },
      failureFn: finishTest,
    });
@@ -6847,31 +6892,31 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_position_ui.js 
 -  let hudBox = hudRef.HUDBox;
 +  let hudBox = hudRef.iframe;
  
--  is(hudBox.parentNode.childNodes[0].getAttribute("id"), hudId,
-+  is(hudBox.parentNode.childNodes[0].getAttribute("id"), hudRef.hudId,
+-  is(hudBox.parentNode.childNodes[2].getAttribute("id"), hudId,
++  is(hudBox.parentNode.childNodes[2].getAttribute("id"), hudRef.hudId,
       "initial console position is correct");
- 
--  is(hudRef.positionMenuitems.above.getAttribute("checked"), "true",
-+  is(hudRef.ui.positionMenuitems.above.getAttribute("checked"), "true",
-      "position menu checkbox is above");
-   is(Services.prefs.getCharPref(POSITION_PREF), "above", "pref is above");
- 
-   hudRef.positionConsole("below");
-+
-+  waitForPosition("below", onPositionBelow1);
-+}
-+
-+function onPositionBelow1() {
-+  let hudBox = hudRef.iframe;
-+
-   let id = hudBox.parentNode.childNodes[2].getAttribute("id");
--  is(id, hudId, "below position is correct");
-+  is(id, hudRef.hudId, "below position is correct");
  
 -  is(hudRef.positionMenuitems.below.getAttribute("checked"), "true",
 +  is(hudRef.ui.positionMenuitems.below.getAttribute("checked"), "true",
       "position menu checkbox is below");
    is(Services.prefs.getCharPref(POSITION_PREF), "below", "pref is below");
+ 
+   hudRef.positionConsole("above");
++
++  waitForPosition("above", onPositionAbove);
++}
++
++function onPositionAbove() {
++  let hudBox = hudRef.iframe;
++
+   let id = hudBox.parentNode.childNodes[0].getAttribute("id");
+-  is(id, hudId, "above position is correct");
++  is(id, hudRef.hudId, "above position is correct");
+ 
+-  is(hudRef.positionMenuitems.above.getAttribute("checked"), "true",
++  is(hudRef.ui.positionMenuitems.above.getAttribute("checked"), "true",
+      "position menu checkbox is above");
+   is(Services.prefs.getCharPref(POSITION_PREF), "above", "pref is above");
  
 -  // listen for the panel popupshown event.
 -  document.addEventListener("popupshown", function popupShown() {
@@ -7005,11 +7050,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_position_ui.js 
 +
 +  executeSoon(function() {
 +    hudRef.positionConsole("below");
-+    waitForPosition("below", onPositionBelow2);
++    waitForPosition("below", onPositionBelow);
 +  });
 +}
 +
-+function onPositionBelow2() {
++function onPositionBelow() {
 +  let hudBox = hudRef.iframe;
 +
 +  let id = hudBox.parentNode.childNodes[2].getAttribute("id");
@@ -7116,7 +7161,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -0,0 +1,3193 @@
+@@ -0,0 +1,3192 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -7446,9 +7491,8 @@ new file mode 100644
 +                                      this.owner.onCloseButton.bind(this.owner));
 +
 +    let clearButton = doc.getElementsByClassName("webconsole-clear-console-button")[0];
-+    clearButton.addEventListener("command", function() {
-+      this.jsterm.clearOutput(true);
-+    }.bind(this));
++    clearButton.addEventListener("command",
++                                 this.owner.onClearButton.bind(this.owner));
 +  },
 +
 +  /**
@@ -8005,7 +8049,7 @@ new file mode 100644
 +    aRemoteMessages.forEach(function(aMessage) {
 +      switch (aMessage._type) {
 +        case "PageError": {
-+          let category = Utils.categoryForScriptError(aMessage.category);
++          let category = Utils.categoryForScriptError(aMessage);
 +          this.outputMessage(category, this.reportPageError,
 +                             [category, aMessage]);
 +          break;
@@ -10805,7 +10849,7 @@ diff --git a/browser/themes/pinstripe/devtools/webconsole.css b/browser/themes/p
 diff --git a/browser/themes/winstripe/browser.css b/browser/themes/winstripe/browser.css
 --- a/browser/themes/winstripe/browser.css
 +++ b/browser/themes/winstripe/browser.css
-@@ -3188,8 +3188,28 @@ stack[anonid=browserStack][responsivemod
+@@ -3189,8 +3189,28 @@ stack[anonid=browserStack][responsivemod
  
  .devtools-responsiveui-resizehandle {
    width: 16px;
