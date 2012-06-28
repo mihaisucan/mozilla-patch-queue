@@ -1,0 +1,380 @@
+# HG changeset patch
+# Parent 497a3e1b32607a6a6c3e6bc013ae35ad39073c7e
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1340912696 -10800
+
+Bug 768096 (webconsole-rdbgp) - Part 1: page errors
+
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -12,16 +12,25 @@ const Cu = Components.utils;
+ 
+ const CONSOLEAPI_CLASS_ID = "{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}";
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ 
+ var EXPORTED_SYMBOLS = ["HUDService"];
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
++                                  "resource://gre/modules/devtools/dbg-server.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "DebuggerClient",
++                                  "resource://gre/modules/devtools/dbg-client.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleActors",
++                                  "resource://gre/modules/devtools/dbg-webconsole-actors.jsm");
++
+ XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+                                   "resource:///modules/WebConsoleUtils.jsm");
+ 
+ XPCOMUtils.defineLazyGetter(this, "l10n", function() {
+   return WebConsoleUtils.l10n;
+ });
+ 
+ function LogFactory(aMessagePrefix)
+@@ -581,16 +590,18 @@ WebConsole.prototype = {
+   {
+     this.chromeDocument = this.tab.ownerDocument;
+     this.chromeWindow = this.chromeDocument.defaultView;
+     this.messageManager = this.tab.linkedBrowser.messageManager;
+     this.hudId = "hud_" + this.tab.linkedPanel;
+     this.notificationBox = this.chromeDocument
+                            .getElementById(this.tab.linkedPanel);
+ 
++    this.proxy = new WebConsoleConnectionProxy(this);
++    this.proxy.initServer();
+     this._initUI();
+   },
+ 
+   /**
+    * Initialize the Web Console UI. This method sets up the iframe.
+    * @private
+    */
+   _initUI: function WC__initUI()
+@@ -618,16 +629,17 @@ WebConsole.prototype = {
+    */
+   _onIframeLoad: function WC__onIframeLoad()
+   {
+     this.iframe.removeEventListener("load", this._onIframeLoad, true);
+ 
+     this.iframeWindow = this.iframe.contentWindow.wrappedJSObject;
+     this.ui = new this.iframeWindow.WebConsoleFrame(this, this._currentUIPosition);
+     this._setupMessageManager();
++    this.proxy.connect();
+   },
+ 
+   /**
+    * Create a panel to open the web console if it should float above
+    * the content in its own window.
+    * @private
+    */
+   _createOwnWindowPanel: function WC__createOwnWindowPanel()
+@@ -1072,16 +1084,83 @@ WebConsole.prototype = {
+     }
+ 
+     if (this.splitter.parentNode) {
+       this.splitter.parentNode.removeChild(this.splitter);
+     }
+   },
+ };
+ 
++/**
++ * The WebConsoleConnectionProxy handles the connection between the Web Console
++ * and the application we connect to through the remote debug protocol.
++ *
++ * @constructor
++ * @param object aWebConsole
++ *        The Web Console instance that owns this connection proxy.
++ */
++function WebConsoleConnectionProxy(aWebConsole)
++{
++  this.owner = aWebConsole;
++
++  this._onTabNavigated = this._onTabNavigated.bind(this);
++  this._onTabDetached = this._onTabDetached.bind(this);
++}
++
++WebConsoleConnectionProxy.prototype = {
++  /**
++   * Initialize the debugger server.
++   */
++  initServer: function WCCP_initServer()
++  {
++    dump("initServer\n");
++    if (!DebuggerServer.initialized) {
++      // Always allow connections from nsIPipe transports.
++      DebuggerServer.init(function () { return true; });
++      DebuggerServer.addBrowserActors();
++      WebConsoleActors.init();
++    }
++  },
++
++  /**
++   * Initialize a debugger client and connects it to the debugger server.
++   */
++  connect: function WCCP_connect()
++  {
++    dump("WCCP_connect\n");
++    let transport = DebuggerServer.connectPipe();
++    let client = this.client = new DebuggerClient(transport);
++
++    client.addListener("tabNavigated", this._onTabNavigated);
++    client.addListener("tabDetached", this._onTabDetached);
++
++    client.connect(function(aType, aTraits) {
++      dump("onConnect\n");
++      client.listTabs(function(aResponse) {
++        dump("onListTabs\n");
++        let tab = aResponse.tabs[aResponse.selected];
++        client.attachTab(tab.actor, function(aResponse, aTabClient) {
++          this.tabClient = aTabClient;
++          dump("onAttachTab\n");
++        }.bind(this));
++      }.bind(this));
++    }.bind(this));
++  },
++
++  _onTabNavigated: function WCCP__onTabNavigated()
++  {
++    dump("WCCP__onTabNavigated\n");
++  },
++
++  _onTabDetached: function WCCP__onTabDetached()
++  {
++    dump("WCCP__onTabDetached\n");
++  },
++};
++
+ //////////////////////////////////////////////////////////////////////////
+ // HeadsUpDisplayUICommands
+ //////////////////////////////////////////////////////////////////////////
+ 
+ var HeadsUpDisplayUICommands = {
+   refreshCommand: function UIC_refreshCommand() {
+     var window = HUDService.currentContext();
+     if (!window) {
+diff --git a/toolkit/devtools/Makefile.in b/toolkit/devtools/Makefile.in
+--- a/toolkit/devtools/Makefile.in
++++ b/toolkit/devtools/Makefile.in
+@@ -6,11 +6,12 @@ DEPTH     = ../..
+ topsrcdir = @top_srcdir@
+ srcdir    = @srcdir@
+ VPATH     = @srcdir@
+ 
+ include $(topsrcdir)/config/config.mk
+ 
+ PARALLEL_DIRS += \
+   debugger \
++  webconsole \
+   $(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/Makefile.in
+@@ -0,0 +1,18 @@
++# This Source Code Form is subject to the terms of the Mozilla Public
++# License, v. 2.0. If a copy of the MPL was not distributed with this
++# file, You can obtain one at http://mozilla.org/MPL/2.0/.
++
++DEPTH = ../../..
++topsrcdir = @top_srcdir@
++srcdir = @srcdir@
++VPATH = @srcdir@
++
++include $(DEPTH)/config/autoconf.mk
++
++TEST_DIRS += tests
++
++include $(topsrcdir)/config/rules.mk
++
++libs::
++	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
++	$(INSTALL) $(IFLAGS1) $(srcdir)/server/*.jsm $(FINAL_TARGET)/modules/devtools
+diff --git a/toolkit/devtools/webconsole/server/dbg-webconsole-actors.jsm b/toolkit/devtools/webconsole/server/dbg-webconsole-actors.jsm
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/server/dbg-webconsole-actors.jsm
+@@ -0,0 +1,179 @@
++/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++"use strict";
++
++const Cc = Components.classes;
++const Ci = Components.interfaces;
++const Cu = Components.utils;
++
++Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
++
++var EXPORTED_SYMBOLS = ["WebConsoleActors"];
++
++WebConsoleActors = {
++  _knownActors: {
++    PageErrorActor: PageErrorActor,
++  },
++  _initialized: false,
++
++  init: function WCA__init()
++  {
++    if (this._initialized) {
++      return;
++    }
++
++    for (let name in this._knownActors) {
++      DebuggerServer.addTabRequest(name, this._onTabRequest.bind(this));
++    }
++
++    this._initialized = true;
++  },
++
++  _onTabRequest: function WCA__onTabRequest(aTab, aRequest)
++  {
++    let actorName = aRequest.type;
++    // Reuse a previously-created actor, if any.
++    if (actorName in aTab) {
++      return aTab[actorName].grip();
++    }
++
++    let actor = new this._knownActors[actorName](aTab);
++    aTab[actorName] = actor;
++    aTab.conn.addActor(actor);
++
++    return actor.grip();
++  },
++};
++
++function PageErrorActor(aTab)
++{
++  this.tab = aTab;
++  this.listener = new PageErrorListener(aWindow, this);
++}
++
++PageErrorActor.prototype = {
++};
++
++///////////////////////////////////////////////////////////////////////////////
++// The page errors listener
++///////////////////////////////////////////////////////////////////////////////
++
++/**
++ * The nsIConsoleService listener. This is used to send all the page errors
++ * (JavaScript, CSS and more) to the remote Web Console instance.
++ * @constructor
++ */
++function PageErrorListener(aWindow, aListener)
++{
++  this.window = aWindow;
++  this.listener = aListener;
++}
++
++PageErrorListener.prototype = {
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
++
++  /**
++   * Initialize the nsIConsoleService listener.
++   */
++  init: function PEL_init()
++  {
++    Services.console.registerListener(this);
++  },
++
++  /**
++   * The nsIConsoleService observer. This method takes all the script error
++   * messages belonging to the current window and sends them to the remote Web
++   * Console instance.
++   *
++   * @param nsIScriptError aScriptError
++   *        The script error object coming from the nsIConsoleService.
++   */
++  observe: function PEL_observe(aScriptError)
++  {
++    if (!this.window || this.listener ||
++        !(aScriptError instanceof Ci.nsIScriptError) ||
++        !aScriptError.outerWindowID) {
++      return;
++    }
++
++    if (!this.isCategoryAllowed(aScriptError.category)) {
++      return;
++    }
++
++    let errorWindow =
++      WebConsoleUtils.getWindowByOuterId(aScriptError.outerWindowID, this.window);
++    if (!errorWindow || errorWindow.top != this.window) {
++      return;
++    }
++
++    this.listener.onPageError(aScriptError);
++  },
++
++  /**
++   * Check if the given script error category is allowed to be tracked or not.
++   * We ignore chrome-originating errors as we only care about content.
++   *
++   * @param string aCategory
++   *        The nsIScriptError category you want to check.
++   * @return boolean
++   *         True if the category is allowed to be logged, false otherwise.
++   */
++  isCategoryAllowed: function PEL_isCategoryAllowed(aCategory)
++  {
++    switch (aCategory) {
++      case "XPConnect JavaScript":
++      case "component javascript":
++      case "chrome javascript":
++      case "chrome registration":
++      case "XBL":
++      case "XBL Prototype Handler":
++      case "XBL Content Sink":
++      case "xbl javascript":
++        return false;
++    }
++
++    return true;
++  },
++
++  /**
++   * Get the cached page errors for the current inner window.
++   *
++   * @return array
++   *         The array of cached messages. Each element is an nsIScriptError
++   *         with an added _type property so the remote Web Console instance can
++   *         tell the difference between various types of cached messages.
++   */
++  getCachedMessages: function PEL_getCachedMessages()
++  {
++    let innerWindowId = WebConsoleUtils.getInnerWindowId(this.window);
++    let result = [];
++    let errors = {};
++    Services.console.getMessageArray(errors, {});
++
++    (errors.value || []).forEach(function(aError) {
++      if (!(aError instanceof Ci.nsIScriptError) ||
++          aError.innerWindowID != innerWindowId ||
++          !this.isCategoryAllowed(aError.category)) {
++        return;
++      }
++
++      let remoteMessage = WebConsoleUtils.cloneObject(aError);
++      remoteMessage._type = "PageError";
++      result.push(remoteMessage);
++    }, this);
++
++    return result;
++  },
++
++  /**
++   * Remove the nsIConsoleService listener.
++   */
++  destroy: function PEL_destroy()
++  {
++    Services.console.unregisterListener(this);
++  },
++};

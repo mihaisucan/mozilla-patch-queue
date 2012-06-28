@@ -10,7 +10,7 @@ Additional changes
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -2109,30 +2109,74 @@ HeadsUpDisplay.prototype = {
+@@ -2109,30 +2109,94 @@ HeadsUpDisplay.prototype = {
      let urlNode = this.chromeDocument.createElementNS(XUL_NS, "label");
      urlNode.setAttribute("crop", "center");
      urlNode.setAttribute("flex", "1");
@@ -19,9 +19,10 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      urlNode.classList.add("hud-clickable");
      urlNode.classList.add("webconsole-msg-body-piece");
      urlNode.classList.add("webconsole-msg-url");
+-    linkNode.appendChild(urlNode);
 +
 +    let severity = SEVERITY_LOG;
-+    let mixed = false;
++    let uriCreated = false;
 +    let requestURIObject;
 +    let contentWindowURI;
 +
@@ -29,41 +30,61 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      let ioServ = Cc["@mozilla.org/network/io-service;1"].getService(Ci.nsIIOService);
 +      requestURIObject = ioServ.newURI(request.url, null, null);
 +      contentWindowURI = ioServ.newURI(this.contentLocation, null, null);
-+      mixed = true;
++      uriCreated = true;
 +    } catch(e) {
 +        /*
-+         * TODO: catch NS_ERROR_MALFORMED_URI?
-+         * if this error occurs, we skip the mixed content section and 
++         * catch NS_ERROR_MALFORMED_URI?
++         * if this error occurs, we skip the mixed content section and
 +         * the webconsole does not warn about mixed content
 +         */
 +    }
 +
 +
 +    // if the operations to create nsIURI objects for the contentWindow and request succeeeded
-+    if(mixed) {
++    if(uriCreated) {
 +
 +      //requestURIScheme is the scheme of the requested content - the entry in webconsole
-+      //contentWindowURIScheme is the scheme of the current page. 
++      //contentWindowURIScheme is the scheme of the current page.
 +      let requestURIScheme = requestURIObject.scheme;
 +      let contentWindowURIScheme = contentWindowURI.scheme;
 +
++      //if the console entry is mixed content
 +      if(contentWindowURIScheme == "https" && requestURIScheme != "https") {
-+          urlNode.classList.add("webconsole-mixed-content");
++        urlNode.classList.add("webconsole-mixed-content");
++        linkNode.appendChild(urlNode);
 +
-+          let mixedContentWarning = " ["+l10n.getStr("webConsoleMixedContentWarning")+"]";
++        let mixedContentWarning = " ["+l10n.getStr("webConsoleMixedContentWarning")+"]";
 +
-+          /*TODO: take mixedContentWarning message and make it a link to a 
-+             mdn page that explains mixed content.  How do I do this?
-+            let mixedContentWarning = " [<a href='http://cisforcookie.org'>"+l10n.getStr
-+                                        ("webConsoleMixedContentWarning")+"<a>]";
-+          */
-+          urlNode.setAttribute("value", request.url+mixedContentWarning);
-+ 
-+          severity = SEVERITY_WARNING;
++        //mixedContentWarning message links to a Learn More page
++        let mixedContentWarningNode = this.chromeDocument.createElement("label");
++        mixedContentWarningNode.setAttribute("value", mixedContentWarning);
++
++        //UI for mixed content warning.  Needs more work.
++        mixedContentWarningNode.classList.add("hud-clickable");
++        mixedContentWarningNode.classList.add("webconsole-msg-body");
++        mixedContentWarningNode.classList.add("webconsole-msg-url");
++        //This doesn't seem to change the font color.  Need to investigate further
++        mixedContentWarningNode.classList.add("webconsole-mixed-content-link");
++
++        linkNode.appendChild(mixedContentWarningNode);
++
++        mixedContentWarningNode.addEventListener("click", function(aEvent) {
++          this.chromeWindow.openUILinkIn("https://developer.mozilla.org/", 'tab');
++          aEvent.preventDefault();
++          aEvent.stopPropagation();
++          }.bind(this)
++        );
++
++        //If we define a SEVERITY_SECURITY in the future, switch this to SEVERITY_SECURITY
++        severity = SEVERITY_WARNING;
++
++      } else { //not mixed content
++        linkNode.appendChild(urlNode);
 +      }
-+    }
 +
-     linkNode.appendChild(urlNode);
++    } else { //uriCreated failed
++      linkNode.appendChild(urlNode);
++    }
  
      let statusNode = this.chromeDocument.createElementNS(XUL_NS, "label");
      statusNode.setAttribute("value", "");
@@ -114,27 +135,31 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 diff --git a/browser/themes/gnomestripe/devtools/webconsole.css b/browser/themes/gnomestripe/devtools/webconsole.css
 --- a/browser/themes/gnomestripe/devtools/webconsole.css
 +++ b/browser/themes/gnomestripe/devtools/webconsole.css
-@@ -194,16 +194,20 @@
- .webconsole-msg-console.webconsole-msg-warn {
-   -moz-image-region: rect(24px, 24px, 32px, 16px);
- }
- 
- .webconsole-msg-console.webconsole-msg-info {
-   -moz-image-region: rect(24px, 32px, 32px, 24px);
+@@ -89,16 +89,24 @@
+   margin-top: 0;
+   margin-bottom: 0;
+   -moz-margin-start: 0;
+   -moz-margin-end: 6px;
+   width: 10em;
+   text-align: end;
  }
  
 +.webconsole-mixed-content {
 +  color: #FF0000;
 +}
 +
- /* Input and output styles */
- .webconsole-msg-input > .webconsole-msg-icon-container,
- .webconsole-msg-output > .webconsole-msg-icon-container {
-   border-left: solid #808080 6px;
++.webconsole-mixed-content-link {
++  color: #0000EE;
++}
++
+ .hud-msg-node[selected="true"] > .webconsole-timestamp,
+ .hud-msg-node[selected="true"] > .webconsole-location {
+   color: inherit;
  }
  
- .webconsole-msg-input {
-   -moz-image-region: rect(24px, 40px, 32px, 32px);
+ .jsterm-input-node,
+ .jsterm-complete-node {
+   font: 12px "DejaVu Sans Mono", monospace;
 diff --git a/browser/themes/pinstripe/devtools/webconsole.css b/browser/themes/pinstripe/devtools/webconsole.css
 --- a/browser/themes/pinstripe/devtools/webconsole.css
 +++ b/browser/themes/pinstripe/devtools/webconsole.css
