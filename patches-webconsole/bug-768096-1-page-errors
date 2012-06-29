@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 497a3e1b32607a6a6c3e6bc013ae35ad39073c7e
+# Parent 925c01ab7b2097439cd716de4a374638bd1f85ca
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1340912696 -10800
+# Date 1340997960 -10800
 
 Bug 768096 (webconsole-rdbgp) - Part 1: page errors
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -12,16 +12,25 @@ const Cu = Components.utils;
+@@ -12,16 +12,22 @@ const Cu = Components.utils;
  
  const CONSOLEAPI_CLASS_ID = "{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}";
  
@@ -23,9 +23,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +XPCOMUtils.defineLazyModuleGetter(this, "DebuggerClient",
 +                                  "resource://gre/modules/devtools/dbg-client.jsm");
 +
-+XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleActors",
-+                                  "resource://gre/modules/devtools/dbg-webconsole-actors.jsm");
-+
  XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
                                    "resource:///modules/WebConsoleUtils.jsm");
  
@@ -34,7 +31,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  });
  
  function LogFactory(aMessagePrefix)
-@@ -581,16 +590,18 @@ WebConsole.prototype = {
+@@ -581,16 +587,18 @@ WebConsole.prototype = {
    {
      this.chromeDocument = this.tab.ownerDocument;
      this.chromeWindow = this.chromeDocument.defaultView;
@@ -53,7 +50,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @private
     */
    _initUI: function WC__initUI()
-@@ -618,16 +629,17 @@ WebConsole.prototype = {
+@@ -618,16 +626,17 @@ WebConsole.prototype = {
     */
    _onIframeLoad: function WC__onIframeLoad()
    {
@@ -71,7 +68,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @private
     */
    _createOwnWindowPanel: function WC__createOwnWindowPanel()
-@@ -1072,16 +1084,83 @@ WebConsole.prototype = {
+@@ -1072,16 +1081,97 @@ WebConsole.prototype = {
      }
  
      if (this.splitter.parentNode) {
@@ -94,6 +91,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +  this._onTabNavigated = this._onTabNavigated.bind(this);
 +  this._onTabDetached = this._onTabDetached.bind(this);
++  this._onCachedMessages = this._onCachedMessages.bind(this);
++  this._onPageError = this._onPageError.bind(this);
 +}
 +
 +WebConsoleConnectionProxy.prototype = {
@@ -107,8 +106,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      // Always allow connections from nsIPipe transports.
 +      DebuggerServer.init(function () { return true; });
 +      DebuggerServer.addBrowserActors();
-+      WebConsoleActors.init();
 +    }
++    dump("initServer end\n");
 +  },
 +
 +  /**
@@ -122,6 +121,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +    client.addListener("tabNavigated", this._onTabNavigated);
 +    client.addListener("tabDetached", this._onTabDetached);
++    client.addListener("cachedMessages", this._onCachedMessages);
++    client.addListener("pageError", this._onPageError);
 +
 +    client.connect(function(aType, aTraits) {
 +      dump("onConnect\n");
@@ -144,6 +145,16 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +  _onTabDetached: function WCCP__onTabDetached()
 +  {
 +    dump("WCCP__onTabDetached\n");
++  },
++
++  _onCachedMessages: function WCCP__onCachedMessages()
++  {
++    dump("WCCP__onCachedMessages\n");
++  },
++
++  _onPageError: function WCCP__onPageError()
++  {
++    dump("WCCP__onPageError\n");
 +  },
 +};
 +
@@ -171,6 +182,226 @@ diff --git a/toolkit/devtools/Makefile.in b/toolkit/devtools/Makefile.in
    $(NULL)
  
  include $(topsrcdir)/config/rules.mk
+diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
+--- a/toolkit/devtools/debugger/dbg-client.jsm
++++ b/toolkit/devtools/debugger/dbg-client.jsm
+@@ -169,17 +169,18 @@ const ThreadStateTypes = {
+ 
+ /**
+  * Set of protocol messages that are sent by the server without a prior request
+  * by the client.
+  */
+ const UnsolicitedNotifications = {
+   "newScript": "newScript",
+   "tabDetached": "tabDetached",
+-  "tabNavigated": "tabNavigated"
++  "tabNavigated": "tabNavigated",
++  "pageError": "pageError"
+ };
+ 
+ /**
+  * Set of debug protocol request types that specify the protocol request being
+  * sent to the server.
+  */
+ const DebugProtocolTypes = {
+   "assign": "assign",
+@@ -192,17 +193,18 @@ const DebugProtocolTypes = {
+   "listTabs": "listTabs",
+   "nameAndParameters": "nameAndParameters",
+   "ownPropertyNames": "ownPropertyNames",
+   "property": "property",
+   "prototype": "prototype",
+   "prototypeAndProperties": "prototypeAndProperties",
+   "resume": "resume",
+   "scripts": "scripts",
+-  "setBreakpoint": "setBreakpoint"
++  "setBreakpoint": "setBreakpoint",
++  "getCachedMessages": "getCachedMessages",
+ };
+ 
+ const ROOT_ACTOR_NAME = "root";
+ 
+ /**
+  * Creates a client for the remote debugging protocol server. This client
+  * provides the means to communicate with the server and exchange the messages
+  * required by the protocol in a traditional JavaScript API.
+@@ -297,17 +299,17 @@ DebuggerClient.prototype = {
+    *        Called with the response packet and a TabClient
+    *        (which will be undefined on error).
+    */
+   attachTab: function DC_attachTab(aTabActor, aOnResponse) {
+     let self = this;
+     let packet = { to: aTabActor, type: DebugProtocolTypes.attach };
+     this.request(packet, function(aResponse) {
+       if (!aResponse.error) {
+-        var tabClient = new TabClient(self, aTabActor);
++        var tabClient = new TabClient(self, aTabActor, aResponse);
+         self._tabClients[aTabActor] = tabClient;
+         self.activeTab = tabClient;
+       }
+       aOnResponse(aResponse, tabClient);
+     });
+   },
+ 
+   /**
+@@ -443,23 +445,35 @@ eventSource(DebuggerClient.prototype);
+  * Creates a tab client for the remote debugging protocol server. This client
+  * is a front to the tab actor created in the server side, hiding the protocol
+  * details in a traditional JavaScript API.
+  *
+  * @param aClient DebuggerClient
+  *        The debugger client parent.
+  * @param aActor string
+  *        The actor ID for this tab.
++ * @param aWebConsoleActor object
++ *        The WebConsoleActor grip object.
+  */
+-function TabClient(aClient, aActor) {
++function TabClient(aClient, aActor, aWebConsoleActor) {
+   this._client = aClient;
+   this._actor = aActor;
++  this._webConsoleActor = aWebConsoleActor;
+ }
+ 
+ TabClient.prototype = {
++  _webConsoleClient: null,
++
++  get webConsoleClient() {
++    if (!this._webConsoleClient) {
++      this._webConsoleClient = new WebConsoleClient(this._webConsoleActor, this);
++    }
++    return this._webConsoleClient;
++  },
++
+   /**
+    * Detach the client from the tab actor.
+    *
+    * @param function aOnResponse
+    *        Called with the response packet.
+    */
+   detach: function TabC_detach(aOnResponse) {
+     let self = this;
+@@ -473,16 +487,33 @@ TabClient.prototype = {
+         aOnResponse(aResponse);
+       }
+     });
+   }
+ };
+ 
+ eventSource(TabClient.prototype);
+ 
++function WebConsoleClient(aActorGrip, aTabClient) {
++  this._actor = aActorGrip.actor;
++  this._pageErrorActor = aActorGrip.pageErrorActor;
++  this._tabClient = aTabClient;
++}
++
++WebConsoleClient.prototype = {
++  getCachedMessages:
++  function WCC_getCachedMessages(aOnResponse) {
++    let packet = {
++      to: this.actor,
++      type: DebugProtocolTypes.getCachedMessages,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++};
++
+ /**
+  * Creates a thread client for the remote debugging protocol server. This client
+  * is a front to the thread actor created in the server side, hiding the
+  * protocol details in a traditional JavaScript API.
+  *
+  * @param aClient DebuggerClient
+  *        The debugger client parent.
+  * @param aActor string
+diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/devtools/debugger/server/dbg-browser-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-browser-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-browser-actors.js
+@@ -4,16 +4,18 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ /**
+  * Browser-specific actors.
+  */
+ 
++Cu.import("resource://gre/modules/devtools/dbg-webconsole-actors.jsm");
++
+ var windowMediator = Cc["@mozilla.org/appshell/window-mediator;1"]
+   .getService(Ci.nsIWindowMediator);
+ 
+ function createRootActor(aConnection)
+ {
+   return new BrowserRootActor(aConnection);
+ }
+ 
+@@ -299,16 +301,22 @@ BrowserTabActor.prototype = {
+     dbg_assert(!this._contextPool, "Can't push multiple contexts");
+ 
+     this._contextPool = new ActorPool(this.conn);
+     this.conn.addActorPool(this._contextPool);
+ 
+     this.threadActor = new ThreadActor(this);
+     this._addDebuggees(this.browser.contentWindow.wrappedJSObject);
+     this._contextPool.addActor(this.threadActor);
++
++    this.webConsoleActor = new WebConsoleActor(this);
++    this._contextPool.addActor(this.webConsoleActor);
++    for (let actor of this.webConsoleActor.consoleActors) {
++      this._contextPool.addActor(actor);
++    }
+   },
+ 
+   /**
+    * Add the provided window and all windows in its frame tree as debuggees.
+    */
+   _addDebuggees: function BTA__addDebuggees(aWindow) {
+     this.threadActor.addDebuggee(aWindow);
+     let frames = aWindow.frames;
+@@ -323,16 +331,18 @@ BrowserTabActor.prototype = {
+    */
+   _popContext: function BTA_popContext() {
+     dbg_assert(!!this._contextPool, "No context to pop.");
+ 
+     this.conn.removeActorPool(this._contextPool);
+     this._contextPool = null;
+     this.threadActor.exit();
+     this.threadActor = null;
++    this.webConsoleActor.exit();
++    this.webConsoleActor = null;
+   },
+ 
+   /**
+    * Does the actual work of detaching from a tab.
+    */
+   _detach: function BTA_detach() {
+     if (!this.attached) {
+       return;
+@@ -353,17 +363,21 @@ BrowserTabActor.prototype = {
+ 
+   onAttach: function BTA_onAttach(aRequest) {
+     if (this.exited) {
+       return { type: "exited" };
+     }
+ 
+     this._attach();
+ 
+-    return { type: "tabAttached", threadActor: this.threadActor.actorID };
++    return {
++      type: "tabAttached",
++      threadActor: this.threadActor.actorID,
++      webConsoleActor: this.webConsoleActor.grip(),
++    };
+   },
+ 
+   onDetach: function BTA_onDetach(aRequest) {
+     if (!this.attached) {
+       return { error: "wrongState" };
+     }
+ 
+     this._detach();
 diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
 new file mode 100644
 --- /dev/null
@@ -198,7 +429,7 @@ diff --git a/toolkit/devtools/webconsole/server/dbg-webconsole-actors.jsm b/tool
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/server/dbg-webconsole-actors.jsm
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,270 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -211,52 +442,142 @@ new file mode 100644
 +const Ci = Components.interfaces;
 +const Cu = Components.utils;
 +
-+Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 +
-+var EXPORTED_SYMBOLS = ["WebConsoleActors"];
++XPCOMUtils.defineLazyModuleGetter(this, "Services",
++                                  "resource://gre/modules/Services.jsm");
 +
-+WebConsoleActors = {
-+  _knownActors: {
-+    PageErrorActor: PageErrorActor,
-+  },
-+  _initialized: false,
++XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
++                                  "resource://gre/modules/devtools/dbg-server.jsm");
 +
-+  init: function WCA__init()
++XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
++                                  "resource:///modules/WebConsoleUtils.jsm");
++
++var EXPORTED_SYMBOLS = ["WebConsoleActor"];
++
++function WebConsoleActor(aTabActor)
++{
++  this.tabActor = aTabActor;
++  this.pageErrorActor = new PageErrorActor(this);
++}
++
++WebConsoleActor.prototype =
++{
++  get contentWindow() this.tabActor.browser.contentWindow,
++  get conn() this.tabActor.conn,
++
++  actorPrefix: "webConsole",
++
++  grip: function WCA_grip()
 +  {
-+    if (this._initialized) {
-+      return;
-+    }
-+
-+    for (let name in this._knownActors) {
-+      DebuggerServer.addTabRequest(name, this._onTabRequest.bind(this));
-+    }
-+
-+    this._initialized = true;
++    return {
++      actor: this.actorID,
++      pageErrorActor: this.pageErrorActor.actorID,
++    };
 +  },
 +
-+  _onTabRequest: function WCA__onTabRequest(aTab, aRequest)
++  exit: function WCA_exit()
 +  {
-+    let actorName = aRequest.type;
-+    // Reuse a previously-created actor, if any.
-+    if (actorName in aTab) {
-+      return aTab[actorName].grip();
++    this.pageErrorActor.exit();
++    delete this.pageErrorActor;
++  },
++
++  consoleActors: function WCA_consoleActors()
++  {
++    return {
++      pageErrorActor: this.pageErrorActor,
++    };
++  },
++
++  /**
++   * Handler for the "getCachedMessages" request. This method sends the cached
++   * error messages and the window.console API calls to the client.
++   *
++   */
++  // TODO: update comment
++  onGetCachedMessages: function WCA_onGetCachedMessages(aRequest)
++  {
++    let pageErrorActor = this.pageErrorActor;
++    let consoleAPIActor = this.consoleAPIActor;
++    let types = aRequest.messageTypes;
++    let messages = [];
++
++    while (types.length > 0) {
++      switch (types.shift()) {
++        case "ConsoleAPI":
++          if (consoleAPIActor) {
++            messages.push.apply(messages,
++                                consoleAPIActor.listener.getCachedMessages());
++          }
++          break;
++        case "PageError":
++          if (pageErrorActor) {
++            messages.push.apply(messages,
++                                pageErrorActor.listener.getCachedMessages());
++          }
++          break;
++      }
 +    }
 +
-+    let actor = new this._knownActors[actorName](aTab);
-+    aTab[actorName] = actor;
-+    aTab.conn.addActor(actor);
++    messages.sort(function(a, b) { return a.timeStamp - b.timeStamp; });
 +
-+    return actor.grip();
++    return {
++      from: this.actorID,
++      type: "cachedMessages",
++      messages: messages,
++    };
 +  },
 +};
 +
-+function PageErrorActor(aTab)
++WebConsoleActor.prototype.requestTypes =
 +{
-+  this.tab = aTab;
-+  this.listener = new PageErrorListener(aWindow, this);
++  getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
++};
++
++function PageErrorActor(aWebConsoleActor)
++{
++  this.webConsoleActor = aWebConsoleActor;
 +}
 +
-+PageErrorActor.prototype = {
++PageErrorActor.prototype =
++{
++  get contentWindow() this.webConsoleActor.contentWindow,
++  get conn() this.webConsoleActor.conn,
++
++  actorPrefix: "PageError",
++  grip: function PEA_grip()
++  {
++    return { actor: this.actorID };
++  },
++
++  onSubscribe: function PEA_onSubscribe(aRequest)
++  {
++    this.listener = new PageErrorListener(this.contentWindow, this);
++    return { subscribe: this.actorID };
++  },
++
++  onUnsubscribe: function PEA_onUnsubscribe(aRequest)
++  {
++    this.listener.destroy();
++    this.listener = null;
++    return { unsubscribe: this.actorID };
++  },
++
++  onPageError: function PEA_onPageError(aPageError)
++  {
++    let packet = {
++      from: this.actorID,
++      type: "pageError",
++      pageError: aPageError,
++    };
++    this.conn.send(packet);
++  },
++};
++
++PageErrorActor.prototype.requestTypes =
++{
++  subscribe: PageErrorActor.prototype.onSubscribe,
++  unsubscribe: PageErrorActor.prototype.onUnsubscribe,
 +};
 +
 +///////////////////////////////////////////////////////////////////////////////
@@ -274,7 +595,8 @@ new file mode 100644
 +  this.listener = aListener;
 +}
 +
-+PageErrorListener.prototype = {
++PageErrorListener.prototype =
++{
 +  QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
 +
 +  /**
@@ -295,7 +617,7 @@ new file mode 100644
 +   */
 +  observe: function PEL_observe(aScriptError)
 +  {
-+    if (!this.window || this.listener ||
++    if (!this.window || !this.listener ||
 +        !(aScriptError instanceof Ci.nsIScriptError) ||
 +        !aScriptError.outerWindowID) {
 +      return;
