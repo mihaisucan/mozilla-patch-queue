@@ -1,9 +1,11 @@
 # HG changeset patch
-# Parent f4c9de8fa57c16feff2dd2f1dd84b14c41221834
+# Parent 6a558cfc58529d6ed4ddc24ca50c5b462081bc7f
 # User Tanvi Vyas <tvyas@mozilla.com>
 writing mochitests for mixed content bug
 * * *
 Udpates to mochitest1
+* * *
+Improvements.  Only one test failing now
 
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
@@ -17,7 +19,7 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
  	browser_cached_messages.js \
  	browser_bug664688_sandbox_update_after_navigation.js \
  	browser_webconsole_menustatus.js \
-+	browser_webconsole_bug_737873_mixedcontent.js \
++  browser_webconsole_bug_737873_mixedcontent.js \
  	head.js \
  	$(NULL)
  
@@ -51,7 +53,7 @@ new file mode 100644
 +<!DOCTYPE HTML>
 +<html dir="ltr" xml:lang="en-US" lang="en-US"><head>
 +    <title>Mixed Content test - http on https</title>
-+    <script src="testscript.js"></script>  
++    <script src="testscript.js"></script>
 +  </head>
 +  <body>
 +    <iframe src = "http://example.com"></iframe>
@@ -62,12 +64,20 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_737873_mixe
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_737873_mixedcontent.js
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,98 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* ***** BEGIN LICENSE BLOCK *****
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ *
++ * Contributor(s):
++ *  Tanvi Vyas <tanvi@mozilla.com>
++ *
++ * ***** END LICENSE BLOCK ***** */
 +
++// Tests that the Web Console Mixed Content messages are displayed
 +
 +const TEST_HTTPS_URI = "https://example.com/browser/browser/devtools/webconsole/test/browser_webconsole_bug_737873_mixedcontent.html";
-+//const TEST_HTTPS_URI = "https://people.mozilla.com/~bsterne/tests/62178/test.html";
-+//const TEST_HTTPS_URI = "https://eventbrite.com";
 +
 +function test() {
 +  addTab("data:text/html,Web Console basic network logging test");
@@ -75,52 +85,81 @@ new file mode 100644
 +}
 +
 +function onLoad(aEvent) {
-+  browser.removeEventListener(aEvent.type, arguments.callee, true);
-+  //browser.removeEventListener("load", onLoad, true);
-+  openConsole();
++  browser.removeEventListener("load", onLoad, true);
++  openConsole(null, testMixedContent);
++}
 +
-+  browser.addEventListener("load", testMixedContentLogging, true);
++function testMixedContent() {
 +  content.location = TEST_HTTPS_URI;
-+}
++  var aOutputNode = HUDService.getHudByWindow(content).outputNode;
 +
-+function testMixedContentLogging(aEvent) {
-+  browser.removeEventListener(aEvent.type, arguments.callee, true);
-+  //browser.removeEventListener("load", testMixedContentLogging, true);
++  waitForSuccess (
++    {
++      name: "mixed content warning displayed successfully",
++      validatorFn: function() {
++        return ( aOutputNode.querySelector(".webconsole-mixed-content") && aOutputNode.querySelector(".webconsole-mixed-content-link") );
++      },
 +
-+  let aOutputNode = HUDService.getHudByWindow(content).outputNode;
++      successFn: function() {
 +
-+  let selector = ".hud-msg-node";
-+  let msgs = aOutputNode.querySelectorAll(selector);
-+  let found = false;
-+  for (let i = 0, n = msgs.length; i < n; i++) {
-+    let message = msgs[i].textContent.indexOf("[Mixed Content]");
-+    if (message > -1) {
-+      found = true;
-+      break;
++        //tests on the urlnode
++        let node = aOutputNode.querySelector(".webconsole-mixed-content");
++        ok(testSeverity(node), "Severity type is SEVERITY_WARNING.");
++
++        //tests on the warningNode
++        let warningNode = aOutputNode.querySelector(".webconsole-mixed-content-link");
++        ok( (warningNode.value == "[Mixed Content]") , "Message text is accurate TEST1." );
++
++        //This function is not necessary, should remove
++        ok( function() {if( testLogEntry(warningNode, "[Mixed Content]") ) { return true; } else { return false } },
++            "Message text is accurate TEST2.");
++
++        //will there be synchornization issues with this test, since ok() is called within the click event handler?
++        testClickOpenNewTab(warningNode);
++
++        finishTest();
++      },
++
++      failureFn: finishTest,
 +    }
++  );
++
++}
++
++function testSeverity(node) {
++  let linkNode = node.parentNode;
++  let msgNode = linkNode.parentNode;
++  let bodyNode = msgNode.parentNode;
++  let finalNode = bodyNode.parentNode;
++
++  return finalNode.classList.contains("webconsole-msg-warn");
++}
++
++function testClickOpenNewTab(warningNode) {
++  /* Invoke the click event and check if a new tab opens to the correct page */
++  var tabOpenListener = new TabOpenListener("https://developer.mozilla.org/", false, false);
++  EventUtils.synthesizeMouse(warningNode, 2, 2, {});
++}
++
++
++// This listens for the next opened tab and checks it is of the right url.
++function TabOpenListener(url) {
++  this.url = url;
++  gBrowser.tabContainer.addEventListener("TabOpen", this, false);
++}
++
++TabOpenListener.prototype = {
++  url: null,
++  tab: null,
++  browser: null,
++
++  handleEvent: function(event) {
++    if (event.type == "TabOpen") {
++      gBrowser.tabContainer.removeEventListener("TabOpen", this, false);
++      this.tab = event.originalTarget;
++      ok(event.target.label == this.url, "Message is clickable and opens a new tab to an mdn page.");
++   } else {
++      // return false??
++   }
 +  }
-+  ok(found, "Log Entry found is:" + found);
-+
-+  //finishTest();
-+
-+}
-+
-+
-+
-+
-+function testcolor(outputNode) {
-+
-+
-+
-+}
-+
-+function testseverity(outputNode) {
-+
-+
-+}
-+
-+function testmessagetext(outputNode) {
-+
-+  findLogEntry("[Mixed Content]");
-+}
-+
++};

@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent d9d61d199b11bebc4b26e52c00e7b998bd47d889
+# Parent 3a1f8992606cfa95029710007307b41db0eb3bd1
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1341263041 -10800
+# Date 1341348136 -10800
 
 Bug 769575 - GCLI needs page manipulation commands
 
 diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/commandline/GcliCommands.jsm
 --- a/browser/devtools/commandline/GcliCommands.jsm
 +++ b/browser/devtools/commandline/GcliCommands.jsm
-@@ -537,8 +537,147 @@ gcli.addCommand({
+@@ -537,8 +537,315 @@ gcli.addCommand({
        });
      } catch (ex) {
        // If the debugger has been closed already, don't scare the user.
@@ -58,108 +58,276 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +  description: gcli.lookup("pagemodreplaceDesc"),
 +  params: [
 +    {
-+      name: 'search',
-+      type: 'string',
-+      description: 'What to search for',
++      name: "search",
++      type: "string",
++      description: gcli.lookup("pagemodreplaceSearchDesc"),
 +    },
 +    {
-+      name: 'replace',
-+      type: 'string',
-+      description: 'What you want to put instead of the given search string',
++      name: "replace",
++      type: "string",
++      description: gcli.lookup("pagemodreplaceReplaceDesc"),
 +    },
 +    {
-+      name: 'regex',
-+      type: 'boolean',
-+      description: 'Tells if the search string is a regex',
++      name: "ignoreCase",
++      type: "boolean",
++      description: gcli.lookup("pagemodreplaceIgnoreCaseDesc"),
 +    },
 +    {
-+      name: 'ignoreCase',
-+      type: 'boolean',
-+      description: 'Tells if you want to ignore the case of the search string',
-+    },
-+    {
-+      name: 'root',
-+      type: 'node',
-+      description: 'A CSS selector pointing to the root element from where the search starts',
++      name: "root",
++      type: "node",
++      description: gcli.lookup("pagemodreplaceRootDesc"),
 +      defaultValue: null,
 +    },
 +    {
-+      name: 'selector',
-+      type: 'string',
-+      description: 'CSS selector that tells which elements you want to include in the search and replace operation',
-+      defaultValue: '*:not(script):not(style):not(embed):not(object):not(frame):not(iframe):not(frameset)',
++      name: "selector",
++      type: "string",
++      description: gcli.lookup("pagemodreplaceSelectorDesc"),
++      defaultValue: "*:not(script):not(style):not(embed):not(object):not(frame):not(iframe):not(frameset)",
 +    },
 +    {
-+      name: 'attributes',
-+      type: 'string',
-+      description: 'Limit the search to specific attribute names that match the string (or regex) you give here',
++      name: "attributes",
++      type: "string",
++      description: gcli.lookup("pagemodreplaceAttributesDesc"),
 +      defaultValue: null,
 +    },
 +  ],
 +  exec: function(args, context) {
-+    var document = context.environment.contentDocument;
-+
-+    function escapeRegex(str) {
-+      return str.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
++    let document = context.environment.contentDocument;
++    let searchTextNodes = !args.attronly;
++    let searchAttributes = !args.contentonly;
++    let regexOptions = args.ignoreCase ? 'ig' : 'g';
++    let search = new RegExp(escapeRegex(args.search), regexOptions);
++    let attributeRegex = null;
++    if (args.attributes) {
++      attributeRegex = new RegExp(escapeRegex(args.attributes), regexOptions);
 +    }
 +
-+    var search = args.regex ? args.search : escapeRegex(args.search);
-+    var regexOptions = args.ignoreCase ? 'ig' : 'g';
-+    search = new RegExp(search, regexOptions);
-+
-+    var root = args.root || document;
-+    var elements = root.querySelectorAll(args.selector);
++    let root = args.root || document;
++    let elements = root.querySelectorAll(args.selector);
 +    elements = Array.prototype.slice.call(elements);
 +    elements.push(root);
-+    for (var i = 0; i < elements.length; i++) {
-+      var element = elements[i];
-+      for (var y = 0; y < element.childNodes.length; y++) {
-+        var node = element.childNodes[y];
-+        if (node.nodeType == node.TEXT_NODE) {
-+          node.textContent = node.textContent.replace(search, args.replace);
++
++    for (let i = 0; i < elements.length; i++) {
++      let element = elements[i];
++      if (searchTextNodes) {
++        for (let y = 0; y < element.childNodes.length; y++) {
++          let node = element.childNodes[y];
++          if (node.nodeType == node.TEXT_NODE) {
++            node.textContent = node.textContent.replace(search, args.replace);
++          }
++        }
++      }
++
++      if (searchAttributes) {
++        if (!element.attributes) {
++          continue;
++        }
++        for (let y = 0; y < element.attributes.length; y++) {
++          let attr = element.attributes[y];
++          if (!attributeRegex || attributeRegex.test(attr.name)) {
++            attr.value = attr.value.replace(search, args.replace);
++          }
 +        }
 +      }
 +    }
 +
-+    //...
++    return gcli.lookupFormat("pagemodreplaceResultMatchedElements",
++                             [elements.length]);
++  }
++});
++
++/**
++ * 'pagemod remove' command
++ */
++gcli.addCommand({
++  name: "pagemod remove",
++  description: gcli.lookup("pagemodremoveDesc"),
++});
++
++
++/**
++ * The 'pagemod remove element' command.
++ */
++gcli.addCommand({
++  name: "pagemod remove element",
++  description: gcli.lookup("pagemodremoveelementDesc"),
++  params: [
++    {
++      name: "search",
++      type: "string",
++      description: gcli.lookup("pagemodremoveelementSearchDesc"),
++    },
++    {
++      name: "root",
++      type: "node",
++      description: gcli.lookup("pagemodremoveelementRootDesc"),
++      defaultValue: null,
++    },
++    {
++      name: 'stripOnly',
++      type: 'boolean',
++      description: gcli.lookup("pagemodremoveelementStripOnlyDesc"),
++    },
++    {
++      name: 'ifEmptyOnly',
++      type: 'boolean',
++      description: gcli.lookup("pagemodremoveelementIfEmptyOnlyDesc"),
++    },
++  ],
++  exec: function(args, context) {
 +    var document = context.environment.contentDocument;
++    var XPathResult = document.defaultView.XPathResult;
++
++    var root = document;
++    if (args.root) {
++      if (args.xpath) {
++        var result = document.evaluate(args.root, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
++        root = result.singleNodeValue;
++      } else {
++        root = document.querySelector(args.root);
++      }
++    }
++    if (!root) {
++      return "Root not found!";
++    }
++
++    var elements = [];
++
++    if (args.xpath) {
++      var result = document.evaluate(args.search, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
++      for (var i = 0; i < result.snapshotLength; i++) {
++        elements.push(result.snapshotItem(i));
++      }
++    } else {
++      var result = root.querySelectorAll(args.search);
++      elements = Array.prototype.slice.call(result);
++    }
++
++    var removed = 0;
++    for (var i = 0; i < elements.length; i++) {
++      var element = elements[i];
++      var parentNode = element.parentNode;
++      if (!parentNode || !element.removeChild) {
++        continue;
++      }
++      if (args.stripOnly) {
++        for (var y = 0; y < element.childNodes.length; y++) {
++          parentNode.insertBefore(element.childNodes[y], element);
++        }
++      }
++      if (!args.ifEmptyOnly || element.childNodes.length == 0) {
++        element.parentNode.removeChild(element);
++        removed++;
++      }
++    }
++
++    return "Matched elements: " + elements.length + ". Removed: " + removed + ".";
++  }
++});
++
++/**
++ * The 'pagemod remove attribute' command.
++ */
++gcli.addCommand({
++  name: "pagemod remove attribute",
++  description: gcli.lookup("pagemodremoveattributeDesc"),
++  params: [
++    {
++      name: "searchAttributes",
++      type: "string",
++      description: gcli.lookup("pagemodremoveattributeSearchAttributesDesc"),
++    },
++    {
++      name: "searchElements",
++      type: "string",
++      description: gcli.lookup("pagemodremoveattributeSearchElementsDesc"),
++    },
++    {
++      name: "root",
++      type: "string",
++      description: gcli.lookup("pagemodremoveattributeRootDesc"),
++      defaultValue: null,
++    },
++    {
++      name: "ignoreCase",
++      type: "boolean",
++      description: gcli.lookup("pagemodremoveattributeIgnoreCaseDesc"),
++    },
++  ],
++  exec: function(args, context) {
++    var document = context.environment.contentDocument;
++    var XPathResult = document.defaultView.XPathResult;
 +
 +    function escapeRegex(str) {
 +      return str.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
 +    }
 +
-+    var regexOptions = args.ignoreCase ? 'ig' : 'g';
-+    var attributeRegex = null;
-+    if (args.attributes) {
-+      attributeRegex = args.regex ? args.attributes : escapeRegex(args.attributes);
-+      attributeRegex = new RegExp(attributeRegex, regexOptions);
++    var root = document;
++    if (args.root) {
++      if (args.xpath) {
++        var result = document.evaluate(args.root, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
++        root = result.singleNodeValue;
++      } else {
++        root = document.querySelector(args.root);
++      }
++    }
++    if (!root) {
++      return "Root not found!";
 +    }
 +
-+    var search = args.regex ? args.search : escapeRegex(args.search);
-+    search = new RegExp(search, regexOptions);
++    var regexOptions = args.ignoreCase ? 'ig' : 'g';
++    var attributeRegex = args.regex ? args.searchAttributes : escapeRegex(args.searchAttributes);
++    attributeRegex = new RegExp(attributeRegex, regexOptions);
 +
-+    var root = args.root || document;
-+    var elements = root.querySelectorAll(args.selector);
-+    elements = Array.prototype.slice.call(elements);
-+    elements.push(root);
++    var elements = [];
++
++    if (args.xpath) {
++      var result = document.evaluate(args.searchElements, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
++      for (var i = 0; i < result.snapshotLength; i++) {
++        elements.push(result.snapshotItem(i));
++      }
++    } else {
++      var result = root.querySelectorAll(args.searchElements);
++      elements = Array.prototype.slice.call(result);
++    }
++
++    var removed = 0;
 +    for (var i = 0; i < elements.length; i++) {
 +      var element = elements[i];
 +      if (!element.attributes) {
 +        continue;
 +      }
-+      for (var y = 0; y < element.attributes.length; y++) {
-+        var attr = element.attributes[y];
-+        if (!attributeRegex || attributeRegex.test(attr.name)) {
-+          attr.value = attr.value.replace(search, args.replace);
++
++      var attrs = Array.prototype.slice.call(element.attributes);
++      for (var y = 0; y < attrs.length; y++) {
++        var attr = attrs[y];
++        if (attributeRegex.test(attr.name)) {
++          element.removeAttributeNode(attr);
++          removed++;
 +        }
 +      }
 +    }
++
++    return "Matched elements: " + elements.length + ". Removed attributes: " + removed + ".";
 +  }
 +});
++
++
++/**
++ * Make a given string safe to use  in a regular expression.
++ *
++ * @param string aString
++ *        The string you want to use in a regex.
++ * @return string
++ *         The equivalent of |aString| but safe to use in a regex.
++ */
++function escapeRegex(aString) {
++  return aString.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
++}
 diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties b/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties
 --- a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties
 +++ b/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties
-@@ -337,8 +337,18 @@ editLineToJumpToDesc=Line to jump to
+@@ -337,8 +337,128 @@ editLineToJumpToDesc=Line to jump to
  # command. This string is designed to be shown in a menu alongside the command
  # name, which is why it should be as short as possible.
  cmdDesc=Manipulate the commands
@@ -178,3 +346,113 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properti
 +# html' command. This string is designed to be shown in a menu alongside the
 +# command name, which is why it should be as short as possible.
 +exporthtmlDesc=Export the current page to HTML
++
++# LOCALIZATION NOTE (pagemodDesc) A very short description of the 'pagemod'
++# command. This string is designed to be shown in a menu alongside the command
++# name, which is why it should be as short as possible.
++pagemodDesc=Make changes in the page
++
++# LOCALIZATION NOTE (pagemodreplaceDesc) A very short description of the
++# 'pagemod replace' command. This string is designed to be shown in a menu
++# alongside the command name, which is why it should be as short as possible.
++pagemodreplaceDesc=Search and replace attributes and text nodes in the page
++
++# LOCALIZATION NOTE (pagemodreplaceSearchDesc) A very short string to describe
++# the 'search' parameter to the 'pagemod replace' command, which is displayed in
++# a dialog when the user is using this command.
++pagemodreplaceSearchDesc=What to search for
++
++# LOCALIZATION NOTE (pagemodreplaceReplaceDesc) A very short string to describe
++# the 'replace' parameter to the 'pagemod replace' command, which is displayed in
++# a dialog when the user is using this command.
++pagemodreplaceReplaceDesc=What you want to put instead of the given search string
++
++# LOCALIZATION NOTE (pagemodreplaceReplaceDesc) A very short string to describe
++# the 'replace' parameter to the 'pagemod replace' command, which is displayed in
++# a dialog when the user is using this command.
++pagemodreplaceReplaceDesc=What you want to put instead of the given search string
++
++# LOCALIZATION NOTE (pagemodreplaceIgnoreCaseDesc) A very short string to
++# describe the 'ignoreCase' parameter to the 'pagemod replace' command, which is
++# displayed in a dialog when the user is using this command.
++pagemodreplaceIgnoreCaseDesc=Tells if you want to ignore the case of the search string
++
++# LOCALIZATION NOTE (pagemodreplaceRootDesc) A very short string to describe the
++# 'root' parameter to the 'pagemod replace' command, which is displayed in
++# a dialog when the user is using this command.
++pagemodreplaceRootDesc=A CSS selector pointing to the root element from where the search starts
++
++# LOCALIZATION NOTE (pagemodreplaceSelectorDesc) A very short string to describe
++# the 'selector' parameter to the 'pagemod replace' command, which is displayed
++# in a dialog when the user is using this command.
++pagemodreplaceSelectorDesc=A CSS selector that tells which elements you want to include in the search and replace operation
++
++# LOCALIZATION NOTE (pagemodreplaceAttributesDesc) A very short string to
++# describe the 'attributes' parameter to the 'pagemod replace' command, which is
++# displayed in a dialog when the user is using this command.
++pagemodreplaceAttributesDesc=When searching through attributes, limit the search to specific attribute names that match the string you give here
++
++# LOCALIZATION NOTE (pagemodreplaceAttributesDesc) A string as the result of to
++# the 'pagemod replace' command, which is displayed in a dialog after the user
++# uses this command.
++pagemodreplaceResultMatchedElements=Elements matched by selector: %1$S
++
++# LOCALIZATION NOTE (pagemodremoveDesc) A very short description of the
++# 'pagemod remove' command. This string is designed to be shown in a menu
++# alongside the command name, which is why it should be as short as possible.
++pagemodremoveDesc=Remove elements and attributes from the page
++
++# LOCALIZATION NOTE (pagemodremoveelementDesc) A very short description of the
++# 'pagemod remove element' command. This string is designed to be shown in
++# a menu alongside the command name, which is why it should be as short as
++# possible.
++pagemodremoveelementDesc=Remove elements from the page
++
++# LOCALIZATION NOTE (pagemodremoveelementSearchDesc) A very short string to
++# describe the 'search' parameter to the 'pagemod remove element' command, which
++# is displayed in a dialog when the user is using this command.
++pagemodremoveelementSearchDesc=CSS selector that tells which elements you want to remove
++
++# LOCALIZATION NOTE (pagemodremoveelementRootDesc) A very short string to
++# describe the 'root' parameter to the 'pagemod remove element' command, which
++# is displayed in a dialog when the user is using this command.
++pagemodremoveelementRootDesc=A CSS selector pointing to the root element from where the search starts
++
++# LOCALIZATION NOTE (pagemodremoveelementStripOnlyDesc) A very short string to
++# describe the 'stripOnly' parameter to the 'pagemod remove element' command,
++# which is displayed in a dialog when the user is using this command.
++pagemodremoveelementStripOnlyDesc=Tells that you want to remove the element, but not the content
++
++# LOCALIZATION NOTE (pagemodremoveelementIfEmptyOnlyDesc) A very short string to
++# describe the 'ifEmptyOnly' parameter to the 'pagemod remove element' command,
++# which is displayed in a dialog when the user is using this command.
++pagemodremoveelementIfEmptyOnlyDesc=Tells that you want to remove only the empty elements
++
++# LOCALIZATION NOTE (pagemodremoveattributeDesc) A very short description of the
++# 'pagemod remove attribute' command. This string is designed to be shown in
++# a menu alongside the command name, which is why it should be as short as
++# possible.
++pagemodremoveattributeDesc=Remove specific attributes from elements in the page
++
++# LOCALIZATION NOTE (pagemodremoveattributeSearchAttributesDesc) A very short
++# string to describe the 'searchAttributes' parameter to the 'pagemod remove
++# attribute' command, which is displayed in a dialog when the user is using this
++# command.
++pagemodremoveattributeSearchAttributesDesc=String that matches the attribute names you want to remove
++ 
++# LOCALIZATION NOTE (pagemodremoveattributeSearchElementsDesc) A very short
++# string to describe the 'searchElements' parameter to the 'pagemod remove
++# attribute' command, which is displayed in a dialog when the user is using this
++# command.
++pagemodremoveattributeSearchElementsDesc=CSS selector that tells which elements you want to search for
++
++# LOCALIZATION NOTE (pagemodremoveattributeRootDesc) A very short string to
++# describe the 'root' parameter to the 'pagemod remove attribute' command, which
++# is displayed in a dialog when the user is using this command.
++pagemodremoveattributeRootDesc=A CSS selector pointing to the root element from where the search starts
++
++# LOCALIZATION NOTE (pagemodremoveattributeIgnoreCaseDesc) A very short string
++# to describe the 'ignoreCase' parameter to the 'pagemod remove attribute'
++# command, which is displayed in a dialog when the user is using this command.
++pagemodremoveattributeIgnoreCaseDesc=Tells that the search for attributes needs to ignore the string case
++
