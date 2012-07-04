@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 3a1f8992606cfa95029710007307b41db0eb3bd1
+# Parent a86fbf7a14ea14ee612fedf54e696b18bb7fcdd1
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1341348136 -10800
+# Date 1341432649 -10800
 
 Bug 769575 - GCLI needs page manipulation commands
 
 diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/commandline/GcliCommands.jsm
 --- a/browser/devtools/commandline/GcliCommands.jsm
 +++ b/browser/devtools/commandline/GcliCommands.jsm
-@@ -537,8 +537,315 @@ gcli.addCommand({
+@@ -537,8 +537,284 @@ gcli.addCommand({
        });
      } catch (ex) {
        // If the debugger has been closed already, don't scare the user.
@@ -73,16 +73,26 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +      description: gcli.lookup("pagemodreplaceIgnoreCaseDesc"),
 +    },
 +    {
++      name: "selector",
++      type: "string",
++      description: gcli.lookup("pagemodreplaceSelectorDesc"),
++      defaultValue: "*:not(script):not(style):not(embed):not(object):not(frame):not(iframe):not(frameset)",
++    },
++    {
 +      name: "root",
 +      type: "node",
 +      description: gcli.lookup("pagemodreplaceRootDesc"),
 +      defaultValue: null,
 +    },
 +    {
-+      name: "selector",
-+      type: "string",
-+      description: gcli.lookup("pagemodreplaceSelectorDesc"),
-+      defaultValue: "*:not(script):not(style):not(embed):not(object):not(frame):not(iframe):not(frameset)",
++      name: "attrOnly",
++      type: "boolean",
++      description: gcli.lookup("pagemodreplaceAttrOnlyDesc"),
++    },
++    {
++      name: "contentOnly",
++      type: "boolean",
++      description: gcli.lookup("pagemodreplaceContentOnlyDesc"),
 +    },
 +    {
 +      name: "attributes",
@@ -93,8 +103,8 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +  ],
 +  exec: function(args, context) {
 +    let document = context.environment.contentDocument;
-+    let searchTextNodes = !args.attronly;
-+    let searchAttributes = !args.contentonly;
++    let searchTextNodes = !args.attrOnly;
++    let searchAttributes = !args.contentOnly;
 +    let regexOptions = args.ignoreCase ? 'ig' : 'g';
 +    let search = new RegExp(escapeRegex(args.search), regexOptions);
 +    let attributeRegex = null;
@@ -175,53 +185,34 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +    },
 +  ],
 +  exec: function(args, context) {
-+    var document = context.environment.contentDocument;
-+    var XPathResult = document.defaultView.XPathResult;
-+
-+    var root = document;
-+    if (args.root) {
-+      if (args.xpath) {
-+        var result = document.evaluate(args.root, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-+        root = result.singleNodeValue;
-+      } else {
-+        root = document.querySelector(args.root);
-+      }
-+    }
++    let document = context.environment.contentDocument;
++    let root = args.root ? document.querySelector(args.root) : document;
 +    if (!root) {
-+      return "Root not found!";
++      return gcli.lookup("pagemodremoveelementRootNotFound");
 +    }
 +
-+    var elements = [];
++    let elements = Array.prototype.slice.call(root.querySelectorAll(args.search));
 +
-+    if (args.xpath) {
-+      var result = document.evaluate(args.search, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-+      for (var i = 0; i < result.snapshotLength; i++) {
-+        elements.push(result.snapshotItem(i));
-+      }
-+    } else {
-+      var result = root.querySelectorAll(args.search);
-+      elements = Array.prototype.slice.call(result);
-+    }
-+
-+    var removed = 0;
-+    for (var i = 0; i < elements.length; i++) {
-+      var element = elements[i];
-+      var parentNode = element.parentNode;
++    let removed = 0;
++    for (let i = 0; i < elements.length; i++) {
++      let element = elements[i];
++      let parentNode = element.parentNode;
 +      if (!parentNode || !element.removeChild) {
 +        continue;
 +      }
 +      if (args.stripOnly) {
-+        for (var y = 0; y < element.childNodes.length; y++) {
-+          parentNode.insertBefore(element.childNodes[y], element);
++        while (element.hasChildNodes()) {
++          parentNode.insertBefore(element.childNodes[0], element);
 +        }
 +      }
-+      if (!args.ifEmptyOnly || element.childNodes.length == 0) {
++      if (!args.ifEmptyOnly || !element.hasChildNodes()) {
 +        element.parentNode.removeChild(element);
 +        removed++;
 +      }
 +    }
 +
-+    return "Matched elements: " + elements.length + ". Removed: " + removed + ".";
++    return gcli.lookupFormat("pagemodremoveelementResultMatchedAndRemovedElements",
++                             [elements.length, removed]);
 +  }
 +});
 +
@@ -255,52 +246,29 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +    },
 +  ],
 +  exec: function(args, context) {
-+    var document = context.environment.contentDocument;
-+    var XPathResult = document.defaultView.XPathResult;
++    let document = context.environment.contentDocument;
 +
-+    function escapeRegex(str) {
-+      return str.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
-+    }
-+
-+    var root = document;
-+    if (args.root) {
-+      if (args.xpath) {
-+        var result = document.evaluate(args.root, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-+        root = result.singleNodeValue;
-+      } else {
-+        root = document.querySelector(args.root);
-+      }
-+    }
++    let root = args.root ? document.querySelector(args.root) : document;
 +    if (!root) {
-+      return "Root not found!";
++      return gcli.lookup("pagemodremoveattributeRootNotFound");
 +    }
 +
-+    var regexOptions = args.ignoreCase ? 'ig' : 'g';
-+    var attributeRegex = args.regex ? args.searchAttributes : escapeRegex(args.searchAttributes);
-+    attributeRegex = new RegExp(attributeRegex, regexOptions);
++    let regexOptions = args.ignoreCase ? 'ig' : 'g';
++    let attributeRegex = new RegExp(escapeRegex(args.searchAttributes),
++                                    regexOptions);
++    let elements = root.querySelectorAll(args.searchElements);
++    elements = Array.prototype.slice.call(elements);
 +
-+    var elements = [];
-+
-+    if (args.xpath) {
-+      var result = document.evaluate(args.searchElements, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-+      for (var i = 0; i < result.snapshotLength; i++) {
-+        elements.push(result.snapshotItem(i));
-+      }
-+    } else {
-+      var result = root.querySelectorAll(args.searchElements);
-+      elements = Array.prototype.slice.call(result);
-+    }
-+
-+    var removed = 0;
-+    for (var i = 0; i < elements.length; i++) {
-+      var element = elements[i];
++    let removed = 0;
++    for (let i = 0; i < elements.length; i++) {
++      let element = elements[i];
 +      if (!element.attributes) {
 +        continue;
 +      }
 +
 +      var attrs = Array.prototype.slice.call(element.attributes);
-+      for (var y = 0; y < attrs.length; y++) {
-+        var attr = attrs[y];
++      for (let y = 0; y < attrs.length; y++) {
++        let attr = attrs[y];
 +        if (attributeRegex.test(attr.name)) {
 +          element.removeAttributeNode(attr);
 +          removed++;
@@ -308,7 +276,8 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +      }
 +    }
 +
-+    return "Matched elements: " + elements.length + ". Removed attributes: " + removed + ".";
++    return gcli.lookupFormat("pagemodremoveattributeResult",
++                             [elements.length, removed]);
 +  }
 +});
 +
@@ -324,10 +293,102 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +function escapeRegex(aString) {
 +  return aString.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
 +}
+diff --git a/browser/devtools/commandline/test/Makefile.in b/browser/devtools/commandline/test/Makefile.in
+--- a/browser/devtools/commandline/test/Makefile.in
++++ b/browser/devtools/commandline/test/Makefile.in
+@@ -16,16 +16,17 @@ include $(topsrcdir)/config/rules.mk
+   browser_gcli_break.js \
+   browser_gcli_commands.js \
+   browser_gcli_edit.js \
+   browser_gcli_inspect.js \
+   browser_gcli_integrate.js \
+   browser_gcli_pref.js \
+   browser_gcli_settings.js \
+   browser_gcli_web.js \
++  browser_gcli_pagemod_export.js \
+   head.js \
+   $(NULL)
+ 
+ _BROWSER_TEST_PAGES = \
+   browser_gcli_break.html \
+   browser_gcli_inspect.html \
+   resources_inpage.js \
+   resources_inpage1.css \
+diff --git a/browser/devtools/commandline/test/browser_gcli_pagemod_export.js b/browser/devtools/commandline/test/browser_gcli_pagemod_export.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/commandline/test/browser_gcli_pagemod_export.js
+@@ -0,0 +1,66 @@
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Tests that the inspect command works as it should
++
++const TEST_URI = "http://example.com/browser/browser/devtools/commandline/test/ browser_gcli_inspect.html";
++
++function test() {
++  DeveloperToolbarTest.test(TEST_URI, function(browser, tab) {
++    testPageModReplace();
++  });
++}
++
++function testPageModReplace() {
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "pagemod replace",
++    emptyParameters: [ "" ],
++    status: "ERROR"
++  });
++
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "inspect",
++    emptyParameters: [ " <node>" ],
++    status: "ERROR"
++  });
++
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "inspect h1",
++    status: "ERROR"
++  });
++
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "inspect span",
++    status: "ERROR"
++  });
++
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "inspect div",
++    status: "VALID"
++  });
++
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "inspect .someclass",
++    status: "VALID"
++  });
++
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "inspect #someid",
++    status: "VALID"
++  });
++
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "inspect button[disabled]",
++    status: "VALID"
++  });
++
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "inspect p>strong",
++    status: "VALID"
++  });
++
++  DeveloperToolbarTest.checkInputStatus({
++    typed: "inspect :root",
++    status: "VALID"
++  });
++}
 diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties b/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties
 --- a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties
 +++ b/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties
-@@ -337,8 +337,128 @@ editLineToJumpToDesc=Line to jump to
+@@ -337,8 +337,155 @@ editLineToJumpToDesc=Line to jump to
  # command. This string is designed to be shown in a menu alongside the command
  # name, which is why it should be as short as possible.
  cmdDesc=Manipulate the commands
@@ -380,21 +441,30 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properti
 +# LOCALIZATION NOTE (pagemodreplaceRootDesc) A very short string to describe the
 +# 'root' parameter to the 'pagemod replace' command, which is displayed in
 +# a dialog when the user is using this command.
-+pagemodreplaceRootDesc=A CSS selector pointing to the root element from where the search starts
++pagemodreplaceRootDesc=CSS selector pointing to the root element from where the search starts
 +
 +# LOCALIZATION NOTE (pagemodreplaceSelectorDesc) A very short string to describe
 +# the 'selector' parameter to the 'pagemod replace' command, which is displayed
 +# in a dialog when the user is using this command.
-+pagemodreplaceSelectorDesc=A CSS selector that tells which elements you want to include in the search and replace operation
++pagemodreplaceSelectorDesc=CSS selector that tells which elements you want to include in the search and replace operation
 +
 +# LOCALIZATION NOTE (pagemodreplaceAttributesDesc) A very short string to
 +# describe the 'attributes' parameter to the 'pagemod replace' command, which is
 +# displayed in a dialog when the user is using this command.
 +pagemodreplaceAttributesDesc=When searching through attributes, limit the search to specific attribute names that match the string you give here
 +
-+# LOCALIZATION NOTE (pagemodreplaceAttributesDesc) A string as the result of to
-+# the 'pagemod replace' command, which is displayed in a dialog after the user
-+# uses this command.
++# LOCALIZATION NOTE (pagemodreplaceAttrOnlyDesc) A very short string to describe
++# the 'attrOnly' parameter to the 'pagemod replace' command, which is displayed
++# in a dialog when the user is using this command.
++pagemodreplaceAttrOnlyDesc=Search only through attributes
++
++# LOCALIZATION NOTE (pagemodreplaceContentOnlyDesc) A very short string to
++# describe the 'contentOnly' parameter to the 'pagemod replace' command, which
++# is displayed in a dialog when the user is using this command.
++pagemodreplaceContentOnlyDesc=Search only through text nodes
++
++# LOCALIZATION NOTE (pagemodreplaceResultMatchedElements) A string displayed as
++# the result of the 'pagemod replace' command.
 +pagemodreplaceResultMatchedElements=Elements matched by selector: %1$S
 +
 +# LOCALIZATION NOTE (pagemodremoveDesc) A very short description of the
@@ -416,7 +486,7 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properti
 +# LOCALIZATION NOTE (pagemodremoveelementRootDesc) A very short string to
 +# describe the 'root' parameter to the 'pagemod remove element' command, which
 +# is displayed in a dialog when the user is using this command.
-+pagemodremoveelementRootDesc=A CSS selector pointing to the root element from where the search starts
++pagemodremoveelementRootDesc=CSS selector pointing to the root element from where the search starts
 +
 +# LOCALIZATION NOTE (pagemodremoveelementStripOnlyDesc) A very short string to
 +# describe the 'stripOnly' parameter to the 'pagemod remove element' command,
@@ -427,6 +497,15 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properti
 +# describe the 'ifEmptyOnly' parameter to the 'pagemod remove element' command,
 +# which is displayed in a dialog when the user is using this command.
 +pagemodremoveelementIfEmptyOnlyDesc=Tells that you want to remove only the empty elements
++
++# LOCALIZATION NOTE (pagemodremoveelementRootNotFound) A short string displayed
++# when the 'pagemod remove element' command cannot find the root element, based
++# on the given 'root' argument.
++pagemodremoveelementRootNotFound=Root not found!
++
++# LOCALIZATION NOTE (pagemodremoveelementResultMatchedAndRemovedElements)
++# A string displayed as the result of the 'pagemod remove element' command.
++pagemodremoveelementResultMatchedAndRemovedElements=Elements matched by selector: %1$S. Elements removed: %2$S.
 +
 +# LOCALIZATION NOTE (pagemodremoveattributeDesc) A very short description of the
 +# 'pagemod remove attribute' command. This string is designed to be shown in
@@ -455,4 +534,13 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properti
 +# to describe the 'ignoreCase' parameter to the 'pagemod remove attribute'
 +# command, which is displayed in a dialog when the user is using this command.
 +pagemodremoveattributeIgnoreCaseDesc=Tells that the search for attributes needs to ignore the string case
++
++# LOCALIZATION NOTE (pagemodremoveattributeRootNotFound) A short string displayed
++# when the 'pagemod remove attribute' command cannot find the root element, based
++# on the given 'root' argument.
++pagemodremoveattributeRootNotFound=Root not found!
++
++# LOCALIZATION NOTE (pagemodremoveattributeResult) A string displayed as the
++# result of the 'pagemod remove attribute' command.
++pagemodremoveattributeResult=Elements matched by selector: %1$S. Attributes removed: %2$S.
 +
