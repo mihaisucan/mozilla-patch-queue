@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent a86fbf7a14ea14ee612fedf54e696b18bb7fcdd1
+# Parent 124c0182df1c4f4725e50e2a0ed154f33ec78430
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1341432649 -10800
+# Date 1341516628 -10800
 
 Bug 769575 - GCLI needs page manipulation commands
 
 diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/commandline/GcliCommands.jsm
 --- a/browser/devtools/commandline/GcliCommands.jsm
 +++ b/browser/devtools/commandline/GcliCommands.jsm
-@@ -537,8 +537,284 @@ gcli.addCommand({
+@@ -537,8 +537,288 @@ gcli.addCommand({
        });
      } catch (ex) {
        // If the debugger has been closed already, don't scare the user.
@@ -115,7 +115,18 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +    let root = args.root || document;
 +    let elements = root.querySelectorAll(args.selector);
 +    elements = Array.prototype.slice.call(elements);
-+    elements.push(root);
++
++    let replacedTextNodes = 0;
++    let replacedAttributes = 0;
++
++    function replaceAttribute() {
++      replacedAttributes++;
++      return args.replace;
++    }
++    function replaceTextNode() {
++      replacedTextNodes++;
++      return args.replace;
++    }
 +
 +    for (let i = 0; i < elements.length; i++) {
 +      let element = elements[i];
@@ -123,7 +134,7 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +        for (let y = 0; y < element.childNodes.length; y++) {
 +          let node = element.childNodes[y];
 +          if (node.nodeType == node.TEXT_NODE) {
-+            node.textContent = node.textContent.replace(search, args.replace);
++            node.textContent = node.textContent.replace(search, replaceTextNode);
 +          }
 +        }
 +      }
@@ -135,14 +146,15 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +        for (let y = 0; y < element.attributes.length; y++) {
 +          let attr = element.attributes[y];
 +          if (!attributeRegex || attributeRegex.test(attr.name)) {
-+            attr.value = attr.value.replace(search, args.replace);
++            attr.value = attr.value.replace(search, replaceAttribute);
 +          }
 +        }
 +      }
 +    }
 +
-+    return gcli.lookupFormat("pagemodreplaceResultMatchedElements",
-+                             [elements.length]);
++    return gcli.lookupFormat("pagemodreplaceResult",
++                             [elements.length, replacedTextNodes,
++                              replacedAttributes]);
 +  }
 +});
 +
@@ -186,11 +198,7 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +  ],
 +  exec: function(args, context) {
 +    let document = context.environment.contentDocument;
-+    let root = args.root ? document.querySelector(args.root) : document;
-+    if (!root) {
-+      return gcli.lookup("pagemodremoveelementRootNotFound");
-+    }
-+
++    let root = args.root || document;
 +    let elements = Array.prototype.slice.call(root.querySelectorAll(args.search));
 +
 +    let removed = 0;
@@ -235,7 +243,7 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +    },
 +    {
 +      name: "root",
-+      type: "string",
++      type: "node",
 +      description: gcli.lookup("pagemodremoveattributeRootDesc"),
 +      defaultValue: null,
 +    },
@@ -248,11 +256,7 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +  exec: function(args, context) {
 +    let document = context.environment.contentDocument;
 +
-+    let root = args.root ? document.querySelector(args.root) : document;
-+    if (!root) {
-+      return gcli.lookup("pagemodremoveattributeRootNotFound");
-+    }
-+
++    let root = args.root || document;
 +    let regexOptions = args.ignoreCase ? 'ig' : 'g';
 +    let attributeRegex = new RegExp(escapeRegex(args.searchAttributes),
 +                                    regexOptions);
@@ -270,7 +274,7 @@ diff --git a/browser/devtools/commandline/GcliCommands.jsm b/browser/devtools/co
 +      for (let y = 0; y < attrs.length; y++) {
 +        let attr = attrs[y];
 +        if (attributeRegex.test(attr.name)) {
-+          element.removeAttributeNode(attr);
++          element.removeAttribute(attr.name);
 +          removed++;
 +        }
 +      }
@@ -318,77 +322,283 @@ diff --git a/browser/devtools/commandline/test/browser_gcli_pagemod_export.js b/
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/commandline/test/browser_gcli_pagemod_export.js
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,272 @@
 +/* Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/ */
 +
 +// Tests that the inspect command works as it should
 +
-+const TEST_URI = "http://example.com/browser/browser/devtools/commandline/test/ browser_gcli_inspect.html";
++const TEST_URI = "http://example.com/browser/browser/devtools/commandline/test/browser_gcli_inspect.html";
 +
 +function test() {
++  let initialHtml = "";
++
 +  DeveloperToolbarTest.test(TEST_URI, function(browser, tab) {
++    initialHtml = content.document.documentElement.innerHTML;
++
++    testExportHtml();
 +    testPageModReplace();
-+  });
-+}
-+
-+function testPageModReplace() {
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "pagemod replace",
-+    emptyParameters: [ "" ],
-+    status: "ERROR"
++    testPageModRemoveElement();
++    testPageModRemoveAttribute();
++    finish();
 +  });
 +
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "inspect",
-+    emptyParameters: [ " <node>" ],
-+    status: "ERROR"
-+  });
++  function testExportHtml() {
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "export html",
++      status: "VALID"
++    });
 +
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "inspect h1",
-+    status: "ERROR"
-+  });
++    let oldOpen = content.open;
++    let openURL = "";
++    content.open = function(aUrl) {
++      openURL = aUrl;
++    };
 +
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "inspect span",
-+    status: "ERROR"
-+  });
++    DeveloperToolbarTest.exec({ blankOutput: true });
 +
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "inspect div",
-+    status: "VALID"
-+  });
++    openURL = decodeURIComponent(openURL);
 +
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "inspect .someclass",
-+    status: "VALID"
-+  });
++    isnot(openURL.indexOf('<html lang="en">'), -1, "export html works: <html>");
++    isnot(openURL.indexOf("<title>GCLI"), -1, "export html works: <title>");
++    isnot(openURL.indexOf('<p id="someid">#'), -1, "export html works: <p>");
 +
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "inspect #someid",
-+    status: "VALID"
-+  });
++    content.open = oldOpen;
++  }
 +
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "inspect button[disabled]",
-+    status: "VALID"
-+  });
++  function getContent() {
++    return content.document.documentElement.innerHTML;
++  }
 +
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "inspect p>strong",
-+    status: "VALID"
-+  });
++  function resetContent() {
++    content.document.documentElement.innerHTML = initialHtml;
++  }
 +
-+  DeveloperToolbarTest.checkInputStatus({
-+    typed: "inspect :root",
-+    status: "VALID"
-+  });
++  function testPageModReplace() {
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "pagemod replace",
++      emptyParameters: [" <search>", " <replace>", " [ignoreCase]",
++                        " [selector]", " [root]", " [attrOnly]",
++                        " [contentOnly]", " [attributes]"],
++      status: "ERROR"
++    });
++
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "pagemod replace some foo",
++      emptyParameters: [" [ignoreCase]", " [selector]", " [root]",
++                        " [attrOnly]", " [contentOnly]", " [attributes]"],
++      status: "VALID"
++    });
++
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "pagemod replace some foo true",
++      emptyParameters: [" [selector]", " [root]", " [attrOnly]",
++                        " [contentOnly]", " [attributes]"],
++      status: "VALID"
++    });
++
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "pagemod replace some foo true --attrOnly",
++      emptyParameters: [" [selector]", " [root]", " [contentOnly]",
++                        " [attributes]"],
++      status: "VALID"
++    });
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod replace sOme foOBar",
++      outputMatch: /^[^:]+: 13\. [^:]+: 0\. [^:]+: 0\.\s*$/
++    });
++
++    is(getContent(), initialHtml, "no change in the page");
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod replace sOme foOBar true",
++      outputMatch: /^[^:]+: 13\. [^:]+: 2\. [^:]+: 2\.\s*$/
++    });
++
++    isnot(getContent().indexOf('<p class="foOBarclass">.foOBarclass'), -1,
++          ".someclass changed to .foOBarclass");
++    isnot(getContent().indexOf('<p id="foOBarid">#foOBarid'), -1,
++          "#someid changed to #foOBarid");
++
++    resetContent();
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod replace some foobar --contentOnly",
++      outputMatch: /^[^:]+: 13\. [^:]+: 2\. [^:]+: 0\.\s*$/
++    });
++
++    isnot(getContent().indexOf('<p class="someclass">.foobarclass'), -1,
++          ".someclass changed to .foobarclass (content only)");
++    isnot(getContent().indexOf('<p id="someid">#foobarid'), -1,
++          "#someid changed to #foobarid (content only)");
++
++    resetContent();
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod replace some foobar --attrOnly",
++      outputMatch: /^[^:]+: 13\. [^:]+: 0\. [^:]+: 2\.\s*$/
++    });
++
++    isnot(getContent().indexOf('<p class="foobarclass">.someclass'), -1,
++          ".someclass changed to .foobarclass (attr only)");
++    isnot(getContent().indexOf('<p id="foobarid">#someid'), -1,
++          "#someid changed to #foobarid (attr only)");
++
++    resetContent();
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod replace some foobar --root head",
++      outputMatch: /^[^:]+: 2\. [^:]+: 0\. [^:]+: 0\.\s*$/
++    });
++
++    is(getContent(), initialHtml, "nothing changed");
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod replace some foobar --selector .someclass,div,span",
++      outputMatch: /^[^:]+: 4\. [^:]+: 1\. [^:]+: 1\.\s*$/
++    });
++
++    isnot(getContent().indexOf('<p class="foobarclass">.foobarclass'), -1,
++          ".someclass changed to .foobarclass");
++    isnot(getContent().indexOf('<p id="someid">#someid'), -1,
++          "#someid did not change");
++
++    resetContent();
++  }
++
++  function testPageModRemoveElement() {
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "pagemod remove",
++      status: "ERROR"
++    });
++
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "pagemod remove element",
++      emptyParameters: [" <search>", " [root]", " [stripOnly]", " [ifEmptyOnly]"],
++      status: "ERROR"
++    });
++
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "pagemod remove element foo",
++      emptyParameters: [" [root]", " [stripOnly]", " [ifEmptyOnly]"],
++      status: "VALID"
++    });
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove element p",
++      outputMatch: /^[^:]+: 3\. [^:]+: 3\.\s*$/
++    });
++
++    is(getContent().indexOf('<p class="someclass">'), -1, "p.someclass removed");
++    is(getContent().indexOf('<p id="someid">'), -1, "p#someid removed");
++    is(getContent().indexOf("<p><strong>"), -1, "<p> wrapping <strong> removed");
++    isnot(getContent().indexOf("<span>"), -1, "<span> not removed");
++
++    resetContent();
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove element p head",
++      outputMatch: /^[^:]+: 0\. [^:]+: 0\.\s*$/
++    });
++
++    is(getContent(), initialHtml, "nothing changed in the page");
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove element p --ifEmptyOnly",
++      outputMatch: /^[^:]+: 3\. [^:]+: 0\.\s*$/
++    });
++
++    is(getContent(), initialHtml, "nothing changed in the page");
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove element meta,title --ifEmptyOnly",
++      outputMatch: /^[^:]+: 2\. [^:]+: 1\.\s*$/
++    });
++
++    is(getContent().indexOf("<meta charset="), -1, "<meta> removed");
++    isnot(getContent().indexOf("<title>"), -1, "<title> not removed");
++
++    resetContent();
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove element p --stripOnly",
++      outputMatch: /^[^:]+: 3\. [^:]+: 3\.\s*$/
++    });
++
++    is(getContent().indexOf('<p class="someclass">'), -1, "p.someclass removed");
++    is(getContent().indexOf('<p id="someid">'), -1, "p#someid removed");
++    is(getContent().indexOf("<p><strong>"), -1, "<p> wrapping <strong> removed");
++    isnot(getContent().indexOf(".someclass"), -1, ".someclass still exists");
++    isnot(getContent().indexOf("#someid"), -1, "#someid still exists");
++    isnot(getContent().indexOf("<strong>p"), -1, "<strong> still exists");
++
++    resetContent();
++  }
++
++  function testPageModRemoveAttribute() {
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "pagemod remove attribute",
++      emptyParameters: [" <searchAttributes>", " <searchElements>", " [root]", " [ignoreCase]"],
++      status: "ERROR"
++    });
++
++    DeveloperToolbarTest.checkInputStatus({
++      typed: "pagemod remove attribute foo bar",
++      emptyParameters: [" [root]", " [ignoreCase]"],
++      status: "VALID"
++    });
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove attribute foo bar",
++      outputMatch: /^[^:]+: 0\. [^:]+: 0\.\s*$/
++    });
++
++    is(getContent(), initialHtml, "nothing changed in the page");
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove attribute foo p",
++      outputMatch: /^[^:]+: 3\. [^:]+: 0\.\s*$/
++    });
++
++    is(getContent(), initialHtml, "nothing changed in the page");
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove attribute id p,span",
++      outputMatch: /^[^:]+: 5\. [^:]+: 1\.\s*$/
++    });
++
++    is(getContent().indexOf('<p id="someid">#someid'), -1,
++       "p#someid attribute removed");
++    isnot(getContent().indexOf("<p>#someid"), -1,
++       "p with someid content still exists");
++
++    resetContent();
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove attribute Class p",
++      outputMatch: /^[^:]+: 3\. [^:]+: 0\.\s*$/
++    });
++
++    is(getContent(), initialHtml, "nothing changed in the page");
++
++    DeveloperToolbarTest.exec({
++      typed: "pagemod remove attribute Class p --ignoreCase",
++      outputMatch: /^[^:]+: 3\. [^:]+: 1\.\s*$/
++    });
++
++    is(getContent().indexOf('<p class="someclass">.someclass'), -1,
++       "p.someclass attribute removed");
++    isnot(getContent().indexOf("<p>.someclass"), -1,
++       "p with someclass content still exists");
++
++    resetContent();
++  }
 +}
 diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties b/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties
 --- a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties
 +++ b/browser/locales/en-US/chrome/browser/devtools/gclicommands.properties
-@@ -337,8 +337,155 @@ editLineToJumpToDesc=Line to jump to
+@@ -337,8 +337,145 @@ editLineToJumpToDesc=Line to jump to
  # command. This string is designed to be shown in a menu alongside the command
  # name, which is why it should be as short as possible.
  cmdDesc=Manipulate the commands
@@ -465,7 +675,7 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properti
 +
 +# LOCALIZATION NOTE (pagemodreplaceResultMatchedElements) A string displayed as
 +# the result of the 'pagemod replace' command.
-+pagemodreplaceResultMatchedElements=Elements matched by selector: %1$S
++pagemodreplaceResult=Elements matched by selector: %1$S. Replaces in text nodes: %2$S. Replaces in attributes: %3$S.
 +
 +# LOCALIZATION NOTE (pagemodremoveDesc) A very short description of the
 +# 'pagemod remove' command. This string is designed to be shown in a menu
@@ -498,11 +708,6 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properti
 +# which is displayed in a dialog when the user is using this command.
 +pagemodremoveelementIfEmptyOnlyDesc=Tells that you want to remove only the empty elements
 +
-+# LOCALIZATION NOTE (pagemodremoveelementRootNotFound) A short string displayed
-+# when the 'pagemod remove element' command cannot find the root element, based
-+# on the given 'root' argument.
-+pagemodremoveelementRootNotFound=Root not found!
-+
 +# LOCALIZATION NOTE (pagemodremoveelementResultMatchedAndRemovedElements)
 +# A string displayed as the result of the 'pagemod remove element' command.
 +pagemodremoveelementResultMatchedAndRemovedElements=Elements matched by selector: %1$S. Elements removed: %2$S.
@@ -518,7 +723,7 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properti
 +# attribute' command, which is displayed in a dialog when the user is using this
 +# command.
 +pagemodremoveattributeSearchAttributesDesc=String that matches the attribute names you want to remove
-+ 
++
 +# LOCALIZATION NOTE (pagemodremoveattributeSearchElementsDesc) A very short
 +# string to describe the 'searchElements' parameter to the 'pagemod remove
 +# attribute' command, which is displayed in a dialog when the user is using this
@@ -534,11 +739,6 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/gclicommands.properti
 +# to describe the 'ignoreCase' parameter to the 'pagemod remove attribute'
 +# command, which is displayed in a dialog when the user is using this command.
 +pagemodremoveattributeIgnoreCaseDesc=Tells that the search for attributes needs to ignore the string case
-+
-+# LOCALIZATION NOTE (pagemodremoveattributeRootNotFound) A short string displayed
-+# when the 'pagemod remove attribute' command cannot find the root element, based
-+# on the given 'root' argument.
-+pagemodremoveattributeRootNotFound=Root not found!
 +
 +# LOCALIZATION NOTE (pagemodremoveattributeResult) A string displayed as the
 +# result of the 'pagemod remove attribute' command.
