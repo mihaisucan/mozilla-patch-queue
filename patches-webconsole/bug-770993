@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent f8a4f9332cc824ce133d8fb329be2107dd6e1a55
+# Parent 874900dd7b775c666b4d333b1e544f262d92da6d
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1341588314 -10800
+# Date 1341656464 -10800
 
-Bug 770993 - ConsoleAPI.js consumes excessive amounts of memory
+Bug 770993 - ConsoleAPI.js consumes excessive amounts of memory; r=dbaron,rcampbell try: -b do -p linux,linuxqt,linux64,macosx64,win32,macosx -u mochitests -t none
 
 diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 --- a/dom/base/ConsoleAPI.js
 +++ b/dom/base/ConsoleAPI.js
-@@ -26,74 +26,84 @@ const CALL_DELAY = 15; // milliseconds
+@@ -26,74 +26,91 @@ const CALL_DELAY = 15; // milliseconds
  // This constant tells how many messages to process in a single timer execution.
  const MESSAGES_IN_INTERVAL = 1500;
  
@@ -19,12 +19,19 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
  
 -let gTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
 -
++/**
++ * The window.console API implementation. One instance is lazily created for
++ * every inner window, when the window.console object is accessed.
++ */
  function ConsoleAPI() {}
  ConsoleAPI.prototype = {
  
    classID: Components.ID("{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}"),
  
-   QueryInterface: XPCOMUtils.generateQI([Ci.nsIDOMGlobalPropertyInitializer]),
+-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIDOMGlobalPropertyInitializer]),
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIDOMGlobalPropertyInitializer,
++                                         Ci.nsISupportsWeakReference,
++                                         Ci.nsIObserver]),
  
    _timerInitialized: false,
    _queuedCalls: null,
@@ -34,12 +41,14 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 +  _innerID: null,
 +  _outerID: null,
 +  _windowDestroyed: false,
++  _timer: null,
  
    // nsIDOMGlobalPropertyInitializer
    init: function CA_init(aWindow) {
 -    Services.obs.addObserver(this, "xpcom-shutdown", false);
-     Services.obs.addObserver(this, "inner-window-destroyed", false);
- 
+-    Services.obs.addObserver(this, "inner-window-destroyed", false);
++    Services.obs.addObserver(this, "inner-window-destroyed", true);
++
 +    try {
 +      let windowUtils = aWindow.QueryInterface(Ci.nsIInterfaceRequestor)
 +                          .getInterface(Ci.nsIDOMWindowUtils);
@@ -50,7 +59,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 +    catch (ex) {
 +      Cu.reportError(ex);
 +    }
-+
+ 
      let self = this;
      let chromeObject = {
        // window.console API
@@ -110,7 +119,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
          error: "r",
          debug: "r",
          trace: "r",
-@@ -130,110 +140,96 @@ ConsoleAPI.prototype = {
+@@ -130,110 +147,94 @@ ConsoleAPI.prototype = {
                            value: function() {} },
        __mozillaConsole__: { value: true }
      };
@@ -121,7 +130,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
      this._queuedCalls = [];
 -    this._destroyedWindows = [];
 +    this._timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-+    this._window = aWindow;
++    this._window = Cu.getWeakReference(aWindow);
 +    this.timerRegistry = {};
  
      return contentObj;
@@ -145,7 +154,6 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 +        Services.obs.removeObserver(this, "inner-window-destroyed");
 +        this._windowDestroyed = true;
 +        if (!this._timerInitialized) {
-+          this._window = null;
 +          this.timerRegistry = {};
 +        }
 +      }
@@ -183,7 +191,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 -      outerID: outerID,
 -      innerID: innerID,
 -      isPrivate: PrivateBrowsingUtils.isWindowPrivate(aWindow),
-+      isPrivate: PrivateBrowsingUtils.isWindowPrivate(this._window),
++      isPrivate: PrivateBrowsingUtils.isWindowPrivate(this._window.get()),
        timeStamp: Date.now(),
        stack: this.getStackTrace(aMethod != "trace" ? 1 : null),
      };
@@ -216,7 +224,6 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 +
 +      if (this._windowDestroyed) {
 +        ConsoleAPIStorage.clearEvents(this._innerID);
-+        this._window = null;
 +        this.timerRegistry = {};
 +      }
      }
@@ -244,7 +251,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
      let notifyArguments = null;
  
      switch (method) {
-@@ -251,20 +247,20 @@ ConsoleAPI.prototype = {
+@@ -251,20 +252,20 @@ ConsoleAPI.prototype = {
        case "groupCollapsed":
          notifyArguments = this.beginGroup(args);
          break;
@@ -267,7 +274,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
  
      this.notifyObservers(method, notifyArguments, notifyMeta);
    },
-@@ -273,43 +269,41 @@ ConsoleAPI.prototype = {
+@@ -273,43 +274,41 @@ ConsoleAPI.prototype = {
     * Notify all observers of any console API call.
     *
     * @param string aLevel
@@ -316,7 +323,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
     * TODO: object substitution should display an interactive property list (bug
     * 685815) and width and precision qualifiers should be taken into account
     * (bug 685813).
-@@ -379,83 +373,68 @@ ConsoleAPI.prototype = {
+@@ -379,83 +378,68 @@ ConsoleAPI.prototype = {
    /**
     * Begin a new group for logging output together.
     **/
