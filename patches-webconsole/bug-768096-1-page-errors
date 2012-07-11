@@ -1,28 +1,15 @@
 # HG changeset patch
-# Parent 925c01ab7b2097439cd716de4a374638bd1f85ca
+# Parent ea7adc35e6995055190ddc72451a9da091e4147e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1340997960 -10800
+# Date 1342037578 -10800
 
 Bug 768096 (webconsole-rdbgp) - Part 1: page errors
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -12,16 +12,22 @@ const Cu = Components.utils;
+@@ -19,16 +19,23 @@ XPCOMUtils.defineLazyModuleGetter(this, 
  
- const CONSOLEAPI_CLASS_ID = "{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}";
- 
- Cu.import("resource://gre/modules/XPCOMUtils.jsm");
- Cu.import("resource://gre/modules/Services.jsm");
- 
- var EXPORTED_SYMBOLS = ["HUDService"];
- 
-+XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
-+                                  "resource://gre/modules/devtools/dbg-server.jsm");
-+
-+XPCOMUtils.defineLazyModuleGetter(this, "DebuggerClient",
-+                                  "resource://gre/modules/devtools/dbg-client.jsm");
-+
  XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
                                    "resource:///modules/WebConsoleUtils.jsm");
  
@@ -30,8 +17,22 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    return WebConsoleUtils.l10n;
  });
  
++XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
++                                  "resource://gre/modules/devtools/dbg-server.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "DebuggerClient",
++                                  "resource://gre/modules/devtools/dbg-client.jsm");
++
++Cu.import("resource:///modules/devtools/Console.jsm");
+ 
+ var EXPORTED_SYMBOLS = ["HUDService"];
+ 
  function LogFactory(aMessagePrefix)
-@@ -581,16 +587,18 @@ WebConsole.prototype = {
+ {
+   function log(aMessage) {
+     var _msg = aMessagePrefix + " " + aMessage + "\n";
+     dump(_msg);
+@@ -584,16 +591,18 @@ WebConsole.prototype = {
    {
      this.chromeDocument = this.tab.ownerDocument;
      this.chromeWindow = this.chromeDocument.defaultView;
@@ -50,7 +51,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @private
     */
    _initUI: function WC__initUI()
-@@ -618,16 +626,17 @@ WebConsole.prototype = {
+@@ -621,16 +630,17 @@ WebConsole.prototype = {
     */
    _onIframeLoad: function WC__onIframeLoad()
    {
@@ -68,7 +69,46 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @private
     */
    _createOwnWindowPanel: function WC__createOwnWindowPanel()
-@@ -1072,16 +1081,97 @@ WebConsole.prototype = {
+@@ -918,18 +928,17 @@ WebConsole.prototype = {
+   {
+     this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
+ 
+     this._messageListeners.forEach(function(aName) {
+       this.messageManager.addMessageListener(aName, this.ui);
+     }, this);
+ 
+     let message = {
+-      features: ["ConsoleAPI", "JSTerm", "PageError", "NetworkMonitor",
+-                 "LocationChange"],
++      features: ["ConsoleAPI", "JSTerm", "NetworkMonitor", "LocationChange"],
+       cachedMessages: ["ConsoleAPI", "PageError"],
+       NetworkMonitor: { monitorFileActivity: true },
+       JSTerm: { notifyNonNativeConsoleAPI: true },
+       preferences: {
+         "NetworkMonitor.saveRequestAndResponseBodies":
+           this.ui.saveRequestAndResponseBodies,
+       },
+     };
+@@ -1052,16 +1061,18 @@ WebConsole.prototype = {
+   destroy: function WC_destroy()
+   {
+     this.sendMessageToContent("WebConsole:Destroy", {});
+ 
+     this._messageListeners.forEach(function(aName) {
+       this.messageManager.removeMessageListener(aName, this.ui);
+     }, this);
+ 
++    this.proxy.disconnect();
++
+     // Make sure that the console panel does not try to call
+     // deactivateHUDForContext() again.
+     this.consoleWindowUnregisterOnHide = false;
+ 
+     let popupset = this.mainPopupSet;
+     let panels = popupset.querySelectorAll("panel[hudId=" + this.hudId + "]");
+     for (let panel of panels) {
+       if (panel != this.consolePanel) {
+@@ -1086,16 +1097,134 @@ WebConsole.prototype = {
      }
  
      if (this.splitter.parentNode) {
@@ -89,6 +129,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +{
 +  this.owner = aWebConsole;
 +
++  this._onAttachTab = this._onAttachTab.bind(this);
 +  this._onTabNavigated = this._onTabNavigated.bind(this);
 +  this._onTabDetached = this._onTabDetached.bind(this);
 +  this._onCachedMessages = this._onCachedMessages.bind(this);
@@ -121,7 +162,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +    client.addListener("tabNavigated", this._onTabNavigated);
 +    client.addListener("tabDetached", this._onTabDetached);
-+    client.addListener("cachedMessages", this._onCachedMessages);
 +    client.addListener("pageError", this._onPageError);
 +
 +    client.connect(function(aType, aTraits) {
@@ -129,11 +169,31 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      client.listTabs(function(aResponse) {
 +        dump("onListTabs\n");
 +        let tab = aResponse.tabs[aResponse.selected];
-+        client.attachTab(tab.actor, function(aResponse, aTabClient) {
-+          this.tabClient = aTabClient;
-+          dump("onAttachTab\n");
-+        }.bind(this));
++        client.attachTab(tab.actor, this._onAttachTab);
 +      }.bind(this));
++    }.bind(this));
++  },
++
++  _onAttachTab: function WCCP__onAttachTab(aResponse, aTabClient)
++  {
++    if (aResponse.error) {
++      Cu.reportError("attachTab failed: " + aResponse.error + " " +
++                     aResponse.message);
++      return;
++    }
++
++    this.tabClient = aTabClient;
++    this.webConsoleClient = this.tabClient.webConsoleClient;
++    dump("_onAttachTab\n");
++    this.webConsoleClient.subscribe(["PageError"], function(aResponse) {
++      dump("onSubscribe\n");
++      if (aResponse.error) {
++        Cu.reportError("WebConsoleClient subscribe failed: " + aResponse.error +
++                       " " + aResponse.message);
++        return;
++      }
++      //this.webConsoleClient.getCachedMessages(["PageError"],
++      //                                        this._onCachedMessages);
 +    }.bind(this));
 +  },
 +
@@ -147,14 +207,31 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    dump("WCCP__onTabDetached\n");
 +  },
 +
-+  _onCachedMessages: function WCCP__onCachedMessages()
++  _onCachedMessages: function WCCP__onCachedMessages(aResponse)
 +  {
-+    dump("WCCP__onCachedMessages\n");
++    if (aResponse.error) {
++      Cu.reportError("Web Console getCachedMessages error: " + aResponse.error +
++                     " " + aResponse.message);
++      return;
++    }
++    dump("WCCP__onCachedMessages " + aResponse.messages.length + "\n");
 +  },
 +
-+  _onPageError: function WCCP__onPageError()
++  _onPageError: function WCCP__onPageError(aType, aPacket)
 +  {
-+    dump("WCCP__onPageError\n");
++    this.owner.ui.handlePageError(aPacket.pageError);
++  },
++
++  disconnect: function WCCP_disconnect()
++  {
++    this.client.removeListener("tabNavigated", this._onTabNavigated);
++    this.client.removeListener("tabDetached", this._onTabDetached);
++    this.client.removeListener("pageError", this._onPageError);
++    this.client.close();
++
++    this.client = null;
++    this.tabClient = null;
++    this.webConsoleClient = null;
 +  },
 +};
 +
@@ -166,6 +243,65 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    refreshCommand: function UIC_refreshCommand() {
      var window = HUDService.currentContext();
      if (!window) {
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -526,23 +526,19 @@ WebConsoleFrame.prototype = {
+         break;
+       case "JSTerm:InspectObject":
+         this.jsterm.handleInspectObject(aMessage.json);
+         break;
+       case "WebConsole:ConsoleAPI":
+         this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage,
+                            [aMessage.json]);
+         break;
+-      case "WebConsole:PageError": {
+-        let pageError = aMessage.json.pageError;
+-        let category = Utils.categoryForScriptError(pageError);
+-        this.outputMessage(category, this.reportPageError,
+-                           [category, pageError]);
++      case "WebConsole:PageError":
++        this.handlePageError(aMessage.json.pageError);
+         break;
+-      }
+       case "WebConsole:CachedMessages":
+         this._displayCachedConsoleMessages(aMessage.json.messages);
+         this.owner._onInitComplete();
+         break;
+       case "WebConsole:NetworkActivity":
+         this.handleNetworkActivity(aMessage.json);
+         break;
+       case "WebConsole:FileActivity":
+@@ -1081,16 +1077,29 @@ WebConsoleFrame.prototype = {
+                                       aScriptError.errorMessage,
+                                       aScriptError.sourceName,
+                                       aScriptError.lineNumber, null, null,
+                                       aScriptError.timeStamp);
+     return node;
+   },
+ 
+   /**
++   * Handle PageError objects received from the server. This method outputs the
++   * given error.
++   *
++   * @type nsIScriptError aPageError
++   *       The error received from the server.
++   */
++  handlePageError: function WCF_handlePageError(aPageError)
++  {
++    let category = Utils.categoryForScriptError(aPageError);
++    this.outputMessage(category, this.reportPageError, [category, aPageError]);
++  },
++
++  /**
+    * Log network activity.
+    *
+    * @param object aHttpActivity
+    *        The HTTP activity to log.
+    * @return nsIDOMElement|undefined
+    *         The message element to display in the Web Console output.
+    */
+   logNetActivity: function WCF_logNetActivity(aConnectionId)
 diff --git a/toolkit/devtools/Makefile.in b/toolkit/devtools/Makefile.in
 --- a/toolkit/devtools/Makefile.in
 +++ b/toolkit/devtools/Makefile.in
@@ -196,7 +332,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
    "tabDetached": "tabDetached",
 -  "tabNavigated": "tabNavigated"
 +  "tabNavigated": "tabNavigated",
-+  "pageError": "pageError"
++  "pageError": "pageError",
  };
  
  /**
@@ -205,7 +341,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   */
  const DebugProtocolTypes = {
    "assign": "assign",
-@@ -192,17 +193,18 @@ const DebugProtocolTypes = {
+@@ -192,17 +193,20 @@ const DebugProtocolTypes = {
    "listTabs": "listTabs",
    "nameAndParameters": "nameAndParameters",
    "ownPropertyNames": "ownPropertyNames",
@@ -217,6 +353,8 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 -  "setBreakpoint": "setBreakpoint"
 +  "setBreakpoint": "setBreakpoint",
 +  "getCachedMessages": "getCachedMessages",
++  "subscribe": "subscribe",
++  "unsubscribe": "unsubscribe",
  };
  
  const ROOT_ACTOR_NAME = "root";
@@ -225,7 +363,8 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   * Creates a client for the remote debugging protocol server. This client
   * provides the means to communicate with the server and exchange the messages
   * required by the protocol in a traditional JavaScript API.
-@@ -297,17 +299,17 @@ DebuggerClient.prototype = {
+@@ -296,18 +300,20 @@ DebuggerClient.prototype = {
+    * @param function aOnResponse
     *        Called with the response packet and a TabClient
     *        (which will be undefined on error).
     */
@@ -233,9 +372,11 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
      let self = this;
      let packet = { to: aTabActor, type: DebugProtocolTypes.attach };
      this.request(packet, function(aResponse) {
++      let tabClient = null;
        if (!aResponse.error) {
 -        var tabClient = new TabClient(self, aTabActor);
-+        var tabClient = new TabClient(self, aTabActor, aResponse);
++        let webConsoleActor = aResponse.webConsoleActor;
++        tabClient = new TabClient(self, aTabActor, webConsoleActor);
          self._tabClients[aTabActor] = tabClient;
          self.activeTab = tabClient;
        }
@@ -244,7 +385,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
    },
  
    /**
-@@ -443,23 +445,35 @@ eventSource(DebuggerClient.prototype);
+@@ -443,23 +449,35 @@ eventSource(DebuggerClient.prototype);
   * Creates a tab client for the remote debugging protocol server. This client
   * is a front to the tab actor created in the server side, hiding the protocol
   * details in a traditional JavaScript API.
@@ -253,8 +394,8 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   *        The debugger client parent.
   * @param aActor string
   *        The actor ID for this tab.
-+ * @param aWebConsoleActor object
-+ *        The WebConsoleActor grip object.
++ * @param aWebConsoleActor string
++ *        The Web Console actor ID for this tab.
   */
 -function TabClient(aClient, aActor) {
 +function TabClient(aClient, aActor, aWebConsoleActor) {
@@ -281,7 +422,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     */
    detach: function TabC_detach(aOnResponse) {
      let self = this;
-@@ -473,16 +487,33 @@ TabClient.prototype = {
+@@ -473,16 +491,55 @@ TabClient.prototype = {
          aOnResponse(aResponse);
        }
      });
@@ -290,18 +431,40 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  
  eventSource(TabClient.prototype);
  
-+function WebConsoleClient(aActorGrip, aTabClient) {
-+  this._actor = aActorGrip.actor;
-+  this._pageErrorActor = aActorGrip.pageErrorActor;
++function WebConsoleClient(aActor, aTabClient) {
++  this._actor = aActor;
 +  this._tabClient = aTabClient;
 +}
 +
 +WebConsoleClient.prototype = {
++  get _client() this._tabClient._client,
++
 +  getCachedMessages:
-+  function WCC_getCachedMessages(aOnResponse) {
++  function WCC_getCachedMessages(aTypes, aOnResponse) {
 +    let packet = {
-+      to: this.actor,
++      to: this._actor,
 +      type: DebugProtocolTypes.getCachedMessages,
++      messageTypes: aTypes,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  subscribe:
++  function WCC_subscribe(aSubscribeTo, aOnResponse) {
++    let packet = {
++      to: this._actor,
++      type: DebugProtocolTypes.subscribe,
++      subscribeTo: aSubscribeTo,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  unsubscribe:
++  function WCC_unsubscribe(aUnsubscribeFom, aOnResponse) {
++    let packet = {
++      to: this._actor,
++      type: DebugProtocolTypes.unsubscribe,
++      unsubscribeFrom: aUnsubscribeFrom,
 +    };
 +    this._client.request(packet, aOnResponse);
 +  },
@@ -337,7 +500,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
    return new BrowserRootActor(aConnection);
  }
  
-@@ -299,16 +301,22 @@ BrowserTabActor.prototype = {
+@@ -299,16 +301,19 @@ BrowserTabActor.prototype = {
      dbg_assert(!this._contextPool, "Can't push multiple contexts");
  
      this._contextPool = new ActorPool(this.conn);
@@ -349,9 +512,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
 +
 +    this.webConsoleActor = new WebConsoleActor(this);
 +    this._contextPool.addActor(this.webConsoleActor);
-+    for (let actor of this.webConsoleActor.consoleActors) {
-+      this._contextPool.addActor(actor);
-+    }
    },
  
    /**
@@ -360,7 +520,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
    _addDebuggees: function BTA__addDebuggees(aWindow) {
      this.threadActor.addDebuggee(aWindow);
      let frames = aWindow.frames;
-@@ -323,16 +331,18 @@ BrowserTabActor.prototype = {
+@@ -323,16 +328,18 @@ BrowserTabActor.prototype = {
     */
    _popContext: function BTA_popContext() {
      dbg_assert(!!this._contextPool, "No context to pop.");
@@ -379,7 +539,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
    _detach: function BTA_detach() {
      if (!this.attached) {
        return;
-@@ -353,17 +363,21 @@ BrowserTabActor.prototype = {
+@@ -353,17 +360,21 @@ BrowserTabActor.prototype = {
  
    onAttach: function BTA_onAttach(aRequest) {
      if (this.exited) {
@@ -392,7 +552,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
 +    return {
 +      type: "tabAttached",
 +      threadActor: this.threadActor.actorID,
-+      webConsoleActor: this.webConsoleActor.grip(),
++      webConsoleActor: this.webConsoleActor.actorID,
 +    };
    },
  
@@ -418,18 +578,18 @@ new file mode 100644
 +
 +include $(DEPTH)/config/autoconf.mk
 +
-+TEST_DIRS += tests
++#TEST_DIRS += tests
 +
 +include $(topsrcdir)/config/rules.mk
 +
 +libs::
-+	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
++	# $(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
 +	$(INSTALL) $(IFLAGS1) $(srcdir)/server/*.jsm $(FINAL_TARGET)/modules/devtools
 diff --git a/toolkit/devtools/webconsole/server/dbg-webconsole-actors.jsm b/toolkit/devtools/webconsole/server/dbg-webconsole-actors.jsm
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/server/dbg-webconsole-actors.jsm
-@@ -0,0 +1,270 @@
+@@ -0,0 +1,285 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -458,7 +618,6 @@ new file mode 100644
 +function WebConsoleActor(aTabActor)
 +{
 +  this.tabActor = aTabActor;
-+  this.pageErrorActor = new PageErrorActor(this);
 +}
 +
 +WebConsoleActor.prototype =
@@ -470,23 +629,65 @@ new file mode 100644
 +
 +  grip: function WCA_grip()
 +  {
-+    return {
-+      actor: this.actorID,
-+      pageErrorActor: this.pageErrorActor.actorID,
-+    };
++    return { actor: this.actorID };
 +  },
 +
 +  exit: function WCA_exit()
 +  {
-+    this.pageErrorActor.exit();
-+    delete this.pageErrorActor;
++    if (this.pageErrorListener) {
++      this.pageErrorListener.destroy();
++      this.pageErrorListener = null;
++    }
 +  },
 +
-+  consoleActors: function WCA_consoleActors()
++  onSubscribe: function WCA_onSubscribe(aRequest)
 +  {
-+    return {
-+      pageErrorActor: this.pageErrorActor,
-+    };
++    while (aRequest.subscribeTo.length > 0) {
++      let subscribeTo = aRequest.subscribeTo.shift();
++      switch (subscribeTo) {
++        case "PageError":
++          if (this.pageErrorListener) {
++            return {
++              error: "wrongState",
++              message: "The PageError subscription is already active.",
++            };
++          }
++          this.pageErrorListener = new PageErrorListener(this.contentWindow, this);
++          this.pageErrorListener.init();
++          break;
++        default:
++          return {
++            error: "badParameterType",
++            message: "Unknown value for subscribeTo: " + subscribeTo,
++          };
++      }
++    }
++    return { subscribe: this.actorID };
++  },
++
++  onUnsubscribe: function WCA_onUnsubscribe(aRequest)
++  {
++    while (aRequest.unsubscribeFrom.length > 0) {
++      let unsubscribeFrom = aRequest.unsubscribeFrom.shift();
++      switch (unsubscribeFrom) {
++        case "PageError":
++          if (!this.pageErrorListener) {
++            return {
++              error: "wrongState",
++              message: "There is no subscription for PageError.",
++            };
++          }
++          this.pageErrorListener.destroy();
++          this.pageErrorListener = null;
++          break;
++        default:
++          return {
++            error: "badParameterType",
++            message: "Unknown value for unsubscribeFrom: " + unsubscribeFrom,
++          };
++      }
++    }
++    return { unsubscribe: this.actorID };
 +  },
 +
 +  /**
@@ -497,23 +698,28 @@ new file mode 100644
 +  // TODO: update comment
 +  onGetCachedMessages: function WCA_onGetCachedMessages(aRequest)
 +  {
-+    let pageErrorActor = this.pageErrorActor;
-+    let consoleAPIActor = this.consoleAPIActor;
 +    let types = aRequest.messageTypes;
++    if (!types) {
++      return {
++        error: "missingParameter",
++        message: "The messageTypes parameter is missing.",
++      };
++    }
++
 +    let messages = [];
 +
 +    while (types.length > 0) {
 +      switch (types.shift()) {
 +        case "ConsoleAPI":
-+          if (consoleAPIActor) {
++          if (this.consoleAPIListener) {
 +            messages.push.apply(messages,
-+                                consoleAPIActor.listener.getCachedMessages());
++                                this.consoleAPIListener.getCachedMessages());
 +          }
 +          break;
 +        case "PageError":
-+          if (pageErrorActor) {
++          if (this.pageErrorListener) {
 +            messages.push.apply(messages,
-+                                pageErrorActor.listener.getCachedMessages());
++                                this.pageErrorListener.getCachedMessages());
 +          }
 +          break;
 +      }
@@ -527,43 +733,8 @@ new file mode 100644
 +      messages: messages,
 +    };
 +  },
-+};
 +
-+WebConsoleActor.prototype.requestTypes =
-+{
-+  getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
-+};
-+
-+function PageErrorActor(aWebConsoleActor)
-+{
-+  this.webConsoleActor = aWebConsoleActor;
-+}
-+
-+PageErrorActor.prototype =
-+{
-+  get contentWindow() this.webConsoleActor.contentWindow,
-+  get conn() this.webConsoleActor.conn,
-+
-+  actorPrefix: "PageError",
-+  grip: function PEA_grip()
-+  {
-+    return { actor: this.actorID };
-+  },
-+
-+  onSubscribe: function PEA_onSubscribe(aRequest)
-+  {
-+    this.listener = new PageErrorListener(this.contentWindow, this);
-+    return { subscribe: this.actorID };
-+  },
-+
-+  onUnsubscribe: function PEA_onUnsubscribe(aRequest)
-+  {
-+    this.listener.destroy();
-+    this.listener = null;
-+    return { unsubscribe: this.actorID };
-+  },
-+
-+  onPageError: function PEA_onPageError(aPageError)
++  onPageError: function WCA_onPageError(aPageError)
 +  {
 +    let packet = {
 +      from: this.actorID,
@@ -574,10 +745,11 @@ new file mode 100644
 +  },
 +};
 +
-+PageErrorActor.prototype.requestTypes =
++WebConsoleActor.prototype.requestTypes =
 +{
-+  subscribe: PageErrorActor.prototype.onSubscribe,
-+  unsubscribe: PageErrorActor.prototype.onUnsubscribe,
++  getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
++  subscribe: WebConsoleActor.prototype.onSubscribe,
++  unsubscribe: WebConsoleActor.prototype.onUnsubscribe,
 +};
 +
 +///////////////////////////////////////////////////////////////////////////////
@@ -589,6 +761,7 @@ new file mode 100644
 + * (JavaScript, CSS and more) to the remote Web Console instance.
 + * @constructor
 + */
++// TODO: update comments.
 +function PageErrorListener(aWindow, aListener)
 +{
 +  this.window = aWindow;
@@ -604,6 +777,7 @@ new file mode 100644
 +   */
 +  init: function PEL_init()
 +  {
++    dump("PEL_init\n");
 +    Services.console.registerListener(this);
 +  },
 +
@@ -697,6 +871,49 @@ new file mode 100644
 +   */
 +  destroy: function PEL_destroy()
 +  {
++    dump("PEL_destroy\n");
 +    Services.console.unregisterListener(this);
 +  },
 +};
+diff --git a/toolkit/toolkit-makefiles.sh b/toolkit/toolkit-makefiles.sh
+--- a/toolkit/toolkit-makefiles.sh
++++ b/toolkit/toolkit-makefiles.sh
+@@ -474,16 +474,20 @@ MAKEFILES_xulapp="
+   toolkit/themes/Makefile
+   toolkit/xre/Makefile
+ "
+ 
+ MAKEFILES_debugger="
+   toolkit/devtools/debugger/Makefile
+ "
+ 
++MAKEFILES_webconsole="
++  toolkit/devtools/webconsole/Makefile
++"
++
+ MAKEFILES_jsreflect="
+   toolkit/components/reflect/Makefile
+ "
+ 
+ MAKEFILES_jsductwork="
+   js/ductwork/debugger/Makefile
+ "
+ 
+@@ -526,16 +530,17 @@ add_makefiles "
+   $MAKEFILES_dom
+   $MAKEFILES_editor
+   $MAKEFILES_parser
+   $MAKEFILES_gfx
+   $MAKEFILES_intl
+   $MAKEFILES_xpconnect
+   $MAKEFILES_jsipc
+   $MAKEFILES_debugger
++  $MAKEFILES_webconsole
+   $MAKEFILES_jsreflect
+   $MAKEFILES_jsductwork
+   $MAKEFILES_content
+   $MAKEFILES_smil
+   $MAKEFILES_layout
+   $MAKEFILES_libjar
+   $MAKEFILES_libpref
+   $MAKEFILES_mathml
