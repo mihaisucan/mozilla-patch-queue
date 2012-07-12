@@ -1,14 +1,14 @@
 # HG changeset patch
 # Parent 18074fd65d4b6c0dd6b2f873e1c9aed52912c61f
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1342121948 -10800
+# Date 1342125956 -10800
 
 Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
 diff --git a/browser/devtools/commandline/test/browser_gcli_commands.js b/browser/devtools/commandline/test/browser_gcli_commands.js
 --- a/browser/devtools/commandline/test/browser_gcli_commands.js
 +++ b/browser/devtools/commandline/test/browser_gcli_commands.js
-@@ -7,58 +7,67 @@ let imported = {};
+@@ -7,58 +7,66 @@ let imported = {};
  Components.utils.import("resource:///modules/HUDService.jsm", imported);
  
  const TEST_URI = "data:text/html;charset=utf-8,gcli-commands";
@@ -40,8 +40,7 @@ diff --git a/browser/devtools/commandline/test/browser_gcli_commands.js b/browse
 +    hud = imported.HUDService.getHudReferenceById(aSubject.data);
 +    ok(hud.hudId in imported.HUDService.hudReferences, "console open");
 +
-+    hud._flushCallback = onFlush;
-+    hud.jsterm.execute("pprint(window)");
++    hud.jsterm.execute("pprint(window)", onExecute);
 +  }
 +
 +  Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
@@ -54,7 +53,7 @@ diff --git a/browser/devtools/commandline/test/browser_gcli_commands.js b/browse
  
 -  let hud = imported.HUDService.getHudByWindow(content);
 -  ok(hud.hudId in imported.HUDService.hudReferences, "console open");
-+  function onFlush() {
++  function onExecute() {
 +    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
 +    ok(labels.length > 0, "output for pprint(window)");
  
@@ -759,6 +758,98 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Output a message from the queue.
     *
+@@ -2180,41 +2199,53 @@ JSTerm.prototype = {
+   },
+ 
+   /**
+    * The "JSTerm:EvalResult" message handler. This is the JSTerm execution
+    * result callback which is invoked whenever JavaScript code evaluation
+    * results come from the content process.
+    *
+    * @private
++   * @param function [aCallback]
++   *        Optional function to invoke when the evaluation result is added to
++   *        the output.
+    * @param object aResponse
+    *        The JSTerm:EvalResult message received from the content process. See
+    *        JSTerm.handleEvalRequest() in HUDService-content.js for further
+    *        details.
+    * @param object aRequest
+    *        The JSTerm:EvalRequest message we sent to the content process.
+    * @see JSTerm.handleEvalRequest() in HUDService-content.js
+    */
+   _executeResultCallback:
+-  function JST__executeResultCallback(aResponse, aRequest)
++  function JST__executeResultCallback(aCallback, aResponse, aRequest)
+   {
+     let errorMessage = aResponse.errorMessage;
+     let resultString = aResponse.resultString;
+ 
+     // Hide undefined results coming from JSTerm helper functions.
+     if (!errorMessage &&
+         resultString == "undefined" &&
+         aResponse.helperResult &&
+         !aResponse.inspectable &&
+         !aResponse.helperRawOutput) {
+       return;
+     }
+ 
+     let afterNode = aRequest.outputNode;
+ 
++    if (aCallback) {
++      let oldFlushCallback = this.hud._flushCallback;
++      this.hud._flushCallback = function() {
++        aCallback();
++        oldFlushCallback && oldFlushCallback();
++        this.hud._flushCallback = oldFlushCallback;
++      }.bind(this);
++    }
++
+     if (aResponse.errorMessage) {
+       this.writeOutput(aResponse.errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
+                        afterNode, aResponse.timestamp);
+     }
+     else if (aResponse.inspectable) {
+       let node = this.writeOutputJS(aResponse.resultString,
+                                     this._evalOutputClick.bind(this, aResponse),
+                                     afterNode, aResponse.timestamp);
+@@ -2227,31 +2258,32 @@ JSTerm.prototype = {
+   },
+ 
+   /**
+    * Execute a string. Execution happens asynchronously in the content process.
+    *
+    * @param string [aExecuteString]
+    *        The string you want to execute. If this is not provided, the current
+    *        user input is used - taken from |this.inputNode.value|.
++   * @param function [aCallback]
++   *        Optional function to invoke when the result is displayed.
+    */
+-  execute: function JST_execute(aExecuteString)
++  execute: function JST_execute(aExecuteString, aCallback)
+   {
+     // attempt to execute the content of the inputNode
+     aExecuteString = aExecuteString || this.inputNode.value;
+     if (!aExecuteString) {
+       this.writeOutput("no value to execute", CATEGORY_OUTPUT, SEVERITY_LOG);
+       return;
+     }
+ 
+     let node = this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
+ 
+-    let messageToContent =
+-      this.evalInContentSandbox(aExecuteString,
+-                                this._executeResultCallback.bind(this));
++    let onResult = this._executeResultCallback.bind(this, aCallback);
++    let messageToContent = this.evalInContentSandbox(aExecuteString, onResult);
+     messageToContent.outputNode = node;
+ 
+     this.history.push(aExecuteString);
+     this.historyIndex++;
+     this.historyPlaceHolder = this.history.length;
+     this.setInputValue("");
+     this.clearCompletion();
+   },
 diff --git a/toolkit/devtools/Makefile.in b/toolkit/devtools/Makefile.in
 --- a/toolkit/devtools/Makefile.in
 +++ b/toolkit/devtools/Makefile.in
