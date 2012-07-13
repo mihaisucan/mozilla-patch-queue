@@ -1,0 +1,139 @@
+# HG changeset patch
+# Parent 40821ab51232f219bd9bd7dd33ea835a6bbf3281
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1342201425 -10800
+
+Bug 773466 - Console will stop displaying output
+
+diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
+--- a/browser/devtools/webconsole/HUDService-content.js
++++ b/browser/devtools/webconsole/HUDService-content.js
+@@ -1171,22 +1171,23 @@ let ConsoleAPIObserver = {
+           Array.map(aOriginalMessage.arguments || [],
+                     this._formatObject.bind(this));
+         break;
+ 
+       case "dir": {
+         aRemoteMessage.objectsCacheId = Manager.sequenceId;
+         aRemoteMessage.argumentsToString = [];
+         let mapFunction = function(aItem) {
+-          aRemoteMessage.argumentsToString.push(this._formatObject(aItem));
++          let formattedObject = this._formatObject(aItem);
++          aRemoteMessage.argumentsToString.push(formattedObject);
+           if (WebConsoleUtils.isObjectInspectable(aItem)) {
+             return JSTerm.prepareObjectForRemote(aItem,
+                                                  aRemoteMessage.objectsCacheId);
+           }
+-          return aItem;
++          return formattedObject;
+         }.bind(this);
+ 
+         aRemoteMessage.apiMessage.arguments =
+           Array.map(aOriginalMessage.arguments || [], mapFunction);
+         break;
+       }
+       default:
+         Cu.reportError("Unknown Console API log level: " +
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -4231,17 +4231,17 @@ ConsoleUtils = {
+       node.appendChild(bodyContainer);
+       node.classList.add("webconsole-msg-inspector");
+       // Create the treeView object.
+       let treeView = node.propertyTreeView = new PropertyTreeView();
+ 
+       treeView.data = {
+         rootCacheId: body.cacheId,
+         panelCacheId: body.cacheId,
+-        remoteObject: body.remoteObject,
++        remoteObject: Array.isArray(body.remoteObject) ? body.remoteObject : [],
+         remoteObjectProvider: body.remoteObjectProvider,
+       };
+ 
+       tree.setAttribute("rows", treeView.rowCount);
+     }
+     else {
+       node.appendChild(bodyNode);
+     }
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -106,16 +106,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_webconsole_bug_658368_time_methods.js \
+ 	browser_webconsole_bug_622303_persistent_filters.js \
+ 	browser_webconsole_window_zombie.js \
+ 	browser_cached_messages.js \
+ 	browser_bug664688_sandbox_update_after_navigation.js \
+ 	browser_webconsole_menustatus.js \
+ 	browser_result_format_as_string.js \
+ 	browser_webconsole_bug_737873_mixedcontent.js \
++	browser_output_breaks_after_console_dir_uninspectable.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ MOCHITEST_BROWSER_FILES += \
+ 	test-console.html \
+ 	test-network.html \
+ 	test-network-request.html \
+ 	test-mutation.html \
+diff --git a/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js b/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js
+@@ -0,0 +1,55 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Make sure that the Web Console output does not break after we try to call
++// console.dir() for objects that are not inspectable.
++
++function test()
++{
++  waitForExplicitFinish();
++
++  addTab("data:text/html,test for bug 773466");
++
++  gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
++    gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
++    openConsole(null, performTest);
++  }, true);
++}
++
++function performTest(hud)
++{
++  hud.jsterm.clearOutput(true);
++
++  hud.jsterm.execute("console.log('fooBug773466a')");
++  hud.jsterm.execute("console.dir(function funBug773466(){})");
++  waitForSuccess({
++    name: "eval results are shown",
++    validatorFn: function()
++    {
++      return hud.outputNode.textContent.indexOf("funBug773466") > -1;
++    },
++    successFn: function()
++    {
++      isnot(hud.outputNode.textContent.indexOf("fooBug773466a"), -1,
++            "fooBug773466a shows");
++      ok(hud.outputNode.querySelector(".webconsole-msg-inspector"),
++         "the console.dir() tree shows");
++
++      hud.jsterm.execute("console.log('fooBug773466b')");
++
++      waitForSuccess(waitForAnotherConsoleLogCall);
++    },
++    failureFn: finishTest,
++  });
++
++  let waitForAnotherConsoleLogCall = {
++    name: "eval result after console.dir()",
++    validatorFn: function()
++    {
++      return hud.outputNode.textContent.indexOf("fooBug773466b") > -1;
++    },
++    successFn: finishTest,
++    failureFn: finishTest,
++  };
++}
