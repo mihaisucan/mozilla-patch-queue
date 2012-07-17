@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 5a7031ca9c33a86d70efb754571c8e0b161f594b
+# Parent efc13951170cbe326708b826e1652c4e5c7334f7
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1342211492 -10800
+# Date 1342445072 -10800
 
 Bug 676722 - The output of console.log(object) isn't expandable/inspectable in the Web Console
 
@@ -148,7 +148,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let filename = WebConsoleUtils.abbreviateSourceURL(args[0].filename);
          let functionName = args[0].functionName ||
                             l10n.getStr("stacktrace.anonymousFunction");
-@@ -1055,16 +1060,66 @@ WebConsoleFrame.prototype = {
+@@ -1055,16 +1060,67 @@ WebConsoleFrame.prototype = {
          node.querySelector("tree").view = node.propertyTreeView;
        };
      }
@@ -163,21 +163,22 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   * @private
 +   * @param nsIDOMNode aMessage
 +   *        The message element for which we live.
-+   * @param string aTitle
-+   *        The panel title for the object inspector.
++   * @param nsIDOMNode aAnchor
++   *        The object inspector anchor element. This is the clickbable element
++   *        in the console.log message we display.
 +   * @param array aRemoteObject
 +   *        The remote object representation.
 +   */
 +  _consoleLogClick:
-+  function WCF__consoleLogClick(aMessage, aTitle, aRemoteObject)
++  function WCF__consoleLogClick(aMessage, aAnchor, aRemoteObject)
 +  {
-+    if (aMessage._panelOpen) {
++    if (aAnchor._panelOpen) {
 +      return;
 +    }
 +
 +    let options = {
-+      title: aTitle,
-+      anchor: aMessage,
++      title: aAnchor.textContent,
++      anchor: aAnchor,
 +
 +      // Data to inspect.
 +      data: {
@@ -215,7 +216,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *         The message element to display in the Web Console output.
     */
    reportPageError: function WCF_reportPageError(aCategory, aScriptError)
-@@ -1813,29 +1868,41 @@ WebConsoleFrame.prototype = {
+@@ -1813,29 +1869,41 @@ WebConsoleFrame.prototype = {
      // Store the body text, since it is needed later for the property tree
      // case.
      let body = aBody;
@@ -268,7 +269,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      repeatNode.classList.add("webconsole-msg-repeat");
      repeatContainer.appendChild(repeatNode);
  
-@@ -1848,18 +1915,16 @@ WebConsoleFrame.prototype = {
+@@ -1848,18 +1916,16 @@ WebConsoleFrame.prototype = {
  
      // Create the source location (e.g. www.example.com:6) that sits on the
      // right side of the message, if applicable.
@@ -287,7 +288,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      node.appendChild(timestampNode);
      node.appendChild(iconContainer);
-@@ -1910,16 +1975,52 @@ WebConsoleFrame.prototype = {
+@@ -1910,16 +1976,68 @@ WebConsoleFrame.prototype = {
      }
  
      node.setAttribute("id", "console-msg-" + gSequenceId());
@@ -312,10 +313,26 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  function WCF__makeConsoleLogMessageBody(aMessage, aContainer, aBody)
 +  {
 +    aMessage._evalCacheId = aBody.cacheId;
++
++    Object.defineProperty(aMessage, "_panelOpen", {
++      get: function() {
++        let nodes = aContainer.querySelectorAll(".hud-clickable");
++        return Array.prototype.some.call(nodes, function(aNode) {
++          return aNode._panelOpen;
++        });
++      },
++      enumerable: true,
++      configurable: false
++    });
++
 +    aBody.remoteObjects.forEach(function(aItem, aIndex) {
++      if (aContainer.lastChild) {
++        aContainer.appendChild(this.document.createTextNode(" "));
++      }
++
 +      let text = aBody.argsToString[aIndex];
 +      if (!Array.isArray(aItem)) {
-+        aContainer.appendChild(this.document.createTextNode(text + " "));
++        aContainer.appendChild(this.document.createTextNode(text));
 +        return;
 +      }
 +
@@ -325,7 +342,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      elem.appendChild(this.document.createTextNode(text));
 +
 +      this._addMessageLinkCallback(elem,
-+        this._consoleLogClick.bind(this, aMessage, text, aItem));
++        this._consoleLogClick.bind(this, aMessage, elem, aItem));
 +
 +      aContainer.appendChild(elem);
 +    }, this);
@@ -340,7 +357,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param number aSourceLine [optional]
     *        The line number on which the error occurred. If zero or omitted,
     *        there is no line number associated with this message.
-@@ -2016,16 +2117,30 @@ WebConsoleFrame.prototype = {
+@@ -2016,16 +2134,30 @@ WebConsoleFrame.prototype = {
      }
      else {
        linkNode = aNode.querySelector(".webconsole-msg-body");
@@ -374,7 +391,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 --- a/dom/base/ConsoleAPI.js
 +++ b/dom/base/ConsoleAPI.js
-@@ -304,46 +304,63 @@ ConsoleAPI.prototype = {
+@@ -330,46 +330,63 @@ ConsoleAPI.prototype = {
  
      Services.obs.notifyObservers(consoleEvent, "console-api-log-event",
                                   this._outerID);
