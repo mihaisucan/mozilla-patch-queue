@@ -1,0 +1,249 @@
+# HG changeset patch
+# Parent 92cd413e0eeafae89207a5702f253d7f37fceeab
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1342529885 -10800
+
+Bug 669011 - [RTL] Scratchpad doesn't allow ctrl-shift-x to switch text direction; try: -b do -p linux,linuxqt,linux64,macosx64,win32,win64,macosx -u none -t none --post-to-bugzilla Bug 669011
+
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -130,16 +130,22 @@ const DEFAULT_KEYBINDINGS = [
+     code: Ci.nsIDOMKeyEvent.DOM_VK_OPEN_BRACKET,
+     accel: true,
+   },
+   {
+     action: "Move to Bracket Closing",
+     code: Ci.nsIDOMKeyEvent.DOM_VK_CLOSE_BRACKET,
+     accel: true,
+   },
++  {
++    action: "Switch Text Direction",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_X,
++    accel: true,
++    shift: true,
++  },
+ ];
+ 
+ if (Services.appinfo.OS == "WINNT" ||
+     Services.appinfo.OS == "Linux") {
+   DEFAULT_KEYBINDINGS.push({
+     action: "redo",
+     code: Ci.nsIDOMKeyEvent.DOM_VK_Y,
+     accel: true,
+@@ -197,16 +203,17 @@ SourceEditor.prototype = {
+   _mode: null,
+   _expandTab: null,
+   _tabSize: null,
+   _iframeWindow: null,
+   _eventTarget: null,
+   _eventListenersQueue: null,
+   _contextMenu: null,
+   _dirty: false,
++  _rtlText: false,
+ 
+   /**
+    * The Source Editor user interface manager.
+    * @type object
+    *       An instance of the SourceEditorUI.
+    */
+   ui: null,
+ 
+@@ -320,25 +327,33 @@ SourceEditor.prototype = {
+     window.initializeOrion();
+ 
+     let TextModel = window.require("orion/textview/textModel").TextModel;
+     let TextView = window.require("orion/textview/textView").TextView;
+ 
+     this._expandTab = config.expandTab;
+     this._tabSize = config.tabSize;
+ 
++    if ("rtlText" in config) {
++      this._rtlText = !!config.rtlText;
++    }
++
++    let themeClass = "mozilla" +
++                     (config.readOnly ? " readonly" : "") +
++                     (this.rtlText ? " rtlText" : "");
++
+     this._model = new TextModel(config.initialText);
+     this._view = new TextView({
+       model: this._model,
+       parent: "editor",
+       tabSize: this._tabSize,
+       expandTab: this._expandTab,
+       readonly: config.readOnly,
+       tabMode: "tabMode" in config ? config.tabMode : !config.readOnly,
+-      themeClass: "mozilla" + (config.readOnly ? " readonly" : ""),
++      themeClass: themeClass,
+     });
+ 
+     if (config.highlightCurrentLine || Services.appinfo.OS == "Linux") {
+       this.addEventListener(SourceEditor.EVENTS.SELECTION,
+                             this._onOrionSelection);
+     }
+     this.addEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
+                            this._onTextChanged);
+@@ -418,16 +433,17 @@ SourceEditor.prototype = {
+       "Find...": [this.ui.find, this.ui],
+       "Find Next Occurrence": [this.ui.findNext, this.ui],
+       "Find Previous Occurrence": [this.ui.findPrevious, this.ui],
+       "Goto Line...": [this.ui.gotoLine, this.ui],
+       "Move Lines Down": [this._moveLines, this],
+       "Comment/Uncomment": [this._doCommentUncomment, this],
+       "Move to Bracket Opening": [this._moveToBracketOpening, this],
+       "Move to Bracket Closing": [this._moveToBracketClosing, this],
++      "Switch Text Direction": [this._switchTextDirection, this],
+     };
+ 
+     for (let name in actions) {
+       let action = actions[name];
+       this._view.setAction(name, action[0].bind(action[1]));
+     }
+ 
+     this._view.setAction("Move Lines Up", this._moveLines.bind(this, true));
+@@ -1328,16 +1344,22 @@ SourceEditor.prototype = {
+ 
+     if (matchingIndex > -1) {
+       this.setCaretOffset(matchingIndex);
+     }
+ 
+     return true;
+   },
+ 
++  _switchTextDirection: function SE__switchTextDirection()
++  {
++    this.rtlText = !this.rtlText;
++    return true;
++  },
++
+   /**
+    * Add an event listener to the editor. You can use one of the known events.
+    *
+    * @see SourceEditor.EVENTS
+    *
+    * @param string aEventType
+    *        The event type you want to listen for.
+    * @param function aCallback
+@@ -1844,29 +1866,48 @@ SourceEditor.prototype = {
+    * Setter for the read-only state of the editor.
+    * @param boolean aValue
+    *        Tells if you want the editor to read-only or not.
+    */
+   set readOnly(aValue)
+   {
+     this._view.setOptions({
+       readonly: aValue,
+-      themeClass: "mozilla" + (aValue ? " readonly" : ""),
+     });
++    this._updateThemeClass();
+   },
+ 
+   /**
+    * Getter for the read-only state of the editor.
+    * @type boolean
+    */
+   get readOnly()
+   {
+     return this._view.getOptions("readonly");
+   },
+ 
++  set rtlText(aValue)
++  {
++    this._rtlText = !!aValue;
++    this._updateThemeClass();
++  },
++
++  get rtlText() this._rtlText,
++
++  _updateThemeClass: function SE__updateThemeClass()
++  {
++    let themeClass = "mozilla" +
++                     (this.readOnly ? " readonly" : "") +
++                     (this.rtlText ? " rtlText" : "");
++
++    this._view.setOptions({ themeClass: themeClass });
++
++    return themeClass;
++  },
++
+   /**
+    * Set the current debugger location at the given line index. This is useful in
+    * a debugger or in any other context where the user needs to track the
+    * current state, where a debugger-like environment is at.
+    *
+    * @param number aLineIndex
+    *        Line index of the current debugger location, starting from 0.
+    *        Use any negative number to clear the current location.
+diff --git a/browser/themes/gnomestripe/devtools/orion.css b/browser/themes/gnomestripe/devtools/orion.css
+--- a/browser/themes/gnomestripe/devtools/orion.css
++++ b/browser/themes/gnomestripe/devtools/orion.css
+@@ -18,16 +18,20 @@ body {
+   background: #f0f0ff; /* Background of the editor */
+   padding-left: 4px;
+ }
+ 
+ .readonly > .view {
+   background: #f0f0ff;
+ }
+ 
++.rtlText .textviewContent {
++  direction: rtl;
++}
++
+ .ruler {
+   background: #cddae5;
+   color: #7a8a99;
+ }
+ .ruler.annotations {
+   width: 16px;
+   padding-left: 4px;
+ }
+diff --git a/browser/themes/pinstripe/devtools/orion.css b/browser/themes/pinstripe/devtools/orion.css
+--- a/browser/themes/pinstripe/devtools/orion.css
++++ b/browser/themes/pinstripe/devtools/orion.css
+@@ -18,16 +18,20 @@ body {
+   background: #f0f0ff; /* Background of the editor */
+   padding-left: 4px;
+ }
+ 
+ .readonly > .view {
+   background: #f0f0ff;
+ }
+ 
++.rtlText .textviewContent {
++  direction: rtl;
++}
++
+ .ruler {
+   background: #cddae5;
+   color: #7a8a99;
+ }
+ .ruler.annotations {
+   width: 16px;
+   padding-left: 4px;
+ }
+diff --git a/browser/themes/winstripe/devtools/orion.css b/browser/themes/winstripe/devtools/orion.css
+--- a/browser/themes/winstripe/devtools/orion.css
++++ b/browser/themes/winstripe/devtools/orion.css
+@@ -18,16 +18,20 @@ body {
+   background: #f0f0ff; /* Background of the editor */
+   padding-left: 4px;
+ }
+ 
+ .readonly > .view {
+   background: #f0f0ff;
+ }
+ 
++.rtlText .textviewContent {
++  direction: rtl;
++}
++
+ .ruler {
+   background: #cddae5;
+   color: #7a8a99;
+ }
+ .ruler.annotations {
+   width: 16px;
+   padding-left: 4px;
+ }
