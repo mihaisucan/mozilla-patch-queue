@@ -1,10 +1,84 @@
 # HG changeset patch
 # Parent c3475b69ddd6fc194f34e3f60fbdbae3b609a56e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1342643503 -10800
+# Date 1342790100 -10800
 
 Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
+diff --git a/browser/devtools/commandline/test/browser_gcli_calllog.js b/browser/devtools/commandline/test/browser_gcli_calllog.js
+--- a/browser/devtools/commandline/test/browser_gcli_calllog.js
++++ b/browser/devtools/commandline/test/browser_gcli_calllog.js
+@@ -37,38 +37,46 @@ function testCallLogStatus() {
+ 
+ function testCallLogExec() {
+   DeveloperToolbarTest.exec({
+     typed: "calllog stop",
+     args: { },
+     outputMatch: /No call logging/,
+   });
+ 
++  let hud = null;
++  function onWebConsoleOpen(aSubject) {
++    Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
++
++    aSubject.QueryInterface(Ci.nsISupportsString);
++    hud = imported.HUDService.getHudReferenceById(aSubject.data);
++    ok(hud.hudId in imported.HUDService.hudReferences, "console open");
++
++    DeveloperToolbarTest.exec({
++      typed: "calllog stop",
++      args: { },
++      outputMatch: /Stopped call logging/,
++    });
++
++    DeveloperToolbarTest.exec({
++      typed: "console clear",
++      args: {},
++      blankOutput: true,
++    });
++
++    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
++    is(labels.length, 0, "no output in console");
++
++    DeveloperToolbarTest.exec({
++      typed: "console close",
++      args: {},
++      blankOutput: true,
++    });
++  }
++
++  Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
++
+   DeveloperToolbarTest.exec({
+     typed: "calllog start",
+     args: { },
+     outputMatch: /Call logging started/,
+   });
+-
+-  let hud = imported.HUDService.getHudByWindow(content);
+-  ok(hud.hudId in imported.HUDService.hudReferences, "console open");
+-
+-  DeveloperToolbarTest.exec({
+-    typed: "calllog stop",
+-    args: { },
+-    outputMatch: /Stopped call logging/,
+-  });
+-
+-  DeveloperToolbarTest.exec({
+-    typed: "console clear",
+-    args: {},
+-    blankOutput: true,
+-  });
+-
+-  let labels = hud.jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+-  is(labels.length, 0, "no output in console");
+-
+-  DeveloperToolbarTest.exec({
+-    typed: "console close",
+-    args: {},
+-    blankOutput: true,
+-  });
+ }
 diff --git a/browser/devtools/commandline/test/browser_gcli_commands.js b/browser/devtools/commandline/test/browser_gcli_commands.js
 --- a/browser/devtools/commandline/test/browser_gcli_commands.js
 +++ b/browser/devtools/commandline/test/browser_gcli_commands.js
@@ -88,7 +162,7 @@ diff --git a/browser/devtools/commandline/test/browser_gcli_commands.js b/browse
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -19,16 +19,21 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+@@ -19,16 +19,24 @@ XPCOMUtils.defineLazyModuleGetter(this, 
  
  XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
                                    "resource:///modules/WebConsoleUtils.jsm");
@@ -102,6 +176,9 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +XPCOMUtils.defineLazyModuleGetter(this, "DebuggerClient",
 +                                  "resource://gre/modules/devtools/dbg-client.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleClient",
++                                  "resource://gre/modules/devtools/dbg-client.jsm");
  
  var EXPORTED_SYMBOLS = ["HUDService"];
  
@@ -110,26 +187,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    function log(aMessage) {
      var _msg = aMessagePrefix + " " + aMessage + "\n";
      dump(_msg);
-@@ -61,16 +66,18 @@ const DEFAULT_CONSOLE_HEIGHT = 0.33;
- 
- // This script is inserted into the content process.
- const CONTENT_SCRIPT_URL = "chrome://browser/content/devtools/HUDService-content.js";
- 
- // The Web Console UI is loaded in an iframe. This constant points to the file
- // to load in the iframe.
- const UI_IFRAME_URL = "chrome://browser/content/devtools/webconsole.xul";
- 
-+const WEBCONSOLE_ACTORS_URL = "chrome://global/content/devtools/dbg-webconsole-actors.js";
-+
- ///////////////////////////////////////////////////////////////////////////
- //// The HUD service
- 
- function HUD_SERVICE()
- {
-   // These methods access the "this" object, but they're registered as
-   // event listeners. So we hammer in the "this" binding.
-   this.onTabClose = this.onTabClose.bind(this);
-@@ -572,28 +579,47 @@ WebConsole.prototype = {
+@@ -572,28 +580,47 @@ WebConsole.prototype = {
    get outputNode()
    {
      return this.ui ? this.ui.outputNode : null;
@@ -177,7 +235,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @private
     */
    _initUI: function WC__initUI()
-@@ -621,16 +647,21 @@ WebConsole.prototype = {
+@@ -621,16 +648,21 @@ WebConsole.prototype = {
     */
    _onIframeLoad: function WC__onIframeLoad()
    {
@@ -199,7 +257,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @private
     */
    _createOwnWindowPanel: function WC__createOwnWindowPanel()
-@@ -918,31 +949,44 @@ WebConsole.prototype = {
+@@ -918,31 +950,44 @@ WebConsole.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
@@ -246,7 +304,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    _onInitComplete: function WC__onInitComplete()
    {
-@@ -1052,16 +1096,20 @@ WebConsole.prototype = {
+@@ -1052,16 +1097,20 @@ WebConsole.prototype = {
    destroy: function WC_destroy()
    {
      this.sendMessageToContent("WebConsole:Destroy", {});
@@ -267,7 +325,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let panels = popupset.querySelectorAll("panel[hudId=" + this.hudId + "]");
      for (let panel of panels) {
        if (panel != this.consolePanel) {
-@@ -1086,16 +1134,160 @@ WebConsole.prototype = {
+@@ -1086,16 +1135,153 @@ WebConsole.prototype = {
      }
  
      if (this.splitter.parentNode) {
@@ -316,7 +374,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      // Always allow connections from nsIPipe transports.
 +      DebuggerServer.init(function () { return true; });
 +      DebuggerServer.addBrowserActors();
-+      DebuggerServer.addActors(WEBCONSOLE_ACTORS_URL);
 +    }
 +  },
 +
@@ -333,51 +390,46 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +    client.addListener("pageError", this._onPageError);
 +
++    let listeners = [WebConsoleClient.prototype.LISTENERS.PageError];
++
 +    client.connect(function(aType, aTraits) {
 +      client.listTabs(function(aResponse) {
 +        let tab = aResponse.tabs[aResponse.selected];
-+        client.attachTab(tab.actor, this._onAttachTab.bind(this, aCallback));
++        client.attachConsole(tab.consoleActor, listeners,
++                             this._onAttachConsole.bind(this, aCallback));
 +      }.bind(this));
 +    }.bind(this));
 +  },
 +
 +  /**
-+   * The "attachTab" response handler.
++   * The "attachConsole" response handler.
 +   *
 +   * @private
 +   * @param function [aCallback]
 +   *        Optional function to invoke once the connection is established.
 +   * @param object aResponse
 +   *        The JSON response object received from the server.
-+   * @param object aTabClient
-+   *        The TabClient instance for the attached tab.
++   * @param object aWebConsoleClient
++   *        The WebConsoleClient instance for the attached console, for the
++   *        specific tab we work with.
 +   */
-+  _onAttachTab: function WCCP__onAttachTab(aCallback, aResponse, aTabClient)
++  _onAttachConsole:
++  function WCCP__onAttachConsole(aCallback, aResponse, aWebConsoleClient)
 +  {
 +    if (aResponse.error) {
-+      Cu.reportError("attachTab failed: " + aResponse.error + " " +
++      Cu.reportError("attachConsole failed: " + aResponse.error + " " +
 +                     aResponse.message);
 +      return;
 +    }
 +
-+    this.tabClient = aTabClient;
-+    this.webConsoleClient = this.tabClient.webConsoleClient;
++    this.webConsoleClient = aWebConsoleClient;
 +
-+    let listeners = [this.webConsoleClient.LISTENERS.PageError];
++    this.connected = true;
++    aCallback && aCallback();
 +
-+    this.webConsoleClient.startListeners(listeners, function(aResponse) {
-+      if (aResponse.error) {
-+        Cu.reportError("WebConsoleClient startListeners failed: " +
-+                       aResponse.error + " " + aResponse.message);
-+        return;
-+      }
-+      this.connected = true;
-+      aCallback && aCallback();
-+
-+      //let msg = [this.webConsoleClient.CACHED_MESSAGES.PageError];
-+      //this.webConsoleClient.getCachedMessages(msgs,
-+      //                                        this._onCachedMessages);
-+    }.bind(this));
++    //let msg = [this.webConsoleClient.CACHED_MESSAGES.PageError];
++    //this.webConsoleClient.getCachedMessages(msgs,
++    //                                        this._onCachedMessages);
 +  },
 +
 +  // TODO: This is almost working. Need to implement ConsoleAPI support in the
@@ -414,7 +466,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    this.client.close();
 +
 +    this.client = null;
-+    this.tabClient = null;
 +    this.webConsoleClient = null;
 +    this.connected = false;
 +  },
@@ -855,26 +906,30 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.setInputValue("");
      this.clearCompletion();
    },
-diff --git a/toolkit/devtools/Makefile.in b/toolkit/devtools/Makefile.in
---- a/toolkit/devtools/Makefile.in
-+++ b/toolkit/devtools/Makefile.in
-@@ -6,11 +6,12 @@ DEPTH     = ../..
- topsrcdir = @top_srcdir@
- srcdir    = @srcdir@
- VPATH     = @srcdir@
- 
- include $(topsrcdir)/config/config.mk
- 
- PARALLEL_DIRS += \
-   debugger \
-+  webconsole \
-   $(NULL)
- 
- include $(topsrcdir)/config/rules.mk
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
-@@ -169,17 +169,18 @@ const ThreadStateTypes = {
+@@ -7,17 +7,18 @@
+ "use strict";
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ var EXPORTED_SYMBOLS = ["DebuggerTransport",
+                         "DebuggerClient",
+-                        "debuggerSocketConnect"];
++                        "debuggerSocketConnect",
++                        "WebConsoleClient"];
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/NetUtil.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "socketTransportService",
+                                    "@mozilla.org/network/socket-transport-service;1",
+                                    "nsISocketTransportService");
+@@ -169,17 +170,18 @@ const ThreadStateTypes = {
  
  /**
   * Set of protocol messages that are sent by the server without a prior request
@@ -894,7 +949,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   */
  const DebugProtocolTypes = {
    "assign": "assign",
-@@ -192,17 +193,20 @@ const DebugProtocolTypes = {
+@@ -192,32 +194,34 @@ const DebugProtocolTypes = {
    "listTabs": "listTabs",
    "nameAndParameters": "nameAndParameters",
    "ownPropertyNames": "ownPropertyNames",
@@ -906,8 +961,6 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 -  "setBreakpoint": "setBreakpoint"
 +  "setBreakpoint": "setBreakpoint",
 +  "getCachedMessages": "getCachedMessages",
-+  "startListeners": "startListeners",
-+  "stopListeners": "stopListeners",
  };
  
  const ROOT_ACTOR_NAME = "root";
@@ -916,7 +969,70 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   * Creates a client for the remote debugging protocol server. This client
   * provides the means to communicate with the server and exchange the messages
   * required by the protocol in a traditional JavaScript API.
-@@ -296,18 +300,19 @@ DebuggerClient.prototype = {
+  */
+ function DebuggerClient(aTransport)
+ {
+   this._transport = aTransport;
+   this._transport.hooks = this;
+   this._threadClients = {};
+   this._tabClients = {};
++  this._consoleClients = {};
+ 
+   this._pendingRequests = [];
+   this._activeRequests = {};
+   this._eventsEnabled = true;
+ }
+ 
+ DebuggerClient.prototype = {
+   /**
+@@ -263,20 +267,42 @@ DebuggerClient.prototype = {
+     let detachTab = function _detachTab() {
+       if (this.activeTab) {
+         this.activeTab.detach(closeTransport);
+       } else {
+         closeTransport();
+       }
+     }.bind(this);
+ 
+-    if (this.activeThread) {
+-      this.activeThread.detach(detachTab);
+-    } else {
+-      detachTab();
++    let detachThread = function _detachThread() {
++      if (this.activeThread) {
++        this.activeThread.detach(detachTab);
++      } else {
++        detachTab();
++      }
++    }.bind(this);
++
++    let consolesClosed = 0;
++    let consolesToClose = 0;
++
++    let onConsoleClose = function _onConsoleClose() {
++      consolesClosed++;
++      if (consolesClosed >= consolesToClose) {
++        this._consoleClients = {};
++        detachThread();
++      }
++    }.bind(this);
++
++    for each (let client in this._consoleClients) {
++      consolesToClose++;
++      client.close(onConsoleClose);
++    }
++
++    if (!consolesToClose) {
++      detachThread();
+     }
+   },
+ 
+   /**
+    * List the open tabs.
+    *
+    * @param function aOnResponse
+    *        Called with the response packet.
+@@ -296,26 +322,57 @@ DebuggerClient.prototype = {
     * @param function aOnResponse
     *        Called with the response packet and a TabClient
     *        (which will be undefined on error).
@@ -925,10 +1041,10 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
      let self = this;
      let packet = { to: aTabActor, type: DebugProtocolTypes.attach };
      this.request(packet, function(aResponse) {
-+      let tabClient = null;
++      let tabClient;
        if (!aResponse.error) {
 -        var tabClient = new TabClient(self, aTabActor);
-+        tabClient = new TabClient(self, aTabActor, aResponse.webConsoleActor);
++        tabClient = new TabClient(self, aTabActor);
          self._tabClients[aTabActor] = tabClient;
          self.activeTab = tabClient;
        }
@@ -937,51 +1053,45 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
    },
  
    /**
-@@ -443,23 +448,42 @@ eventSource(DebuggerClient.prototype);
-  * Creates a tab client for the remote debugging protocol server. This client
-  * is a front to the tab actor created in the server side, hiding the protocol
-  * details in a traditional JavaScript API.
-  *
-  * @param aClient DebuggerClient
-  *        The debugger client parent.
-  * @param aActor string
-  *        The actor ID for this tab.
-+ * @param aWebConsoleActor string
-+ *        The Web Console actor ID for this tab.
-  */
--function TabClient(aClient, aActor) {
-+function TabClient(aClient, aActor, aWebConsoleActor) {
-   this._client = aClient;
-   this._actor = aActor;
-+  this._webConsoleActor = aWebConsoleActor;
- }
- 
- TabClient.prototype = {
-+  _webConsoleClient: null,
-+
-+  /**
-+   * The WebConsoleClient getter. This creates a WebConsoleClient instance
-+   * lazily, only when requested.
++   * Attach to a Web Console actor.
 +   *
-+   * @see WebConsoleClient
-+   * @type object
++   * @param string aConsoleActor
++   *        The actor ID for the console actor to attach to.
++   * @param array aListeners
++   *        The console listeners you want to start.
++   * @param function aOnResponse
++   *        Called with the response packet and a WebConsoleClient
++   *        instance (which will be undefined on error).
 +   */
-+  get webConsoleClient() {
-+    if (!this._webConsoleClient) {
-+      this._webConsoleClient = new WebConsoleClient(this._webConsoleActor, this);
-+    }
-+    return this._webConsoleClient;
++  attachConsole:
++  function DC_attachConsole(aConsoleActor, aListeners, aOnResponse) {
++    let self = this;
++    let packet = {
++      to: aConsoleActor,
++      type: DebugProtocolTypes.attach,
++      listeners: aListeners,
++    };
++
++    this.request(packet, function(aResponse) {
++      let consoleClient;
++      if (!aResponse.error) {
++        consoleClient = new WebConsoleClient(self, aConsoleActor);
++        self._consoleClients[aConsoleActor] = consoleClient;
++      }
++      aOnResponse(aResponse, consoleClient);
++    });
 +  },
 +
-   /**
-    * Detach the client from the tab actor.
++  /**
+    * Attach to a thread actor.
     *
+    * @param string aThreadActor
+    *        The actor ID for the thread to attach.
     * @param function aOnResponse
-    *        Called with the response packet.
+    *        Called with the response packet and a ThreadClient
+    *        (which will be undefined on error).
     */
-   detach: function TabC_detach(aOnResponse) {
-     let self = this;
-@@ -474,16 +498,104 @@ TabClient.prototype = {
+@@ -474,16 +531,113 @@ TabClient.prototype = {
        }
      });
    }
@@ -993,27 +1103,25 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 + * A WebConsoleClient is used as a front end for the WebConsoleActor that is
 + * created on the server, hiding implementation details.
 + *
++ * @param object aDebuggerClient
++ *        The DebuggerClient instance we live for.
 + * @param string aActor
 + *        The WebConsoleActor ID.
-+ * @param object aTabClient
-+ *        The TabClient instance for which we are created.
 + */
-+function WebConsoleClient(aActor, aTabClient) {
++function WebConsoleClient(aDebuggerClient, aActor) {
 +  this._actor = aActor;
-+  this._tabClient = aTabClient;
++  this._client = aDebuggerClient;
 +}
 +
 +WebConsoleClient.prototype = {
-+  get _client() this._tabClient._client,
-+
 +  LISTENERS: {
-+    PageError: 1,
-+    ConsoleAPI: 2,
++    PageError: "PageError",
++    ConsoleAPI: "ConsoleAPI",
 +  },
 +
 +  CACHED_MESSAGES: {
-+    PageError: 1,
-+    ConsoleAPI: 2,
++    PageError: "PageError",
++    ConsoleAPI: "ConsoleAPI",
 +  },
 +
 +  /**
@@ -1050,7 +1158,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +  function WCC_startListeners(aListeners, aOnResponse) {
 +    let packet = {
 +      to: this._actor,
-+      type: DebugProtocolTypes.startListeners,
++      type: DebugProtocolTypes.attach,
 +      listeners: aListeners,
 +    };
 +    this._client.request(packet, aOnResponse);
@@ -1070,10 +1178,21 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +  function WCC_stopListeners(aListeners, aOnResponse) {
 +    let packet = {
 +      to: this._actor,
-+      type: DebugProtocolTypes.stopListeners,
++      type: DebugProtocolTypes.detach,
 +      listeners: aListeners,
 +    };
 +    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Close the WebConsoleClient. This stops all the listeners on the server and
++   * detaches from the console actor.
++   *
++   * @param function aOnResponse
++   *        Function to invoke when the server response is received.
++   */
++  close: function WCC_close(aOnResponse) {
++    this.stopListeners(null, aOnResponse);
 +  },
 +};
 +
@@ -1089,7 +1208,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/devtools/debugger/server/dbg-browser-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-browser-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-browser-actors.js
-@@ -240,27 +240,37 @@ BrowserTabActor.prototype = {
+@@ -240,27 +240,36 @@ BrowserTabActor.prototype = {
  
    actorPrefix: "tab",
  
@@ -1100,7 +1219,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
                 "tab should have an actorID.");
 +
 +    this.consoleActor = new WebConsoleActor(this.conn, this.browser);
-+
 +    this._createTabActorPool();
 +    this._tabPool.addActor(this.consoleActor);
 +
@@ -1127,7 +1245,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
    /**
     * Called by the root actor when the underlying tab is closed.
     */
-@@ -270,37 +280,59 @@ BrowserTabActor.prototype = {
+@@ -270,37 +279,59 @@ BrowserTabActor.prototype = {
      }
  
      if (this.attached) {
@@ -1192,7 +1310,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
      this._progressListener = new DebuggerProgressListener(this);
  
      this._attached = true;
-@@ -353,33 +385,32 @@ BrowserTabActor.prototype = {
+@@ -353,20 +384,16 @@ BrowserTabActor.prototype = {
        return;
      }
  
@@ -1213,88 +1331,32 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
    onAttach: function BTA_onAttach(aRequest) {
      if (this.exited) {
        return { type: "exited" };
-     }
- 
-     this._attach();
- 
--    return { type: "tabAttached", threadActor: this.threadActor.actorID };
-+    return {
-+      type: "tabAttached",
-+      threadActor: this.threadActor.actorID,
-+    };
-   },
- 
-   onDetach: function BTA_onDetach(aRequest) {
-     if (!this.attached) {
-       return { error: "wrongState" };
-     }
- 
-     this._detach();
 diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
 --- a/toolkit/devtools/debugger/server/dbg-server.js
 +++ b/toolkit/devtools/debugger/server/dbg-server.js
-@@ -292,16 +292,20 @@ ActorPool.prototype = {
-   get: function AP_get(aActorID) {
-     return this._actors[aActorID];
+@@ -111,16 +111,17 @@ var DebuggerServer = {
+     loadSubScript.call(this, aURL);
    },
  
-   has: function AP_has(aActorID) {
-     return aActorID in this._actors;
-   },
- 
-+  size: function AP_size() {
-+    return Object.keys(this._actors).length;
-+  },
-+
    /**
-    * Remove an actor from the actor pool.
+    * Install Firefox-specific actors.
     */
-   removeActor: function AP_remove(aActorID) {
-     delete this._actors[aActorID];
-     delete this._cleanups[aActorID];
+   addBrowserActors: function DH_addBrowserActors() {
+     this.addActors("chrome://global/content/devtools/dbg-browser-actors.js");
++    this.addActors("chrome://global/content/devtools/dbg-webconsole-actors.js");
    },
  
-diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
---- a/toolkit/devtools/jar.mn
-+++ b/toolkit/devtools/jar.mn
-@@ -2,8 +2,9 @@
- # License, v. 2.0. If a copy of the MPL was not distributed with this
- # file, You can obtain one at http://mozilla.org/MPL/2.0/.
- 
- toolkit.jar:
-   content/global/devtools/dbg-transport.js        (debugger/dbg-transport.js)
-   content/global/devtools/dbg-server.js        		(debugger/server/dbg-server.js)
-   content/global/devtools/dbg-script-actors.js    (debugger/server/dbg-script-actors.js)
-   content/global/devtools/dbg-browser-actors.js   (debugger/server/dbg-browser-actors.js)
-+  content/global/devtools/dbg-webconsole-actors.js   (webconsole/server/dbg-webconsole-actors.js)
-diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
+   /**
+    * Listens on the given port for remote debugger connections.
+    *
+    * @param aPort int
+    *        The port to listen on.
+    */
+diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 new file mode 100644
 --- /dev/null
-+++ b/toolkit/devtools/webconsole/Makefile.in
-@@ -0,0 +1,18 @@
-+# This Source Code Form is subject to the terms of the Mozilla Public
-+# License, v. 2.0. If a copy of the MPL was not distributed with this
-+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-+
-+DEPTH = ../../..
-+topsrcdir = @top_srcdir@
-+srcdir = @srcdir@
-+VPATH = @srcdir@
-+
-+include $(DEPTH)/config/autoconf.mk
-+
-+#TEST_DIRS += tests
-+
-+include $(topsrcdir)/config/rules.mk
-+
-+#libs::
-+	# $(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
-+	# $(INSTALL) $(IFLAGS1) $(srcdir)/server/*.jsm $(FINAL_TARGET)/modules/devtools
-diff --git a/toolkit/devtools/webconsole/server/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/server/dbg-webconsole-actors.js
-new file mode 100644
---- /dev/null
-+++ b/toolkit/devtools/webconsole/server/dbg-webconsole-actors.js
-@@ -0,0 +1,315 @@
++++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
+@@ -0,0 +1,325 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -1316,13 +1378,13 @@ new file mode 100644
 +                                  "resource:///modules/WebConsoleUtils.jsm");
 +
 +const LISTENERS = {
-+  PageError: 1,
-+  ConsoleAPI: 2,
++  PageError: "PageError",
++  ConsoleAPI: "ConsoleAPI",
 +};
 +
 +const CACHED_MESSAGES = {
-+  PageError: 1,
-+  ConsoleAPI: 2,
++  PageError: "PageError",
++  ConsoleAPI: "ConsoleAPI",
 +};
 +
 +/**
@@ -1345,7 +1407,7 @@ new file mode 100644
 +{
 +  get contentWindow() this._browser.contentWindow,
 +
-+  actorPrefix: "webConsole",
++  actorPrefix: "console",
 +
 +  grip: function WCA_grip()
 +  {
@@ -1398,8 +1460,17 @@ new file mode 100644
 +  onDetach: function WCA_onDetach(aRequest)
 +  {
 +    let stoppedListeners = [];
-+    while (aRequest.listeners.length > 0) {
-+      let listener = aRequest.listeners.shift();
++    let toDetach = aRequest.listeners || [];
++    if (!toDetach.length) {
++      // If no specific listeners are requested to be detached, we stop all
++      // listeners.
++      for each (let listener in LISTENERS) {
++        toDetach.push(listener);
++      }
++    }
++
++    while (toDetach.length > 0) {
++      let listener = toDetach.shift();
 +      switch (listener) {
 +        case LISTENERS.PageError:
 +          if (this.pageErrorListener) {
@@ -1410,6 +1481,7 @@ new file mode 100644
 +          break;
 +      }
 +    }
++
 +    return { stoppedListeners: stoppedListeners };
 +  },
 +
@@ -1610,45 +1682,16 @@ new file mode 100644
 +    Services.console.unregisterListener(this);
 +  },
 +};
-diff --git a/toolkit/toolkit-makefiles.sh b/toolkit/toolkit-makefiles.sh
---- a/toolkit/toolkit-makefiles.sh
-+++ b/toolkit/toolkit-makefiles.sh
-@@ -474,16 +474,20 @@ MAKEFILES_xulapp="
-   toolkit/themes/Makefile
-   toolkit/xre/Makefile
- "
+diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
+--- a/toolkit/devtools/jar.mn
++++ b/toolkit/devtools/jar.mn
+@@ -2,8 +2,9 @@
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
  
- MAKEFILES_debugger="
-   toolkit/devtools/debugger/Makefile
- "
- 
-+MAKEFILES_webconsole="
-+  toolkit/devtools/webconsole/Makefile
-+"
-+
- MAKEFILES_jsreflect="
-   toolkit/components/reflect/Makefile
- "
- 
- MAKEFILES_jsductwork="
-   js/ductwork/debugger/Makefile
- "
- 
-@@ -526,16 +530,17 @@ add_makefiles "
-   $MAKEFILES_dom
-   $MAKEFILES_editor
-   $MAKEFILES_parser
-   $MAKEFILES_gfx
-   $MAKEFILES_intl
-   $MAKEFILES_xpconnect
-   $MAKEFILES_jsipc
-   $MAKEFILES_debugger
-+  $MAKEFILES_webconsole
-   $MAKEFILES_jsreflect
-   $MAKEFILES_jsductwork
-   $MAKEFILES_content
-   $MAKEFILES_smil
-   $MAKEFILES_layout
-   $MAKEFILES_libjar
-   $MAKEFILES_libpref
-   $MAKEFILES_mathml
+ toolkit.jar:
+   content/global/devtools/dbg-transport.js        (debugger/dbg-transport.js)
+   content/global/devtools/dbg-server.js        		(debugger/server/dbg-server.js)
+   content/global/devtools/dbg-script-actors.js    (debugger/server/dbg-script-actors.js)
+   content/global/devtools/dbg-browser-actors.js   (debugger/server/dbg-browser-actors.js)
++  content/global/devtools/dbg-webconsole-actors.js   (debugger/server/dbg-webconsole-actors.js)
