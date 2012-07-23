@@ -1,0 +1,223 @@
+# HG changeset patch
+# Parent 4559b953b415bf337d9ee489e78ff114b9499c6f
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1343073844 -10800
+
+Bug 734831 - Find should vertically align the matched word to be at the center of view
+
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -1633,20 +1633,24 @@ SourceEditor.prototype = {
+ 
+   /**
+    * Select a specific range in the editor.
+    *
+    * @param number aStart
+    *        Selection range start.
+    * @param number aEnd
+    *        Selection range end.
++   * @param number [aAlign]
++   *        Optional. Position of the line with respect to viewport.
++   * @see SourceEditor.VERTICAL_ALIGN in source-editor.jsm.
+    */
+-  setSelection: function SE_setSelection(aStart, aEnd)
++  setSelection: function SE_setSelection(aStart, aEnd, aAlign)
+   {
+-    this._view.setSelection(aStart, aEnd, true);
++    dump("SE_setSelection " + aStart + " " + aEnd + " " + aAlign + "\n");
++    this._doVerticalAlign(aStart, aEnd, aAlign);
+   },
+ 
+   /**
+    * Get the current selection range.
+    *
+    * @return object
+    *         An object with two properties, start and end, that give the
+    *         selection range (zero based offsets).
+@@ -1667,20 +1671,27 @@ SourceEditor.prototype = {
+     return this._view.getCaretOffset();
+   },
+ 
+   /**
+    * Set the caret offset.
+    *
+    * @param number aOffset
+    *        The new caret offset you want to set.
++   * @param number [aAlign=VERTICAL_ALIGN.TOP]
++   *        Optional. Position of the line with respect to viewport.
++   * @see SourceEditor.VERTICAL_ALIGN in source-editor.jsm.
+    */
+-  setCaretOffset: function SE_setCaretOffset(aOffset)
++  setCaretOffset: function SE_setCaretOffset(aOffset, aAlign)
+   {
+-    this._view.setCaretOffset(aOffset, true);
++    if (aAlign === undefined) {
++      this._view.setCaretOffset(aOffset, true);
++    } else {
++      this._doVerticalAlign(aOffset, aOffset, aAlign);
++    }
+   },
+ 
+   /**
+    * Get the caret position.
+    *
+    * @return object
+    *         An object that holds two properties:
+    *         - line: the line number, counting from 0.
+@@ -1697,67 +1708,85 @@ SourceEditor.prototype = {
+ 
+   /**
+    * Set the caret position: line and column.
+    *
+    * @param number aLine
+    *        The new caret line location. Line numbers start from 0.
+    * @param number [aColumn=0]
+    *        Optional. The new caret column location. Columns start from 0.
+-   * @param number [aAlign=0]
++   * @param number [aAlign=VERTICAL_ALIGN.TOP]
+    *        Optional. Position of the line with respect to viewport.
+-   *        Allowed values are:
+-   *          SourceEditor.VERTICAL_ALIGN.TOP     target line at top of view.
+-   *          SourceEditor.VERTICAL_ALIGN.CENTER  target line at center of view.
+-   *          SourceEditor.VERTICAL_ALIGN.BOTTOM  target line at bottom of view.
++   * @see SourceEditor.VERTICAL_ALIGN in source-editor.jsm.
+    */
+   setCaretPosition: function SE_setCaretPosition(aLine, aColumn, aAlign)
+   {
++    aLine = Math.max(0, Math.min(aLine, this.getLineCount() - 1));
++    let caretOffset = this.getLineStart(aLine) + (aColumn || 0);
++
++    this.setCaretOffset(caretOffset, aAlign === undefined ?
++                                     this.VERTICAL_ALIGN.TOP : aAlign);
++  },
++
++  _doVerticalAlign: function SE__doVerticalAlign(aStart, aEnd, aAlign)
++  {
++    if (aAlign === undefined) {
++      this._view.setSelection(aStart, aEnd, true);
++      return;
++    }
++
++    let firstVisible = this.getTopIndex();
++    let firstVisibleOffset = this._model.getLineStart(firstVisible);
++    let lastVisible = this._view.getBottomIndex();
++    let lastVisibleOffset = this._model.getLineEnd(lastVisible, true);
++    dump("firstVisible " + firstVisible + " firstVisibleOffset " + firstVisibleOffset + " lastVisible " + lastVisible + " lastVisibleOffset " + lastVisibleOffset + "\n");
++
++    this._view.setSelection(aStart, aEnd, false);
++
++    // If the target offsets are in view, skip the vertical alignment part.
++    if (firstVisibleOffset <= aStart && aEnd <= lastVisibleOffset) {
++      dump("in visible range\n");
++      this._view.showSelection();
++      return;
++    }
++
+     let editorHeight = this._view.getClientArea().height;
+     let lineHeight = this._view.getLineHeight();
+     let linesVisible = Math.floor(editorHeight/lineHeight);
+     let halfVisible = Math.round(linesVisible/2);
+-    let firstVisible = this.getTopIndex();
+-    let lastVisible = this._view.getBottomIndex();
++    let startLine = this._model.getLineAtOffset(aStart);
++    let endLine = this._model.getLineAtOffset(aEnd);
++    let midLine = startLine + Math.round((endLine - startLine) / 2);
+ 
+-    aLine = Math.max(0, Math.min(aLine, this.getLineCount() - 1));
+-    let caretOffset = this.getLineStart(aLine) + (aColumn || 0);
+-
+-    this._view.setSelection(caretOffset, caretOffset, false);
+-
+-    // If the target line is in view, skip the vertical alignment part.
+-    if (aLine <= lastVisible && aLine >= firstVisible) {
+-      this._view.showSelection();
+-      return;
+-    }
++    dump("startLine " + startLine + " endLine " + endLine + " midLine " + midLine + "\n");
+ 
+     // Setting the offset so that the line always falls in the upper half
+     // of visible lines (lower half for BOTTOM aligned).
+     // VERTICAL_OFFSET is the maximum allowed value.
+     let offset = Math.min(halfVisible, VERTICAL_OFFSET);
+ 
+     let topIndex;
+     switch (aAlign) {
+       case this.VERTICAL_ALIGN.CENTER:
+-        topIndex = Math.max(aLine - halfVisible, 0);
++        topIndex = Math.max(midLine - halfVisible, 0);
+         break;
+ 
+       case this.VERTICAL_ALIGN.BOTTOM:
+-        topIndex = Math.max(aLine - linesVisible + offset, 0);
++        topIndex = Math.max(endLine - linesVisible + offset, 0);
+         break;
+ 
+       default: // this.VERTICAL_ALIGN.TOP.
+-        topIndex = Math.max(aLine - offset, 0);
++        topIndex = Math.max(startLine - offset, 0);
+         break;
+     }
+     // Bringing down the topIndex to total lines in the editor if exceeding.
+     topIndex = Math.min(topIndex, this.getLineCount() - 1);
+     this.setTopIndex(topIndex);
+ 
+-    let location = this._view.getLocationAtOffset(caretOffset);
++    let location = this._view.getLocationAtOffset(aStart);
+     this._view.setHorizontalPixel(location.x);
+   },
+ 
+   /**
+    * Get the line count.
+    *
+    * @return number
+    *         The number of lines in the document being edited.
+diff --git a/browser/devtools/sourceeditor/source-editor-ui.jsm b/browser/devtools/sourceeditor/source-editor-ui.jsm
+--- a/browser/devtools/sourceeditor/source-editor-ui.jsm
++++ b/browser/devtools/sourceeditor/source-editor-ui.jsm
+@@ -133,17 +133,20 @@ SourceEditorUI.prototype = {
+   /**
+    * This executed after each find/findNext/findPrevious operation.
+    * @private
+    */
+   _onFind: function SEU__onFind()
+   {
+     let lastFind = this.editor.lastFind;
+     if (lastFind && lastFind.index > -1) {
+-      this.editor.setSelection(lastFind.index, lastFind.index + lastFind.str.length);
++      dump("onFind " + lastFind.index + "\n");
++      this.editor.setSelection(lastFind.index,
++                               lastFind.index + lastFind.str.length,
++                               this.editor.VERTICAL_ALIGN.CENTER);
+     }
+ 
+     if (this._ownerWindow.goUpdateCommand) {
+       this._ownerWindow.goUpdateCommand("cmd_findAgain");
+       this._ownerWindow.goUpdateCommand("cmd_findPrevious");
+     }
+   },
+ 
+diff --git a/browser/devtools/sourceeditor/source-editor.jsm b/browser/devtools/sourceeditor/source-editor.jsm
+--- a/browser/devtools/sourceeditor/source-editor.jsm
++++ b/browser/devtools/sourceeditor/source-editor.jsm
+@@ -283,18 +283,18 @@ SourceEditor.EVENTS = {
+    * have not been saved yet. Event object properties: oldValue and newValue.
+    * Both are booleans telling the old dirty state and the new state,
+    * respectively.
+    */
+   DIRTY_CHANGED: "DirtyChanged",
+ };
+ 
+ /**
+- * Allowed vertical alignment options for the line index
+- * when you call SourceEditor.setCaretPosition().
++ * Allowed vertical alignment options for the line index when you call
++ * SourceEditor.setCaretPosition(), setCaretOffset() and setSelection().
+  */
+ SourceEditor.VERTICAL_ALIGN = {
+   TOP: 0,
+   CENTER: 1,
+   BOTTOM: 2,
+ };
+ 
+ /**

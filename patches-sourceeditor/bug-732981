@@ -1,0 +1,75 @@
+# HG changeset patch
+# Parent 08ed137a95737f9fb91cf7840ebb674fed076518
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1343060853 -10800
+
+Bug 732981 - sourceEditor.setCaretPosition() has undefined out of bounds behavior
+
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -1712,16 +1712,18 @@ SourceEditor.prototype = {
+   setCaretPosition: function SE_setCaretPosition(aLine, aColumn, aAlign)
+   {
+     let editorHeight = this._view.getClientArea().height;
+     let lineHeight = this._view.getLineHeight();
+     let linesVisible = Math.floor(editorHeight/lineHeight);
+     let halfVisible = Math.round(linesVisible/2);
+     let firstVisible = this.getTopIndex();
+     let lastVisible = this._view.getBottomIndex();
++
++    aLine = Math.max(0, Math.min(aLine, this.getLineCount() - 1));
+     let caretOffset = this.getLineStart(aLine) + (aColumn || 0);
+ 
+     this._view.setSelection(caretOffset, caretOffset, false);
+ 
+     // If the target line is in view, skip the vertical alignment part.
+     if (aLine <= lastVisible && aLine >= firstVisible) {
+       this._view.showSelection();
+       return;
+@@ -1742,17 +1744,17 @@ SourceEditor.prototype = {
+         topIndex = Math.max(aLine - linesVisible + offset, 0);
+         break;
+ 
+       default: // this.VERTICAL_ALIGN.TOP.
+         topIndex = Math.max(aLine - offset, 0);
+         break;
+     }
+     // Bringing down the topIndex to total lines in the editor if exceeding.
+-    topIndex = Math.min(topIndex, this.getLineCount());
++    topIndex = Math.min(topIndex, this.getLineCount() - 1);
+     this.setTopIndex(topIndex);
+ 
+     let location = this._view.getLocationAtOffset(caretOffset);
+     this._view.setHorizontalPixel(location.x);
+   },
+ 
+   /**
+    * Get the line count.
+diff --git a/browser/devtools/sourceeditor/test/browser_bug687160_line_api.js b/browser/devtools/sourceeditor/test/browser_bug687160_line_api.js
+--- a/browser/devtools/sourceeditor/test/browser_bug687160_line_api.js
++++ b/browser/devtools/sourceeditor/test/browser_bug687160_line_api.js
+@@ -66,16 +66,23 @@ function editorLoaded()
+   editor.setCaretPosition(2);
+   is(editor.getCaretOffset(), 12, "setCaretLine() works, confirmed");
+ 
+   if (component != "textarea") {
+     pos = editor.getCaretPosition();
+     ok(pos.line == 2 && pos.col == 0, "setCaretPosition(line) works, again");
+   }
+ 
++  editor.setCaretPosition(-3);
++  is(editor.getCaretOffset(), 0, "setCaretLine(-3) works");
++
++  editor.setCaretPosition(3 * editor.getLineCount());
++  pos = editor.getCaretPosition();
++  ok(pos.line == 2 && pos.col == 0, "setCaretLine(3 * linesCount) works");
++
+   editor.destroy();
+ 
+   testWin.close();
+   testWin = editor = null;
+ 
+   waitForFocus(finish, window);
+ }
+ 
