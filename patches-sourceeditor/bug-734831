@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 4559b953b415bf337d9ee489e78ff114b9499c6f
+# Parent 3d716da882d58b9bd60e96367031bb17d270977a
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1343073844 -10800
+# Date 1343152434 -10800
 
 Bug 734831 - Find should vertically align the matched word to be at the center of view
 
 diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
 --- a/browser/devtools/sourceeditor/source-editor-orion.jsm
 +++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
-@@ -1633,20 +1633,24 @@ SourceEditor.prototype = {
+@@ -1633,20 +1633,27 @@ SourceEditor.prototype = {
  
    /**
     * Select a specific range in the editor.
@@ -25,8 +25,11 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +  setSelection: function SE_setSelection(aStart, aEnd, aAlign)
    {
 -    this._view.setSelection(aStart, aEnd, true);
-+    dump("SE_setSelection " + aStart + " " + aEnd + " " + aAlign + "\n");
-+    this._doVerticalAlign(aStart, aEnd, aAlign);
++    if (aAlign === undefined) {
++      this._view.setSelection(aStart, aEnd, true);
++    } else {
++      this._doVerticalAlign(aStart, aEnd, aAlign);
++    }
    },
  
    /**
@@ -35,7 +38,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * @return object
     *         An object with two properties, start and end, that give the
     *         selection range (zero based offsets).
-@@ -1667,20 +1671,27 @@ SourceEditor.prototype = {
+@@ -1667,20 +1674,27 @@ SourceEditor.prototype = {
      return this._view.getCaretOffset();
    },
  
@@ -65,7 +68,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     * @return object
     *         An object that holds two properties:
     *         - line: the line number, counting from 0.
-@@ -1697,67 +1708,85 @@ SourceEditor.prototype = {
+@@ -1697,67 +1711,90 @@ SourceEditor.prototype = {
  
    /**
     * Set the caret position: line and column.
@@ -92,24 +95,31 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +                                     this.VERTICAL_ALIGN.TOP : aAlign);
 +  },
 +
++  /**
++   * Vertically align the given selection range in the editor view port. This
++   * method is used by other methods like setCaretPosition(), setSelection() and
++   * setCaretOffset().
++   *
++   * @private
++   * @param number aStart
++   *        Selection start offset.
++   * @param number aEnd
++   *        Selection end offset.
++   * @param number [aAlign=VERTICAL_OFFSET.TOP]
++   *        The vertical alignment you want for the selection with respect to
++   *        the editor viewport.
++   */
 +  _doVerticalAlign: function SE__doVerticalAlign(aStart, aEnd, aAlign)
 +  {
-+    if (aAlign === undefined) {
-+      this._view.setSelection(aStart, aEnd, true);
-+      return;
-+    }
-+
 +    let firstVisible = this.getTopIndex();
 +    let firstVisibleOffset = this._model.getLineStart(firstVisible);
 +    let lastVisible = this._view.getBottomIndex();
 +    let lastVisibleOffset = this._model.getLineEnd(lastVisible, true);
-+    dump("firstVisible " + firstVisible + " firstVisibleOffset " + firstVisibleOffset + " lastVisible " + lastVisible + " lastVisibleOffset " + lastVisibleOffset + "\n");
 +
 +    this._view.setSelection(aStart, aEnd, false);
 +
 +    // If the target offsets are in view, skip the vertical alignment part.
 +    if (firstVisibleOffset <= aStart && aEnd <= lastVisibleOffset) {
-+      dump("in visible range\n");
 +      this._view.showSelection();
 +      return;
 +    }
@@ -120,10 +130,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      let halfVisible = Math.round(linesVisible/2);
 -    let firstVisible = this.getTopIndex();
 -    let lastVisible = this._view.getBottomIndex();
-+    let startLine = this._model.getLineAtOffset(aStart);
-+    let endLine = this._model.getLineAtOffset(aEnd);
-+    let midLine = startLine + Math.round((endLine - startLine) / 2);
- 
+-
 -    aLine = Math.max(0, Math.min(aLine, this.getLineCount() - 1));
 -    let caretOffset = this.getLineStart(aLine) + (aColumn || 0);
 -
@@ -134,7 +141,9 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 -      this._view.showSelection();
 -      return;
 -    }
-+    dump("startLine " + startLine + " endLine " + endLine + " midLine " + midLine + "\n");
++    let startLine = this._model.getLineAtOffset(aStart);
++    let endLine = this._model.getLineAtOffset(aEnd);
++    let midLine = startLine + Math.round((endLine - startLine) / 2);
  
      // Setting the offset so that the line always falls in the upper half
      // of visible lines (lower half for BOTTOM aligned).
@@ -175,7 +184,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 diff --git a/browser/devtools/sourceeditor/source-editor-ui.jsm b/browser/devtools/sourceeditor/source-editor-ui.jsm
 --- a/browser/devtools/sourceeditor/source-editor-ui.jsm
 +++ b/browser/devtools/sourceeditor/source-editor-ui.jsm
-@@ -133,17 +133,20 @@ SourceEditorUI.prototype = {
+@@ -133,17 +133,19 @@ SourceEditorUI.prototype = {
    /**
     * This executed after each find/findNext/findPrevious operation.
     * @private
@@ -185,7 +194,6 @@ diff --git a/browser/devtools/sourceeditor/source-editor-ui.jsm b/browser/devtoo
      let lastFind = this.editor.lastFind;
      if (lastFind && lastFind.index > -1) {
 -      this.editor.setSelection(lastFind.index, lastFind.index + lastFind.str.length);
-+      dump("onFind " + lastFind.index + "\n");
 +      this.editor.setSelection(lastFind.index,
 +                               lastFind.index + lastFind.str.length,
 +                               this.editor.VERTICAL_ALIGN.CENTER);
@@ -211,7 +219,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor.jsm b/browser/devtools/
  /**
 - * Allowed vertical alignment options for the line index
 - * when you call SourceEditor.setCaretPosition().
-+ * Allowed vertical alignment options for the line index when you call
++ * Allowed vertical alignment options for the selection/cursor when you call
 + * SourceEditor.setCaretPosition(), setCaretOffset() and setSelection().
   */
  SourceEditor.VERTICAL_ALIGN = {
@@ -221,3 +229,181 @@ diff --git a/browser/devtools/sourceeditor/source-editor.jsm b/browser/devtools/
  };
  
  /**
+diff --git a/browser/devtools/sourceeditor/test/Makefile.in b/browser/devtools/sourceeditor/test/Makefile.in
+--- a/browser/devtools/sourceeditor/test/Makefile.in
++++ b/browser/devtools/sourceeditor/test/Makefile.in
+@@ -21,16 +21,16 @@ MOCHITEST_BROWSER_FILES = \
+ 		browser_bug687160_line_api.js \
+ 		browser_bug650345_find.js \
+ 		browser_bug703692_focus_blur.js \
+ 		browser_bug725388_mouse_events.js \
+ 		browser_bug707987_debugger_breakpoints.js \
+ 		browser_bug712982_line_ruler_click.js \
+ 		browser_bug725618_moveLines_shortcut.js \
+ 		browser_bug700893_dirty_state.js \
+-		browser_bug729480_line_vertical_align.js \
++		browser_vertical_align.js \
+ 		browser_bug725430_comment_uncomment.js \
+ 		browser_bug731721_debugger_stepping.js \
+ 		browser_bug729960_block_bracket_jump.js \
+ 		browser_bug725392_mouse_coords_char_offset.js \
+ 		head.js \
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/sourceeditor/test/browser_bug729480_line_vertical_align.js b/browser/devtools/sourceeditor/test/browser_vertical_align.js
+rename from browser/devtools/sourceeditor/test/browser_bug729480_line_vertical_align.js
+rename to browser/devtools/sourceeditor/test/browser_vertical_align.js
+--- a/browser/devtools/sourceeditor/test/browser_bug729480_line_vertical_align.js
++++ b/browser/devtools/sourceeditor/test/browser_vertical_align.js
+@@ -1,99 +1,96 @@
+ /* vim: set ts=2 et sw=2 tw=80: */
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ "use strict";
+ 
+-let tempScope = {};
+-Cu.import("resource:///modules/source-editor.jsm", tempScope);
+-let SourceEditor = tempScope.SourceEditor;
+-
+-let testWin;
+-let editor;
+ const VERTICAL_OFFSET = 3;
+ 
+ function test()
+ {
+   waitForExplicitFinish();
+ 
+-  const windowUrl = "data:application/vnd.mozilla.xul+xml,<?xml version='1.0'?>" +
+-    "<window xmlns='http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul'" +
+-    " title='test for bug 729480 - allow setCaretPosition align the target line" +
+-    " vertically in view according to a third argument'" +
+-    " width='300' height='300'><box flex='1'/></window>";
+-  const windowFeatures = "chrome,titlebar,toolbar,centerscreen,dialog=no";
+-
+-  testWin = Services.ww.openWindow(null, windowUrl, "_blank", windowFeatures, null);
+-  testWin.addEventListener("load", function onWindowLoad() {
+-    testWin.removeEventListener("load", onWindowLoad, false);
+-    waitForFocus(initEditor, testWin);
+-  }, false);
++  openSourceEditorWindow(editorLoaded, { showLineNumbers: true });
+ }
+ 
+-function initEditor()
++function editorLoaded(editor, testWin)
+ {
+-  let box = testWin.document.querySelector("box");
+-
+-  editor = new SourceEditor();
+-  editor.init(box, {showLineNumbers: true}, editorLoaded);
+-}
+-
+-function editorLoaded()
+-{
+-  editor.focus();
+-
+   // setting 3 pages of lines containing the line number.
+-  let view = editor._view;
+-
+-  let lineHeight = view.getLineHeight();
+-  let editorHeight = view.getClientArea().height;
+-  let linesPerPage = Math.floor(editorHeight / lineHeight);
+-  let totalLines = 3 * linesPerPage;
+-
+-  let text = "";
+-  for (let i = 0; i < totalLines; i++) {
+-    text += "Line " + i + "\n";
+-  }
+-
+-  editor.setText(text);
++  editor.setText(fillEditor(editor, 3));
+   editor.setCaretOffset(0);
+ 
+-  let offset = Math.min(Math.round(linesPerPage/2), VERTICAL_OFFSET);
++  let linesPerPage = editor._view.getBottomIndex() - editor.getTopIndex();
++  let voffset = Math.min(Math.round(linesPerPage/2), VERTICAL_OFFSET);
++
++  let topLine = linesPerPage + 5;
++  let bottomLine = topLine + linesPerPage;
++  let middleLine = topLine + Math.round((bottomLine - topLine) / 2);
++  let topLineOffset = editor._model.getLineStart(topLine);
++  let middleLineOffset = editor._model.getLineStart(middleLine);
++  let bottomLineOffset = editor._model.getLineStart(bottomLine);
++  let expectedTopIndex = topLine - voffset;
++  let expectedMiddleIndex = middleLine - Math.round(linesPerPage / 2);
++  let expectedBottomIndex = bottomLine - linesPerPage + voffset;
++
++  const ALIGN = editor.VERTICAL_ALIGN;
++
+   // Building the iterator array.
+   // [line, alignment, topIndex_check]
+   let iterateOn = [
+-    [0, "TOP", 0],
+-    [25, "TOP", 25 - offset],
++    ["setCaretPosition", [0, 0, ALIGN.TOP], 0],
++    ["setCaretPosition", [topLine, 0, ALIGN.TOP], expectedTopIndex],
++
+     // Case when the target line is already in view.
+-    [27, "TOP", 25 - offset],
+-    [0, "BOTTOM", 0],
+-    [5, "BOTTOM", 0],
+-    [38, "BOTTOM", 38 - linesPerPage + offset],
+-    [0, "CENTER", 0],
+-    [4, "CENTER", 0],
+-    [34, "CENTER", 34 - Math.round(linesPerPage/2)]
++    ["setCaretPosition", [topLine + 5, 0, ALIGN.TOP], expectedTopIndex],
++
++    ["setCaretPosition", [0, 0, ALIGN.BOTTOM], 0],
++    ["setCaretPosition", [5, 0, ALIGN.BOTTOM], 0],
++    ["setCaretPosition", [bottomLine, 0, ALIGN.BOTTOM], expectedBottomIndex],
++    ["setCaretPosition", [0, 0, ALIGN.CENTER], 0],
++    ["setCaretPosition", [4, 0, ALIGN.CENTER], 0],
++    ["setCaretPosition", [middleLine, 0, ALIGN.CENTER], expectedMiddleIndex],
++    ["setCaretOffset", [0, ALIGN.TOP], 0],
++    ["setCaretOffset", [topLineOffset, ALIGN.TOP], expectedTopIndex],
++    ["setCaretOffset", [topLineOffset + 5, ALIGN.TOP], expectedTopIndex],
++    ["setCaretOffset", [0, ALIGN.BOTTOM], 0],
++    ["setCaretOffset", [5, ALIGN.BOTTOM], 0],
++    ["setCaretOffset", [bottomLineOffset, ALIGN.BOTTOM], expectedBottomIndex],
++    ["setCaretOffset", [0, ALIGN.CENTER], 0],
++    ["setCaretOffset", [4, ALIGN.CENTER], 0],
++    ["setCaretOffset", [middleLineOffset, ALIGN.CENTER], expectedMiddleIndex],
++    ["setSelection", [0, 10, ALIGN.TOP], 0],
++    ["setSelection", [topLineOffset, topLineOffset + 10, ALIGN.TOP], expectedTopIndex],
++    ["setSelection", [topLineOffset + 5, topLineOffset + 10, ALIGN.TOP], expectedTopIndex],
++    ["setSelection", [0, 10, ALIGN.BOTTOM], 0],
++    ["setSelection", [5, 10, ALIGN.BOTTOM], 0],
++    ["setSelection", [bottomLineOffset, bottomLineOffset + 10, ALIGN.BOTTOM], expectedBottomIndex],
++    ["setSelection", [0, 10, ALIGN.CENTER], 0],
++    ["setSelection", [4, 10, ALIGN.CENTER], 0],
++    ["setSelection", [middleLineOffset, middleLineOffset + 10, ALIGN.CENTER], expectedMiddleIndex],
+   ];
+ 
+   function testEnd() {
+     editor.destroy();
+     testWin.close();
+     testWin = editor = null;
+     waitForFocus(finish, window);
+   }
+ 
+   function testPosition(pos) {
+     is(editor.getTopIndex(), iterateOn[pos][2], "scroll is correct for test #" + pos);
+-    iterator(++pos);
++    executeSoon(iterator.bind(null, ++pos));
+   }
+ 
+   function iterator(i) {
+     if (i == iterateOn.length) {
+       testEnd();
+     } else {
+-      editor.setCaretPosition(iterateOn[i][0], 0,
+-                              editor.VERTICAL_ALIGN[iterateOn[i][1]]);
++      let method = iterateOn[i][0];
++      let args = iterateOn[i][1];
++      info("test #" + i + ": " + method + " " + args);
++      editor[method].apply(editor, args);
+       executeSoon(testPosition.bind(this, i));
+     }
+   }
+   iterator(0);
+ }
