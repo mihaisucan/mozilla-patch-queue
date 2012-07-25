@@ -1,0 +1,194 @@
+# HG changeset patch
+# Parent 674986abe2a1af380199b1211f1cba3f8d7e118e
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1343248217 -10800
+
+Bug 757016 - API for changing editor styling after initialization
+
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -237,16 +237,17 @@ SourceEditor.prototype = {
+   _mode: null,
+   _expandTab: null,
+   _tabSize: null,
+   _iframeWindow: null,
+   _eventTarget: null,
+   _eventListenersQueue: null,
+   _contextMenu: null,
+   _dirty: false,
++  _fontSize: 0,
+ 
+   /**
+    * The Source Editor user interface manager.
+    * @type object
+    *       An instance of the SourceEditorUI.
+    */
+   ui: null,
+ 
+@@ -277,35 +278,21 @@ SourceEditor.prototype = {
+ 
+     this._config = {};
+     for (let key in SourceEditor.DEFAULTS) {
+       this._config[key] = key in aConfig ?
+                           aConfig[key] :
+                           SourceEditor.DEFAULTS[key];
+     }
+ 
+-    let theme = this._config.theme;
+-    let stylesheets = theme in ORION_THEMES ? ORION_THEMES[theme] : theme;
+-    if (!Array.isArray(stylesheets)) {
+-      stylesheets = [stylesheets];
+-    }
+-
+-    let links = [];
+-    stylesheets.forEach(function(aStyle) {
+-      links.push("<link rel='stylesheet' href='" + aStyle +
+-                 "' type='text/css'>");
+-    });
+-
+-    let src = ORION_IFRAME.replace("</head>", links.join("\n") + "</head>");
+-
+     let doc = aElement.ownerDocument;
+     this._iframe = doc.createElementNS(XUL_NS, "iframe");
+     this._iframe.flex = 1;
+     this._iframe.addEventListener("load", this._onIframeLoad, true);
+-    this._iframe.setAttribute("src", src);
++    this._iframe.setAttribute("src", ORION_IFRAME);
+ 
+     aElement.appendChild(this._iframe);
+     this.parentElement = aElement;
+ 
+     this._onReadyCallback = aCallback;
+     this.ui.init();
+   },
+ 
+@@ -319,21 +306,24 @@ SourceEditor.prototype = {
+ 
+     this._iframeWindow = this._iframe.contentWindow.wrappedJSObject;
+     let window = this._iframeWindow;
+ 
+     if (gOrionModules) {
+       unregisterModules(gOrionModules);
+     }
+ 
++    this.setTheme(this._config.theme);
++
+     // Setup the font size.
+     this._fontSize = Services.prefs.getIntPref(SourceEditor.PREFS.FONT_SIZE);
+     let fontSize = this._fontSize ? this._fontSize + "px" : "-moz-use-system-font";
+     let style = window.document.createElement("style");
+     style.id = "fontSizePref";
++    style.type = "text/css";
+     style.textContent = ".textviewContainer { font-size: " + fontSize + "; }";
+     window.document.head.appendChild(style);
+ 
+     let domain = new define.Domain();
+     domain.syntax = "amd";
+ 
+     window.require = domain.require.bind(domain);
+     window.define = define;
+@@ -548,16 +538,58 @@ SourceEditor.prototype = {
+     this.ui.onReady();
+     if (this._onReadyCallback) {
+       this._onReadyCallback(this);
+       this._onReadyCallback = null;
+     }
+   },
+ 
+   /**
++   * Change the editor theme.
++   *
++   * @param string|array aTheme
++   *        String: name of the known theme you want to switch to (pick one of
++   *        the SourceEditor.THEMES). Or you can directly point to the URL of
++   *        the stylesheet you want to load in the editor view.
++   *        Array: URLs that point to stylesheets you want to load in the
++   *        editor.
++   *        You can use data URIs and you can even provide raw CSS that will be
++   *        added to the editor within a <style> element.
++   * @see SourceEditor.THEMES in source-editor.jsm
++   * @see SourceEditor.DEFAULTS.theme in source-editor.jsm
++   */
++  setTheme: function SE_setTheme(aTheme)
++  {
++    let stylesheets = aTheme in ORION_THEMES ? ORION_THEMES[aTheme] : aTheme;
++    if (!Array.isArray(stylesheets)) {
++      stylesheets = [stylesheets];
++    }
++
++    let document = this._iframeWindow.document;
++    stylesheets.forEach(function(aStyle) {
++      let elem;
++      if (/^[a-z]+:\/\/[^\n\r]+$/.test(aStyle) || /^data:.+/.test(aStyle)) {
++        elem = document.createElement("link");
++        elem.rel = "stylesheet";
++        elem.type = "text/css";
++        elem.href = aStyle;
++      } else {
++        elem = document.createElement("style");
++        elem.type = "text/css";
++        elem.textContent = aStyle;
++      }
++      document.head.appendChild(elem);
++    });
++
++    if (this._view) {
++      this._view.update(true);
++    }
++  },
++
++  /**
+    * The "tab" editor action implementation. This adds support for expanded tabs
+    * to spaces, and support for the indentation of multiple lines at once.
+    * @private
+    */
+   _doTab: function SE__doTab()
+   {
+     if (this.readOnly) {
+       return false;
+diff --git a/browser/devtools/sourceeditor/test/Makefile.in b/browser/devtools/sourceeditor/test/Makefile.in
+--- a/browser/devtools/sourceeditor/test/Makefile.in
++++ b/browser/devtools/sourceeditor/test/Makefile.in
+@@ -27,11 +27,12 @@ MOCHITEST_BROWSER_FILES = \
+ 		browser_bug725618_moveLines_shortcut.js \
+ 		browser_bug700893_dirty_state.js \
+ 		browser_vertical_align.js \
+ 		browser_bug725430_comment_uncomment.js \
+ 		browser_bug731721_debugger_stepping.js \
+ 		browser_bug729960_block_bracket_jump.js \
+ 		browser_bug725392_mouse_coords_char_offset.js \
+ 		browser_bug760825_font_size.js \
++		browser_bug757016_style_api.js \
+ 		head.js \
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/sourceeditor/test/browser_bug757016_style_api.js b/browser/devtools/sourceeditor/test/browser_bug757016_style_api.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/sourceeditor/test/browser_bug757016_style_api.js
+@@ -0,0 +1,24 @@
++/* vim: set ts=2 et sw=2 tw=80: */
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++"use strict";
++
++function test()
++{
++  waitForExplicitFinish();
++
++  function editorLoaded(editor, testWin)
++  {
++    editor.setText("test for bug 757016: style API");
++
++    editor.setTheme();
++
++    editor.destroy();
++    testWin.close();
++
++    waitForFocus(finish, window);
++  }
++
++  openSourceEditorWindow(editorLoaded);
++}

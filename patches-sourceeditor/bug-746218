@@ -1,0 +1,171 @@
+# HG changeset patch
+# Parent 024af6ee9bcbf2046f76ec54305508f821076d5a
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1343158092 -10800
+
+Bug 746218 - Source Editor should comment a block with // comments
+
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -1037,42 +1037,52 @@ SourceEditor.prototype = {
+    * @return object
+    *         An object that holds the following properties:
+    *         - line: the comment string used for the start of a single line
+    *         comment.
+    *         - blockStart: the comment string used for the start of a comment
+    *         block.
+    *         - blockEnd: the comment string used for the end of a block comment.
+    *         Null is returned for unsupported editor modes.
++   *         - allowBlockComment: tells if the code that comments out
++   *         a selection is allowed to use the block comment wrappers. If not,
++   *         you should use the line comment string.
+    */
+   _getCommentStrings: function SE__getCommentStrings()
+   {
+     let line = "";
+     let blockCommentStart = "";
+     let blockCommentEnd = "";
++    let allowBlockComment = true;
+ 
+     switch (this.getMode()) {
+       case SourceEditor.MODES.JAVASCRIPT:
+         line = "//";
+         blockCommentStart = "/*";
+         blockCommentEnd = "*/";
++        allowBlockComment = false;
+         break;
+       case SourceEditor.MODES.CSS:
+         blockCommentStart = "/*";
+         blockCommentEnd = "*/";
+         break;
+       case SourceEditor.MODES.HTML:
+       case SourceEditor.MODES.XML:
+         blockCommentStart = "<!--";
+         blockCommentEnd = "-->";
+         break;
+       default:
+         return null;
+     }
+-    return {line: line, blockStart: blockCommentStart, blockEnd: blockCommentEnd};
++    return {
++      line: line,
++      blockStart: blockCommentStart,
++      blockEnd: blockCommentEnd,
++      allowBlockComment: allowBlockComment,
++    };
+   },
+ 
+   /**
+    * Decide whether to comment the selection/current line or to uncomment it.
+    *
+    * @private
+    */
+   _doCommentUncomment: function SE__doCommentUncomment()
+@@ -1142,45 +1152,54 @@ SourceEditor.prototype = {
+ 
+     let commentObject = this._getCommentStrings();
+     if (!commentObject) {
+       return false;
+     }
+ 
+     let selection = this.getSelection();
+ 
+-    if (selection.start == selection.end) {
+-      let selectionLine = this._model.getLineAtOffset(selection.start);
+-      let lineStartOffset = this.getLineStart(selectionLine);
++    this.startCompoundChange();
++
++    if (selection.start == selection.end || !commentObject.allowBlockComment) {
++      let lineStart = this._model.getLineAtOffset(selection.start);
++      let lineStartOffset = this.getLineStart(lineStart);
++      let lineEnd = this._model.getLineAtOffset(selection.end);
++      if (lineStart != lineEnd &&
++          this._model.getLineStart(lineEnd) == selection.end) {
++        lineEnd--;
++      }
++
+       if (commentObject.line) {
+-        this.setText(commentObject.line, lineStartOffset, lineStartOffset);
++        for (let i = lineStart; i <= lineEnd; i++) {
++          let lineOffset = this._model.getLineStart(i);
++          this.setText(commentObject.line, lineOffset, lineOffset);
++        }
+       } else {
+-        let lineEndOffset = this.getLineEnd(selectionLine);
+-        this.startCompoundChange();
++        let lineEndOffset = this.getLineEnd(lineEnd);
+         this.setText(commentObject.blockStart, lineStartOffset, lineStartOffset);
+         this.setText(commentObject.blockEnd,
+                      lineEndOffset + commentObject.blockStart.length,
+                      lineEndOffset + commentObject.blockStart.length);
+-        this.endCompoundChange();
+       }
+     } else {
+-      this.startCompoundChange();
+       this.setText(commentObject.blockStart, selection.start, selection.start);
+       this.setText(commentObject.blockEnd,
+                    selection.end + commentObject.blockStart.length,
+                    selection.end + commentObject.blockStart.length);
+-      this.endCompoundChange();
+     }
+ 
++    this.endCompoundChange();
++
+     return true;
+   },
+ 
+   /**
+    * Uncomment the selected text. If nothing is selected the current caret line
+-   * is umcommented. Single line and block comments depend on the current editor
++   * is uncommented. Single line and block comments depend on the current editor
+    * mode.
+    *
+    * @private
+    */
+   _doUncomment: function SE__doUncomment()
+   {
+     if (this.readOnly) {
+       return false;
+diff --git a/browser/devtools/sourceeditor/test/browser_bug725430_comment_uncomment.js b/browser/devtools/sourceeditor/test/browser_bug725430_comment_uncomment.js
+--- a/browser/devtools/sourceeditor/test/browser_bug725430_comment_uncomment.js
++++ b/browser/devtools/sourceeditor/test/browser_bug725430_comment_uncomment.js
+@@ -48,33 +48,34 @@ function test() {
+     editor.redo();
+     is(editor.getText(), "//" + text, "Redo works");
+     editor.setCaretPosition(0);
+     EventUtils.synthesizeKey("/", {accelKey: true}, testWin);
+     is(editor.getText(), text, "JS Single Line Uncommenting works");
+ 
+     editor.setText(text);
+ 
++    let expText = "//firstline\n//secondline\n//thirdline\n//fourthline";
+     EventUtils.synthesizeKey("VK_A", {accelKey: true}, testWin);
+     EventUtils.synthesizeKey("/", {accelKey: true}, testWin);
+-    is(editor.getText(), "/*" + text + "*/", "JS Block Commenting works");
++    is(editor.getText(), expText, "JS Block Commenting works");
+     editor.undo();
+     is(editor.getText(), text, "Undo Block Commenting action works");
+     editor.redo();
+-    is(editor.getText(), "/*" + text + "*/", "Redo works");
++    is(editor.getText(), expText, "Redo works");
+     EventUtils.synthesizeKey("VK_A", {accelKey: true}, testWin);
+     EventUtils.synthesizeKey("/", {accelKey: true}, testWin);
+     is(editor.getText(), text, "JS Block Uncommenting works");
+     editor.undo();
+-    is(editor.getText(), "/*" + text + "*/", "Undo Block Uncommenting works");
++    is(editor.getText(), expText, "Undo Block Uncommenting works");
+     editor.redo();
+     is(editor.getText(), text, "Redo works");
+ 
+     let regText = "//firstline\n    //    secondline\nthird//line\n//fourthline";
+-    let expText = "firstline\n        secondline\nthird//line\nfourthline";
++    expText = "firstline\n        secondline\nthird//line\nfourthline";
+     editor.setText(regText);
+     EventUtils.synthesizeKey("VK_A", {accelKey: true}, testWin);
+     EventUtils.synthesizeKey("/", {accelKey: true}, testWin);
+     is(editor.getText(), expText, "JS Multiple Line Uncommenting works");
+     editor.undo();
+     is(editor.getText(), regText, "Undo Multiple Line Uncommenting works");
+     editor.redo();
+     is(editor.getText(), expText, "Redo works");

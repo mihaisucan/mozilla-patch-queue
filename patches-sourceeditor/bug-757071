@@ -1,0 +1,78 @@
+# HG changeset patch
+# Parent 1a7485bdf3014b3e8e3ba5de002fb8cbae1f155c
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1343159386 -10800
+
+Bug 757071 - Style editor doesn't honour existing line ending type on newly added lines
+
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -320,17 +320,17 @@ SourceEditor.prototype = {
+     window.initializeOrion();
+ 
+     let TextModel = window.require("orion/textview/textModel").TextModel;
+     let TextView = window.require("orion/textview/textView").TextView;
+ 
+     this._expandTab = config.expandTab;
+     this._tabSize = config.tabSize;
+ 
+-    this._model = new TextModel(config.initialText);
++    this._model = new TextModel(config.initialText, "auto");
+     this._view = new TextView({
+       model: this._model,
+       parent: "editor",
+       tabSize: this._tabSize,
+       expandTab: this._expandTab,
+       readonly: config.readOnly,
+       tabMode: "tabMode" in config ? config.tabMode : !config.readOnly,
+       themeClass: "mozilla" + (config.readOnly ? " readonly" : ""),
+@@ -1635,16 +1635,19 @@ SourceEditor.prototype = {
+    *        replacing text in the editor.
+    * @param number [aEnd=char count]
+    *        Optional, the end offset, zero based, where you want to stop
+    *        replacing text in the editor.
+    */
+   setText: function SE_setText(aText, aStart, aEnd)
+   {
+     this._view.setText(aText, aStart, aEnd);
++    if (!aStart && !aEnd) {
++      this._model.setLineDelimiter("auto");
++    }
+   },
+ 
+   /**
+    * Drop the current selection / deselect.
+    */
+   dropSelection: function SE_dropSelection()
+   {
+     this.setCaretOffset(this.getCaretOffset());
+diff --git a/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js b/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
+--- a/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
++++ b/browser/devtools/sourceeditor/test/browser_sourceeditor_initialization.js
+@@ -355,16 +355,25 @@ function testReturnKey()
+ 
+   editor.setCaretOffset(12 + lineDelimiter.length);
+   EventUtils.synthesizeKey("z", {}, testWin);
+   EventUtils.synthesizeKey("VK_RETURN", {}, testWin);
+   EventUtils.synthesizeKey("y", {}, testWin);
+   is(editor.getText(), "       a" + lineDelimiter +
+                        "    z" + lineDelimiter + "    yx\n  b\n c",
+      "return maintains indentation (again)");
++
++  // test for Bug 757071 - Style editor doesn't honour existing line ending type
++  // on newly added lines.
++  editor.setText("a\r\nb\r\nc\r\nd");
++  editor.setCaretOffset(1);
++  EventUtils.synthesizeKey("VK_RETURN", {}, testWin);
++  EventUtils.synthesizeKey("x", {}, testWin);
++  is(editor.getText(), "a\r\nx\r\nb\r\nc\r\nd",
++     "return maintains the same line ending");
+ }
+ 
+ function testClipboardEvents()
+ {
+   editor.setText("foobar");
+ 
+   let doCut = function() {
+     EventUtils.synthesizeKey("a", {accelKey: true}, testWin);

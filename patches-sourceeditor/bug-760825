@@ -1,0 +1,441 @@
+# HG changeset patch
+# Parent 6ce3f9befff46f5f23c643e68cad0c230c9499d8
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1343243936 -10800
+
+Bug 760825 - The source editor: respect the system font size setting and text zoom shortcuts
+
+diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
+--- a/browser/app/profile/firefox.js
++++ b/browser/app/profile/firefox.js
+@@ -1122,18 +1122,21 @@ pref("devtools.webconsole.filter.log", t
+ pref("devtools.hud.loglimit.network", 200);
+ pref("devtools.hud.loglimit.cssparser", 200);
+ pref("devtools.hud.loglimit.exception", 200);
+ pref("devtools.hud.loglimit.console", 200);
+ 
+ // The developer tools editor configuration:
+ // - tabsize: how many spaces to use when a Tab character is displayed.
+ // - expandtab: expand Tab characters to spaces.
++// - fontsize: editor text size in pixels. Use 0 for the default system font
++// size.
+ pref("devtools.editor.tabsize", 4);
+ pref("devtools.editor.expandtab", true);
++pref("devtools.editor.fontsize", 0);
+ 
+ // Tells which component you want to use for source editing in developer tools.
+ //
+ // Available components:
+ //   "orion" - this is the Orion source code editor from the Eclipse project. It
+ //   provides programmer-specific editor features such as syntax highlighting,
+ //   indenting and bracket recognition.
+ pref("devtools.editor.component", "orion");
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -130,16 +130,56 @@ const DEFAULT_KEYBINDINGS = [
+     code: Ci.nsIDOMKeyEvent.DOM_VK_OPEN_BRACKET,
+     accel: true,
+   },
+   {
+     action: "Move to Bracket Closing",
+     code: Ci.nsIDOMKeyEvent.DOM_VK_CLOSE_BRACKET,
+     accel: true,
+   },
++  {
++    action: "Increase font size",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_ADD,
++    accel: true,
++  },
++  {
++    action: "Decrease font size",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_SUBTRACT,
++    accel: true,
++  },
++  {
++    action: "Increase font size",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_EQUALS,
++    accel: true,
++  },
++  {
++    action: "Decrease font size",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_HYPHEN_MINUS,
++    accel: true,
++  },
++  {
++    action: "Increase font size",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_PLUS,
++    accel: true,
++  },
++  {
++    action: "Decrease font size",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_MINUS,
++    accel: true,
++  },
++  {
++    action: "Reset font size",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_0,
++    accel: true,
++  },
++  {
++    action: "Reset font size",
++    code: Ci.nsIDOMKeyEvent.DOM_VK_NUMPAD0,
++    accel: true,
++  },
+ ];
+ 
+ if (Services.appinfo.OS == "WINNT" ||
+     Services.appinfo.OS == "Linux") {
+   DEFAULT_KEYBINDINGS.push({
+     action: "redo",
+     code: Ci.nsIDOMKeyEvent.DOM_VK_Y,
+     accel: true,
+@@ -279,16 +319,24 @@ SourceEditor.prototype = {
+ 
+     this._iframeWindow = this._iframe.contentWindow.wrappedJSObject;
+     let window = this._iframeWindow;
+ 
+     if (gOrionModules) {
+       unregisterModules(gOrionModules);
+     }
+ 
++    // Setup the font size.
++    this._fontSize = Services.prefs.getIntPref(SourceEditor.PREFS.FONT_SIZE);
++    let fontSize = this._fontSize ? this._fontSize + "px" : "-moz-use-system-font";
++    let style = window.document.createElement("style");
++    style.id = "fontSizePref";
++    style.textContent = ".textviewContainer { font-size: " + fontSize + "; }";
++    window.document.head.appendChild(style);
++
+     let domain = new define.Domain();
+     domain.syntax = "amd";
+ 
+     window.require = domain.require.bind(domain);
+     window.define = define;
+ 
+     let onScriptLoad = function _onScriptLoad() {
+       script.removeEventListener("load", onScriptLoad, false);
+@@ -418,16 +466,19 @@ SourceEditor.prototype = {
+       "Find...": [this.ui.find, this.ui],
+       "Find Next Occurrence": [this.ui.findNext, this.ui],
+       "Find Previous Occurrence": [this.ui.findPrevious, this.ui],
+       "Goto Line...": [this.ui.gotoLine, this.ui],
+       "Move Lines Down": [this._moveLines, this],
+       "Comment/Uncomment": [this._doCommentUncomment, this],
+       "Move to Bracket Opening": [this._moveToBracketOpening, this],
+       "Move to Bracket Closing": [this._moveToBracketClosing, this],
++      "Increase font size": [this._increaseFontSize, this],
++      "Decrease font size": [this._decreaseFontSize, this],
++      "Reset font size": [this._resetFontSize, this],
+     };
+ 
+     for (let name in actions) {
+       let action = actions[name];
+       this._view.setAction(name, action[0].bind(action[1]));
+     }
+ 
+     this._view.setAction("Move Lines Up", this._moveLines.bind(this, true));
+@@ -2126,16 +2177,76 @@ SourceEditor.prototype = {
+    *         properties are included: x and y.
+    */
+   getLocationAtOffset: function SE_getLocationAtOffset(aOffset)
+   {
+     return this._view.getLocationAtOffset(aOffset);
+   },
+ 
+   /**
++   * Get the current font size (pixels) used by the editor.
++   * @type number
++   */
++  get fontSize() {
++    if (!this._fontSize) {
++      let window = this._iframeWindow;
++      let container = window.document.querySelector(".textviewContainer");
++      let style = window.getComputedStyle(container, null);
++      this._fontSize = parseInt(style.fontSize);
++    }
++    return this._fontSize;
++  },
++
++  /**
++   * Set the font size (pixels) in the editor view. Use 0 to reset to the system
++   * font size.
++   *
++   * @type number
++   */
++  set fontSize(aValue) {
++    let size = aValue ? aValue + "px" : "-moz-use-system-font";
++    let window = this._iframeWindow;
++    let style = window.document.getElementById("fontSizePref");
++    style.textContent = ".textviewContainer { font-size: " + size + "; }";
++    Services.prefs.setIntPref(SourceEditor.PREFS.FONT_SIZE, aValue);
++    this._view.update(true);
++    this._fontSize = aValue;
++  },
++
++  /**
++   * Increase the editor font size.
++   * @private
++   */
++  _increaseFontSize: function SE__increaseFontSize()
++  {
++    this.fontSize++;
++    return true;
++  },
++
++  /**
++   * Decrease the editor font size.
++   * @private
++   */
++  _decreaseFontSize: function SE__decreaseFontSize()
++  {
++    this.fontSize--;
++    return true;
++  },
++
++  /**
++   * Reset the editor font size back to the system default.
++   * @private
++   */
++  _resetFontSize: function SE__resetFontSize()
++  {
++    this.fontSize = 0;
++    return true;
++  },
++
++  /**
+    * Destroy/uninitialize the editor.
+    */
+   destroy: function SE_destroy()
+   {
+     if (this._config.highlightCurrentLine || Services.appinfo.OS == "Linux") {
+       this.removeEventListener(SourceEditor.EVENTS.SELECTION,
+                                this._onOrionSelection);
+     }
+diff --git a/browser/devtools/sourceeditor/source-editor.jsm b/browser/devtools/sourceeditor/source-editor.jsm
+--- a/browser/devtools/sourceeditor/source-editor.jsm
++++ b/browser/devtools/sourceeditor/source-editor.jsm
+@@ -45,16 +45,17 @@ XPCOMUtils.defineLazyGetter(SourceEditor
+ 
+ /**
+  * Known SourceEditor preferences.
+  */
+ SourceEditor.PREFS = {
+   TAB_SIZE: "devtools.editor.tabsize",
+   EXPAND_TAB: "devtools.editor.expandtab",
+   COMPONENT: PREF_EDITOR_COMPONENT,
++  FONT_SIZE: "devtools.editor.fontsize",
+ };
+ 
+ /**
+  * Predefined source editor modes for JavaScript, CSS and other languages.
+  */
+ SourceEditor.MODES = {
+   JAVASCRIPT: "js",
+   CSS: "css",
+@@ -312,16 +313,17 @@ function extend(aDestination, aSource)
+   }
+ }
+ 
+ /**
+  * Add methods common to all components.
+  */
+ extend(SourceEditor.prototype, {
+   // Expose the static constants on the SourceEditor instances.
++  PREFS: SourceEditor.PREFS,
+   EVENTS: SourceEditor.EVENTS,
+   MODES: SourceEditor.MODES,
+   THEMES: SourceEditor.THEMES,
+   DEFAULTS: SourceEditor.DEFAULTS,
+   VERTICAL_ALIGN: SourceEditor.VERTICAL_ALIGN,
+ 
+   _lastFind: null,
+ 
+diff --git a/browser/devtools/sourceeditor/test/Makefile.in b/browser/devtools/sourceeditor/test/Makefile.in
+--- a/browser/devtools/sourceeditor/test/Makefile.in
++++ b/browser/devtools/sourceeditor/test/Makefile.in
+@@ -26,11 +26,12 @@ MOCHITEST_BROWSER_FILES = \
+ 		browser_bug712982_line_ruler_click.js \
+ 		browser_bug725618_moveLines_shortcut.js \
+ 		browser_bug700893_dirty_state.js \
+ 		browser_vertical_align.js \
+ 		browser_bug725430_comment_uncomment.js \
+ 		browser_bug731721_debugger_stepping.js \
+ 		browser_bug729960_block_bracket_jump.js \
+ 		browser_bug725392_mouse_coords_char_offset.js \
++		browser_bug760825_font_size.js \
+ 		head.js \
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/sourceeditor/test/browser_bug725392_mouse_coords_char_offset.js b/browser/devtools/sourceeditor/test/browser_bug725392_mouse_coords_char_offset.js
+--- a/browser/devtools/sourceeditor/test/browser_bug725392_mouse_coords_char_offset.js
++++ b/browser/devtools/sourceeditor/test/browser_bug725392_mouse_coords_char_offset.js
+@@ -14,16 +14,17 @@ function test()
+ 
+   waitForExplicitFinish();
+ 
+   function editorLoaded(aEditor, aWindow)
+   {
+     editor = aEditor;
+     testWin = aWindow;
+ 
++    editor.fontSize = 11;
+     let text = fillEditor(editor, 3);
+     editor.setText(text);
+     editor.setCaretOffset(0);
+ 
+     doMouseMove(testPage1);
+   }
+ 
+   function doMouseMove(aCallback)
+@@ -142,16 +143,17 @@ function test()
+     ok(checkValue(offsetPos.y, y), "offsetPos.y is in range");
+ 
+     executeSoon(testEnd);
+   }
+ 
+   function testEnd()
+   {
+     if (editor) {
++      editor.fontSize = 0;
+       editor.destroy();
+     }
+     if (testWin) {
+       testWin.close();
+     }
+ 
+     waitForFocus(finish, window);
+   }
+diff --git a/browser/devtools/sourceeditor/test/browser_bug760825_font_size.js b/browser/devtools/sourceeditor/test/browser_bug760825_font_size.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/sourceeditor/test/browser_bug760825_font_size.js
+@@ -0,0 +1,65 @@
++/* vim: set ts=2 et sw=2 tw=80: */
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++"use strict";
++
++function test()
++{
++  waitForExplicitFinish();
++
++  function editorLoaded(editor, testWin)
++  {
++    editor.setText(fillEditor(editor, 2));
++    editor.setCaretOffset(0);
++
++    let initialSize = editor.fontSize;
++    ok(initialSize, "we have the initial font size");
++
++    let linesPerPage = editor._view.getBottomIndex() - editor.getTopIndex();
++    ok(linesPerPage, "we have the number of lines per page: " + linesPerPage);
++
++    editor.fontSize += 2;
++    is(editor.fontSize, initialSize + 2, "editor font size increased");
++    let newLinesPerPage = editor._view.getBottomIndex() - editor.getTopIndex();
++    ok(newLinesPerPage && newLinesPerPage < linesPerPage,
++       "editor font size updated properly: " + newLinesPerPage);
++    is(Services.prefs.getIntPref(editor.PREFS.FONT_SIZE), editor.fontSize,
++       "pref is correct");
++
++    editor.fontSize -= 4;
++    is(editor.fontSize, initialSize - 2, "editor font size decreased");
++    newLinesPerPage = editor._view.getBottomIndex() - editor.getTopIndex();
++    ok(newLinesPerPage && newLinesPerPage > linesPerPage,
++       "editor font size updated properly: " + newLinesPerPage);
++
++    EventUtils.synthesizeKey("0", {accelKey: true}, testWin);
++    is(editor.fontSize, initialSize, "editor font size reset");
++    newLinesPerPage = editor._view.getBottomIndex() - editor.getTopIndex();
++    is(newLinesPerPage, linesPerPage, "editor font size updated properly");
++
++    EventUtils.synthesizeKey("+", {accelKey: true}, testWin);
++    is(editor.fontSize, initialSize + 1, "editor font size increased");
++    newLinesPerPage = editor._view.getBottomIndex() - editor.getTopIndex();
++    ok(newLinesPerPage && newLinesPerPage < linesPerPage,
++       "editor font size updated properly: " + newLinesPerPage);
++
++    EventUtils.synthesizeKey("-", {accelKey: true}, testWin);
++    is(editor.fontSize, initialSize, "editor font size decreased");
++    newLinesPerPage = editor._view.getBottomIndex() - editor.getTopIndex();
++    is(newLinesPerPage, linesPerPage, "editor font size updated properly");
++    is(Services.prefs.getIntPref(editor.PREFS.FONT_SIZE), editor.fontSize,
++       "pref is correct");
++
++    editor.fontSize = 0;
++    is(Services.prefs.getIntPref(editor.PREFS.FONT_SIZE), 0,
++       "pref is correct after reset");
++
++    editor.destroy();
++    testWin.close();
++
++    waitForFocus(finish, window);
++  }
++
++  openSourceEditorWindow(editorLoaded);
++}
+diff --git a/browser/themes/gnomestripe/devtools/orion.css b/browser/themes/gnomestripe/devtools/orion.css
+--- a/browser/themes/gnomestripe/devtools/orion.css
++++ b/browser/themes/gnomestripe/devtools/orion.css
+@@ -5,17 +5,16 @@
+ body {
+   background: #fff;
+   color: #000;
+ }
+ 
+ .textviewContainer {
+   background: #cddae5; /* This will be seen as the continuation of the ruler */
+   font-family: monospace;
+-  font-size: inherit; /* inherit browser's default monospace font size */
+ }
+ 
+ .textviewContent {
+   color: black; /* Default text color */
+   background: #f0f0ff; /* Background of the editor */
+   padding-left: 4px;
+ }
+ 
+diff --git a/browser/themes/pinstripe/devtools/orion.css b/browser/themes/pinstripe/devtools/orion.css
+--- a/browser/themes/pinstripe/devtools/orion.css
++++ b/browser/themes/pinstripe/devtools/orion.css
+@@ -5,17 +5,16 @@
+ body {
+   background: #fff;
+   color: #000;
+ }
+ 
+ .textviewContainer {
+   background: #cddae5; /* This will be seen as the continuation of the ruler */
+   font-family: monospace;
+-  font-size: inherit; /* inherit browser's default monospace font size */
+ }
+ 
+ .textviewContent {
+   color: black; /* Default text color */
+   background: #f0f0ff; /* Background of the editor */
+   padding-left: 4px;
+ }
+ 
+diff --git a/browser/themes/winstripe/devtools/orion.css b/browser/themes/winstripe/devtools/orion.css
+--- a/browser/themes/winstripe/devtools/orion.css
++++ b/browser/themes/winstripe/devtools/orion.css
+@@ -5,17 +5,16 @@
+ body {
+   background: #fff;
+   color: #000;
+ }
+ 
+ .textviewContainer {
+   background: #cddae5; /* This will be seen as the continuation of the ruler */
+   font-family: monospace;
+-  font-size: inherit; /* inherit browser's default monospace font size */
+ }
+ 
+ .textviewContent {
+   color: black; /* Default text color */
+   background: #f0f0ff; /* Background of the editor */
+   padding-left: 4px;
+ }
+ 
