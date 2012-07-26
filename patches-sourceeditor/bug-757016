@@ -1,14 +1,34 @@
 # HG changeset patch
-# Parent 674986abe2a1af380199b1211f1cba3f8d7e118e
+# Parent a408e38a1cc9b22bf8f8529e6b80865225139dc3
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1343248217 -10800
+# Date 1343304564 -10800
 
 Bug 757016 - API for changing editor styling after initialization
 
 diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
 --- a/browser/devtools/sourceeditor/source-editor-orion.jsm
 +++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
-@@ -237,16 +237,17 @@ SourceEditor.prototype = {
+@@ -23,16 +23,19 @@ XPCOMUtils.defineLazyGetter(this, "orion
+   return Services.strings.createBundle(ORION_L10N);
+ });
+ 
+ const ORION_SCRIPT = "chrome://browser/content/orion.js";
+ const ORION_IFRAME = "data:text/html;charset=utf8,<!DOCTYPE html>" +
+   "<html style='height:100%' dir='ltr'>" +
+   "<head><meta charset='utf8'></head>" +
+   "<body style='height:100%;margin:0;overflow:hidden'>" +
++  "<div id='editorTheme'></div>" +
++  "<div id='editorStyles'></div>" +
++  "<style id='fontSizePref' type='text/css'></style>" +
+   "<div id='editor' style='height:100%'></div>" +
+   "</body></html>";
+ 
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ 
+ /**
+  * Maximum allowed vertical offset for the line index when you call
+  * SourceEditor.setCaretPosition().
+@@ -237,16 +240,18 @@ SourceEditor.prototype = {
    _mode: null,
    _expandTab: null,
    _tabSize: null,
@@ -18,6 +38,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    _contextMenu: null,
    _dirty: false,
 +  _fontSize: 0,
++  _theme: null,
  
    /**
     * The Source Editor user interface manager.
@@ -26,7 +47,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
     */
    ui: null,
  
-@@ -277,35 +278,21 @@ SourceEditor.prototype = {
+@@ -277,35 +282,21 @@ SourceEditor.prototype = {
  
      this._config = {};
      for (let key in SourceEditor.DEFAULTS) {
@@ -63,7 +84,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
      this.ui.init();
    },
  
-@@ -319,21 +306,24 @@ SourceEditor.prototype = {
+@@ -319,23 +310,23 @@ SourceEditor.prototype = {
  
      this._iframeWindow = this._iframe.contentWindow.wrappedJSObject;
      let window = this._iframeWindow;
@@ -72,23 +93,29 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
        unregisterModules(gOrionModules);
      }
  
-+    this.setTheme(this._config.theme);
-+
-     // Setup the font size.
-     this._fontSize = Services.prefs.getIntPref(SourceEditor.PREFS.FONT_SIZE);
-     let fontSize = this._fontSize ? this._fontSize + "px" : "-moz-use-system-font";
-     let style = window.document.createElement("style");
-     style.id = "fontSizePref";
-+    style.type = "text/css";
-     style.textContent = ".textviewContainer { font-size: " + fontSize + "; }";
-     window.document.head.appendChild(style);
+-    // Setup the font size.
+-    this._fontSize = Services.prefs.getIntPref(SourceEditor.PREFS.FONT_SIZE);
+-    let fontSize = this._fontSize ? this._fontSize + "px" : "-moz-use-system-font";
+-    let style = window.document.createElement("style");
+-    style.id = "fontSizePref";
+-    style.textContent = ".textviewContainer { font-size: " + fontSize + "; }";
+-    window.document.head.appendChild(style);
++    if (this._config.theme) {
++      this.setTheme(this._config.theme);
++    }
++    if (this._config.customStyles) {
++      this.setStylesheets(this._config.customStyles);
++    }
++    this.fontSize = Services.prefs.getIntPref(SourceEditor.PREFS.FONT_SIZE);
  
      let domain = new define.Domain();
      domain.syntax = "amd";
  
      window.require = domain.require.bind(domain);
      window.define = define;
-@@ -548,16 +538,58 @@ SourceEditor.prototype = {
+ 
+     let onScriptLoad = function _onScriptLoad() {
+@@ -548,16 +539,106 @@ SourceEditor.prototype = {
      this.ui.onReady();
      if (this._onReadyCallback) {
        this._onReadyCallback(this);
@@ -97,28 +124,76 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    },
  
    /**
++   * Get the current theme used by the editor.
++   *
++   * @return string
++   *         Current editor theme name.
++   */
++  getTheme: function SE_getTheme()
++  {
++    return this._theme;
++  },
++
++  /**
 +   * Change the editor theme.
 +   *
-+   * @param string|array aTheme
-+   *        String: name of the known theme you want to switch to (pick one of
-+   *        the SourceEditor.THEMES). Or you can directly point to the URL of
-+   *        the stylesheet you want to load in the editor view.
-+   *        Array: URLs that point to stylesheets you want to load in the
-+   *        editor.
-+   *        You can use data URIs and you can even provide raw CSS that will be
-+   *        added to the editor within a <style> element.
++   * @param string [aTheme]
++   *        One of the known themes you want to switch to (pick one of
++   *        the SourceEditor.THEMES). If the argument is falsy, then the current
++   *        theme styling is removed.
 +   * @see SourceEditor.THEMES in source-editor.jsm
 +   * @see SourceEditor.DEFAULTS.theme in source-editor.jsm
 +   */
 +  setTheme: function SE_setTheme(aTheme)
 +  {
-+    let stylesheets = aTheme in ORION_THEMES ? ORION_THEMES[aTheme] : aTheme;
++    if (aTheme && !(aTheme in ORION_THEMES)) {
++      // Do not change anything if the requested theme is unknown.
++      return;
++    }
++
++    let document = this._iframeWindow.document;
++    let container = document.querySelector("#editorTheme");
++    container.innerHTML = "";
++
++    let stylesheets = aTheme ? ORION_THEMES[aTheme] : [];
 +    if (!Array.isArray(stylesheets)) {
 +      stylesheets = [stylesheets];
 +    }
 +
-+    let document = this._iframeWindow.document;
 +    stylesheets.forEach(function(aStyle) {
++      let link = document.createElement("link");
++      link.rel = "stylesheet";
++      link.type = "text/css";
++      link.href = aStyle;
++      container.appendChild(link);
++    }, this);
++
++    if (this._view) {
++      this._view.update(true);
++    }
++
++    this._theme = aTheme;
++  },
++
++  /**
++   * Add custom stylesheets to the editor view.
++   *
++   * @param array [aStylesheets]
++   *        An array that holds URLs to custom stylesheets you want to load in
++   *        the editor view. These can be data URIs as well. If the string is
++   *        not an URI, then a raw <style> element is used. Any existing custom
++   *        stylesheets are replaced with the new ones you provide.
++   *        If the array is empty or if the argument is falsy, then the current
++   *        custom stylesheets are only removed.
++   * @see SourceEditor.DEFAULTS.theme in source-editor.jsm
++   */
++  setStylesheets: function SE_setStylesheets(aStylesheets)
++  {
++    let document = this._iframeWindow.document;
++    let container = document.querySelector("#editorStyles");
++    container.innerHTML = "";
++
++    (aStylesheets || []).forEach(function(aStyle) {
 +      let elem;
 +      if (/^[a-z]+:\/\/[^\n\r]+$/.test(aStyle) || /^data:.+/.test(aStyle)) {
 +        elem = document.createElement("link");
@@ -130,8 +205,8 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +        elem.type = "text/css";
 +        elem.textContent = aStyle;
 +      }
-+      document.head.appendChild(elem);
-+    });
++      container.appendChild(elem);
++    }, this);
 +
 +    if (this._view) {
 +      this._view.update(true);
@@ -147,6 +222,67 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    {
      if (this.readOnly) {
        return false;
+@@ -2202,17 +2283,19 @@ SourceEditor.prototype = {
+    * @type number
+    */
+   set fontSize(aValue) {
+     let size = aValue ? aValue + "px" : "-moz-use-system-font";
+     let window = this._iframeWindow;
+     let style = window.document.getElementById("fontSizePref");
+     style.textContent = ".textviewContainer { font-size: " + size + "; }";
+     Services.prefs.setIntPref(SourceEditor.PREFS.FONT_SIZE, aValue);
+-    this._view.update(true);
++    if (this._view) {
++      this._view.update(true);
++    }
+     this._fontSize = aValue;
+   },
+ 
+   /**
+    * Increase the editor font size.
+    * @private
+    */
+   _increaseFontSize: function SE__increaseFontSize()
+diff --git a/browser/devtools/sourceeditor/source-editor.jsm b/browser/devtools/sourceeditor/source-editor.jsm
+--- a/browser/devtools/sourceeditor/source-editor.jsm
++++ b/browser/devtools/sourceeditor/source-editor.jsm
+@@ -88,24 +88,35 @@ SourceEditor.DEFAULTS = {
+    *
+    * @see SourceEditor.MODES
+    * @type string
+    */
+   mode: SourceEditor.MODES.TEXT,
+ 
+   /**
+    * The syntax highlighting theme you want. You can use one of the predefined
+-   * themes, or you can point to your CSS file.
++   * themes, or no theme at all. In that case, you might want to use the
++   * customStyles option.
+    *
+    * @see SourceEditor.THEMES.
++   * @see SourceEditor.setTheme()
+    * @type string
+    */
+   theme: SourceEditor.THEMES.MOZILLA,
+ 
+   /**
++   * Any custom stylesheets you want to apply on top of the editor theme. The
++   * array can hold URLs to stylesheets, data URIs and even raw CSS.
++   *
++   * @see SourceEditor.setStylesheets()
++   * @type array
++   */
++  customStyles: null,
++
++  /**
+    * How many steps should the undo stack hold.
+    * @type number
+    */
+   undoLimit: 200,
+ 
+   /**
+    * Define how many spaces to use for a tab character. This value is overridden
+    * by a user preference, see SourceEditor.PREFS.TAB_SIZE.
 diff --git a/browser/devtools/sourceeditor/test/Makefile.in b/browser/devtools/sourceeditor/test/Makefile.in
 --- a/browser/devtools/sourceeditor/test/Makefile.in
 +++ b/browser/devtools/sourceeditor/test/Makefile.in
@@ -167,7 +303,7 @@ diff --git a/browser/devtools/sourceeditor/test/browser_bug757016_style_api.js b
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/sourceeditor/test/browser_bug757016_style_api.js
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,59 @@
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -182,7 +318,42 @@ new file mode 100644
 +  {
 +    editor.setText("test for bug 757016: style API");
 +
++    is(editor.getTheme(), editor.DEFAULTS.theme, "default theme is in use");
++
++    let editorWindow = editor.editorElement.contentWindow;
++    let content = editorWindow.document.querySelector(".textviewContent");
++
++    let bgr = editorWindow.getComputedStyle(content, null).backgroundColor;
++    ok(bgr, "background-color value found");
++
 +    editor.setTheme();
++
++    ok(!editor.getTheme(), "no theme is in use");
++    let newBgr = editorWindow.getComputedStyle(content, null).backgroundColor;
++    isnot(newBgr, bgr, "setTheme(): background-color value changed");
++
++    editor.setTheme(editor.DEFAULTS.theme);
++
++    is(editor.getTheme(), editor.DEFAULTS.theme, "default theme is used again");
++    newBgr = editorWindow.getComputedStyle(content, null).backgroundColor;
++    is(newBgr, bgr,
++       "setTheme(): background-color changed back to the initial value");
++
++    editor.setStylesheets([".textviewContent { background-color: red }"]);
++    newBgr = editorWindow.getComputedStyle(content, null).backgroundColor;
++    isnot(newBgr, bgr, "setStylesheets(): background-color value changed");
++
++    editor.setStylesheets();
++    newBgr = editorWindow.getComputedStyle(content, null).backgroundColor;
++    is(newBgr, bgr, "setStylesheets(): background-color value has been reset");
++
++    editor.setTheme();
++    newBgr = editorWindow.getComputedStyle(content, null).backgroundColor;
++    isnot(newBgr, bgr, "setTheme(): background-color value changed");
++
++    editor.setStylesheets(["chrome://browser/skin/devtools/orion.css"]);
++    newBgr = editorWindow.getComputedStyle(content, null).backgroundColor;
++    is(newBgr, bgr, "setStylesheets(): background-color value has changed");
 +
 +    editor.destroy();
 +    testWin.close();
