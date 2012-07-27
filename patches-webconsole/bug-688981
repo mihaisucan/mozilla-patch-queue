@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 966051493a76088359ce299a39719dce98dfb2fc
+# Parent efba40dd1a70f64faaf362546ad7976df18f1446
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1343315164 -10800
 
@@ -26,6 +26,159 @@ diff --git a/browser/base/content/browser.xul b/browser/base/content/browser.xul
  
  # All DTD information is stored in a separate file so that it can be shared by
  # hiddenWindow.xul.
+diff --git a/browser/devtools/commandline/test/browser_gcli_calllog.js b/browser/devtools/commandline/test/browser_gcli_calllog.js
+--- a/browser/devtools/commandline/test/browser_gcli_calllog.js
++++ b/browser/devtools/commandline/test/browser_gcli_calllog.js
+@@ -37,38 +37,46 @@ function testCallLogStatus() {
+ 
+ function testCallLogExec() {
+   DeveloperToolbarTest.exec({
+     typed: "calllog stop",
+     args: { },
+     outputMatch: /No call logging/,
+   });
+ 
++  let hud = null;
++  function onWebConsoleOpen(aSubject) {
++    Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
++
++    aSubject.QueryInterface(Ci.nsISupportsString);
++    hud = imported.HUDService.getHudReferenceById(aSubject.data);
++    ok(hud.hudId in imported.HUDService.hudReferences, "console open");
++
++    DeveloperToolbarTest.exec({
++      typed: "calllog stop",
++      args: { },
++      outputMatch: /Stopped call logging/,
++    });
++
++    DeveloperToolbarTest.exec({
++      typed: "console clear",
++      args: {},
++      blankOutput: true,
++    });
++
++    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
++    is(labels.length, 0, "no output in console");
++
++    DeveloperToolbarTest.exec({
++      typed: "console close",
++      args: {},
++      blankOutput: true,
++    });
++  }
++
++  Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
++
+   DeveloperToolbarTest.exec({
+     typed: "calllog start",
+     args: { },
+     outputMatch: /Call logging started/,
+   });
+-
+-  let hud = imported.HUDService.getHudByWindow(content);
+-  ok(hud.hudId in imported.HUDService.hudReferences, "console open");
+-
+-  DeveloperToolbarTest.exec({
+-    typed: "calllog stop",
+-    args: { },
+-    outputMatch: /Stopped call logging/,
+-  });
+-
+-  DeveloperToolbarTest.exec({
+-    typed: "console clear",
+-    args: {},
+-    blankOutput: true,
+-  });
+-
+-  let labels = hud.jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+-  is(labels.length, 0, "no output in console");
+-
+-  DeveloperToolbarTest.exec({
+-    typed: "console close",
+-    args: {},
+-    blankOutput: true,
+-  });
+ }
+diff --git a/browser/devtools/commandline/test/browser_gcli_commands.js b/browser/devtools/commandline/test/browser_gcli_commands.js
+--- a/browser/devtools/commandline/test/browser_gcli_commands.js
++++ b/browser/devtools/commandline/test/browser_gcli_commands.js
+@@ -24,43 +24,52 @@ function testEcho() {
+     typed: "echo message",
+     args: { message: "message" },
+     outputMatch: /^message$/,
+   });
+   */
+ }
+ 
+ function testConsole(tab) {
++  let hud = null;
++  function onWebConsoleOpen(aSubject) {
++    Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
++
++    aSubject.QueryInterface(Ci.nsISupportsString);
++    hud = imported.HUDService.getHudReferenceById(aSubject.data);
++    ok(hud.hudId in imported.HUDService.hudReferences, "console open");
++
++    hud.jsterm.execute("pprint(window)", onExecute);
++  }
++
++  Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
++
+   DeveloperToolbarTest.exec({
+     typed: "console open",
+     args: {},
+     blankOutput: true,
+   });
+ 
+-  let hud = imported.HUDService.getHudByWindow(content);
+-  ok(hud.hudId in imported.HUDService.hudReferences, "console open");
++  function onExecute() {
++    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
++    ok(labels.length > 0, "output for pprint(window)");
+ 
+-  hud.jsterm.execute("pprint(window)");
++    DeveloperToolbarTest.exec({
++      typed: "console clear",
++      args: {},
++      blankOutput: true,
++    });
+ 
+-  /*
+-  // The web console is async and we can't force it with hud._flushMessageQueue
+-  // So we are skipping the test for output until we have an event to wait on
+-  let labels = hud.jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+-  ok(labels.length > 0, "output for pprint(window)");
+-  */
++    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
++    is(labels.length, 0, "no output in console");
+ 
+-  DeveloperToolbarTest.exec({
+-    typed: "console clear",
+-    args: {},
+-    blankOutput: true,
+-  });
++    DeveloperToolbarTest.exec({
++      typed: "console close",
++      args: {},
++      blankOutput: true,
++    });
+ 
+-  let labels = hud.jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+-  is(labels.length, 0, "no output in console");
++    ok(!(hud.hudId in imported.HUDService.hudReferences), "console closed");
+ 
+-  DeveloperToolbarTest.exec({
+-    typed: "console close",
+-    args: {},
+-    blankOutput: true,
+-  });
+-
+-  ok(!(hud.hudId in imported.HUDService.hudReferences), "console closed");
++    imported = undefined;
++    finish();
++  }
+ }
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 --- a/browser/devtools/jar.mn
 +++ b/browser/devtools/jar.mn
@@ -7299,7 +7452,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -0,0 +1,3234 @@
+@@ -0,0 +1,3257 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -7534,6 +7687,15 @@ new file mode 100644
 +   * @type array
 +   */
 +  _pruneCategoriesQueue: null,
++
++  /**
++   * Function invoked whenever the output queue is emptied. This is used by some
++   * tests.
++   *
++   * @private
++   * @type function
++   */
++  _flushCallback: null,
 +
 +  /**
 +   * Store for tracking repeated CSS nodes.
@@ -8806,6 +8968,7 @@ new file mode 100644
 +    }
 +    else {
 +      this._outputTimeout = null;
++      this._flushCallback && this._flushCallback();
 +    }
 +
 +    this._lastOutputFlush = Date.now();
@@ -9487,6 +9650,9 @@ new file mode 100644
 +   * results come from the content process.
 +   *
 +   * @private
++   * @param function [aCallback]
++   *        Optional function to invoke when the evaluation result is added to
++   *        the output.
 +   * @param object aResponse
 +   *        The JSTerm:EvalResult message received from the content process. See
 +   *        JSTerm.handleEvalRequest() in HUDService-content.js for further
@@ -9496,7 +9662,7 @@ new file mode 100644
 +   * @see JSTerm.handleEvalRequest() in HUDService-content.js
 +   */
 +  _executeResultCallback:
-+  function JST__executeResultCallback(aResponse, aRequest)
++  function JST__executeResultCallback(aCallback, aResponse, aRequest)
 +  {
 +    let errorMessage = aResponse.errorMessage;
 +    let resultString = aResponse.resultString;
@@ -9511,6 +9677,15 @@ new file mode 100644
 +    }
 +
 +    let afterNode = aRequest.outputNode;
++
++    if (aCallback) {
++      let oldFlushCallback = this.hud._flushCallback;
++      this.hud._flushCallback = function() {
++        aCallback();
++        oldFlushCallback && oldFlushCallback();
++        this.hud._flushCallback = oldFlushCallback;
++      }.bind(this);
++    }
 +
 +    if (aResponse.errorMessage) {
 +      this.writeOutput(aResponse.errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
@@ -9534,8 +9709,10 @@ new file mode 100644
 +   * @param string [aExecuteString]
 +   *        The string you want to execute. If this is not provided, the current
 +   *        user input is used - taken from |this.inputNode.value|.
++   * @param function [aCallback]
++   *        Optional function to invoke when the result is displayed.
 +   */
-+  execute: function JST_execute(aExecuteString)
++  execute: function JST_execute(aExecuteString, aCallback)
 +  {
 +    // attempt to execute the content of the inputNode
 +    aExecuteString = aExecuteString || this.inputNode.value;
@@ -9546,9 +9723,8 @@ new file mode 100644
 +
 +    let node = this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
 +
-+    let messageToContent =
-+      this.evalInContentSandbox(aExecuteString,
-+                                this._executeResultCallback.bind(this));
++    let onResult = this._executeResultCallback.bind(this, aCallback);
++    let messageToContent = this.evalInContentSandbox(aExecuteString, onResult);
 +    messageToContent.outputNode = node;
 +
 +    this.history.push(aExecuteString);
