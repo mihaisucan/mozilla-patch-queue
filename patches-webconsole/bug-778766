@@ -1,14 +1,284 @@
 # HG changeset patch
-# Parent 1fbf3da47806afb02f5d9c31f062ab8deba6c227
+# Parent 8c63e260c4faf1d1aefbceab58a640f0881e0158
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1343745318 -10800
+# Date 1343767401 -10800
 
 Bug 778766 - Web Console output rewrite
 
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -1259,99 +1259,41 @@ WebConsoleFrame.prototype = {
+@@ -195,16 +195,18 @@ WebConsoleFrame.prototype = {
+   owner: null,
+ 
+   /**
+    * Getter for the xul:popupset that holds any popups we open.
+    * @type nsIDOMElement
+    */
+   get popupset() this.owner.mainPopupSet,
+ 
++  get contentLocation() this.owner.contentLocation,
++
+   /**
+    * Holds the network requests currently displayed by the Web Console. Each key
+    * represents the connection ID and the value is network request information.
+    * @private
+    * @type object
+    */
+   _networkRequests: null,
+ 
+@@ -665,38 +667,16 @@ WebConsoleFrame.prototype = {
+    * @returns boolean
+    */
+   getFilterState: function WCF_getFilterState(aToggleType)
+   {
+     return this.filterPrefs[aToggleType];
+   },
+ 
+   /**
+-   * Check that the passed string matches the filter arguments.
+-   *
+-   * @param String aString
+-   *        to search for filter words in.
+-   * @param String aFilter
+-   *        is a string containing all of the words to filter on.
+-   * @returns boolean
+-   */
+-  stringMatchesFilters: function WCF_stringMatchesFilters(aString, aFilter)
+-  {
+-    if (!aFilter || !aString) {
+-      return true;
+-    }
+-
+-    let searchStr = aString.toLowerCase();
+-    let filterStrings = aFilter.toLowerCase().split(/\s+/);
+-    return !filterStrings.some(function (f) {
+-      return searchStr.indexOf(f) == -1;
+-    });
+-  },
+-
+-  /**
+    * Turns the display of log nodes on and off appropriately to reflect the
+    * adjustment of the message type filter named by @aPrefKey.
+    *
+    * @param string aPrefKey
+    *        The preference key for the message type being filtered: one of the
+    *        values in the MESSAGE_PREFERENCE_KEYS table.
+    * @param boolean aState
+    *        True if the filter named by @aMessageType is being turned on; false
+@@ -742,17 +722,17 @@ WebConsoleFrame.prototype = {
+ 
+     for (let i = 0, n = nodes.length; i < n; ++i) {
+       let node = nodes[i];
+ 
+       // hide nodes that match the strings
+       let text = node.clipboardText;
+ 
+       // if the text matches the words in aSearchString...
+-      if (this.stringMatchesFilters(text, searchString)) {
++      if (Utils.stringMatchesFilters(text, searchString)) {
+         node.classList.remove("hud-filtered-by-string");
+       }
+       else {
+         node.classList.add("hud-filtered-by-string");
+       }
+     }
+ 
+     this.regroupOutput();
+@@ -779,25 +759,48 @@ WebConsoleFrame.prototype = {
+       isFiltered = true;
+     }
+ 
+     // Filter on the search string.
+     let search = this.filterBox.value;
+     let text = aNode.clipboardText;
+ 
+     // if string matches the filter text
+-    if (!this.stringMatchesFilters(text, search)) {
++    if (!Utils.stringMatchesFilters(text, search)) {
+       aNode.classList.add("hud-filtered-by-string");
+       isFiltered = true;
+     }
+ 
+     return isFiltered;
+   },
+ 
+   /**
++   * Applies the user's filters to a newly-created message object.
++   *
++   * @param object aMessage
++   *        The newly-created message object you wantto filter.
++   * @return boolean
++   *         True if the message was filtered or false otherwise.
++   */
++  filterMessage: function WCF_filterMessage(aMessage)
++  {
++    // Filter by the message type.
++    let prefKey = MESSAGE_PREFERENCE_KEYS[aMessage.category][aMessage.severity];
++    if (prefKey && !this.getFilterState(prefKey)) {
++      // The message is filtered by type.
++      aMessage.filteredByType = true;
++    }
++
++    // Filter on the search string.
++    aMessage.filterByString(this.filterBox.value);
++
++    return aMessage.filtered;
++  },
++
++  /**
+    * Merge the attributes of the two nodes that are about to be filtered.
+    * Increment the number of repeats of aOriginal.
+    *
+    * @param nsIDOMNode aOriginal
+    *        The Original Node. The one being merged into.
+    * @param nsIDOMNode aFiltered
+    *        The node being filtered out because it is repeated.
+    */
+@@ -874,16 +877,42 @@ WebConsoleFrame.prototype = {
+         lastMessage.childNodes[2].textContent) {
+       this.mergeFilteredMessageNode(lastMessage, aNode);
+       return true;
+     }
+ 
+     return false;
+   },
+ 
++  filterRepeatedMessage: function WCF_filterRepeatedMessage(aMessage)
++  {
++    let hash = aMessage.getHash();
++    let isRepeated = false;
++
++    if (aMessage.repeatFilter == REPEAT_FILTER.LAST &&
++        this.outputNode.lastChild) {
++      let lastMessage = this.outputNode.lastChild._messageObject;
++      if (lastMessage && lastMessage.getHash() == hash) {
++        lastMessage.repeats++;
++        isRepeated = true;
++      }
++    }
++    else if (aMessage.repeatFilter == REPEAT_FILTER.ALL) {
++      if (hash in this._messagesByHash) {
++        this._messagesByHash[hash].repeats++;
++        isRepeated = true;
++      }
++      else {
++        this._messagesByHash[hash] = aMessage;
++      }
++    }
++
++    return isRepeated;
++  },
++
+   /**
+    * Display cached messages that may have been collected before the UI is
+    * displayed.
+    *
+    * @private
+    * @param array aRemoteMessages
+    *        Array of cached messages coming from the remote Web Console
+    *        content instance.
+@@ -1092,92 +1121,28 @@ WebConsoleFrame.prototype = {
+                                       aScriptError.lineNumber, null, null,
+                                       aScriptError.timeStamp);
+     return node;
+   },
+ 
+   /**
+    * Log network activity.
+    *
++   * @private
+    * @param object aHttpActivity
+    *        The HTTP activity to log.
+    * @return nsIDOMElement|undefined
+-   *         The message element to display in the Web Console output.
++   *         The message object to display in the Web Console output.
+    */
+-  logNetActivity: function WCF_logNetActivity(aConnectionId)
++  _logNetActivity: function WCF__logNetActivity(aHttpActivity)
+   {
+-    let networkInfo = this._networkRequests[aConnectionId];
+-    if (!networkInfo) {
+-      return;
+-    }
+-
+-    let entry = networkInfo.httpActivity.log.entries[0];
+-    let request = entry.request;
+-
+-    let msgNode = this.document.createElementNS(XUL_NS, "hbox");
+-
+-    let methodNode = this.document.createElementNS(XUL_NS, "label");
+-    methodNode.setAttribute("value", request.method);
+-    methodNode.classList.add("webconsole-msg-body-piece");
+-    msgNode.appendChild(methodNode);
+-
+-    let linkNode = this.document.createElementNS(XUL_NS, "hbox");
+-    linkNode.flex = 1;
+-    linkNode.classList.add("webconsole-msg-body-piece");
+-    linkNode.classList.add("webconsole-msg-link");
+-    msgNode.appendChild(linkNode);
+-
+-    let urlNode = this.document.createElementNS(XUL_NS, "label");
+-    urlNode.flex = 1;
+-    urlNode.setAttribute("crop", "center");
+-    urlNode.setAttribute("title", request.url);
+-    urlNode.setAttribute("tooltiptext", request.url);
+-    urlNode.setAttribute("value", request.url);
+-    urlNode.classList.add("hud-clickable");
+-    urlNode.classList.add("webconsole-msg-body-piece");
+-    urlNode.classList.add("webconsole-msg-url");
+-    linkNode.appendChild(urlNode);
+-
+-    let severity = SEVERITY_LOG;
+-    let mixedRequest =
+-      WebConsoleUtils.isMixedHTTPSRequest(request.url,
+-                                          this.owner.contentLocation);
+-    if (mixedRequest) {
+-      urlNode.classList.add("webconsole-mixed-content");
+-      this.makeMixedContentNode(linkNode);
+-      // If we define a SEVERITY_SECURITY in the future, switch this to
+-      // SEVERITY_SECURITY.
+-      severity = SEVERITY_WARNING;
+-    }
+-
+-    let statusNode = this.document.createElementNS(XUL_NS, "label");
+-    statusNode.setAttribute("value", "");
+-    statusNode.classList.add("hud-clickable");
+-    statusNode.classList.add("webconsole-msg-body-piece");
+-    statusNode.classList.add("webconsole-msg-status");
+-    linkNode.appendChild(statusNode);
+-
+-    let clipboardText = request.method + " " + request.url;
+-
+-    let messageNode = this.createMessageNode(CATEGORY_NETWORK, severity,
+-                                             msgNode, null, null, clipboardText);
+-
+-    messageNode._connectionId = entry.connection;
+-
+-    this.makeOutputMessageLink(messageNode, function WCF_net_message_link() {
+-      if (!messageNode._panelOpen) {
+-        this.openNetworkPanel(messageNode, networkInfo.httpActivity);
+-      }
+-    }.bind(this));
+-
+-    networkInfo.node = messageNode;
+-
+-    this._updateNetMessage(entry.connection);
+-
+-    return messageNode;
++    let message = new WebConsoleMessages.NetworkRequest({
++      owner: this,
++      httpActivity: aHttpActivity,
++    });
+   },
+ 
+   /**
+    * Create a mixed content warning Node.
+    *
+    * @param aLinkNode
+    *        Parent to the requested urlNode.
+    */
+@@ -1259,99 +1224,38 @@ WebConsoleFrame.prototype = {
     *        NetworkMonitor.createActivityObject().
     */
    handleNetworkActivity: function WCF_handleNetworkActivity(aMessage)
@@ -19,15 +289,13 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (stage == "REQUEST_HEADER") {
 -      let networkInfo = {
 -        node: null,
-+      let outputMessage = new WebConsoleMessages.NetworkRequest({
-         httpActivity: aMessage,
+-        httpActivity: aMessage,
 -      };
 -
 -      this._networkRequests[entry.connection] = networkInfo;
 -      this.outputMessage(CATEGORY_NETWORK, this.logNetActivity,
 -                         [entry.connection]);
-+      });
-+
++      let outputMessage = this._logNetActivity(aMessage);
 +      this._networkRequests[entry.connection] = outputMessage;
 +      this.outputMessage2(outputMessage);
        return;
@@ -115,7 +383,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        The HTTP activity object that holds network request and response
     *        information. This object is given to the NetworkPanel constructor.
     * @return object
-@@ -1411,16 +1353,44 @@ WebConsoleFrame.prototype = {
+@@ -1411,16 +1315,44 @@ WebConsoleFrame.prototype = {
      if (!this._outputTimeout) {
        this._outputTimeout =
          this.window.setTimeout(this._flushMessageQueue.bind(this),
@@ -160,7 +428,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    _flushMessageQueue: function WCF__flushMessageQueue()
    {
-@@ -1529,16 +1499,20 @@ WebConsoleFrame.prototype = {
+@@ -1529,16 +1461,20 @@ WebConsoleFrame.prototype = {
     *        An item from the output queue - this item represents a message.
     * @return nsIDOMElement|undefined
     *         The DOM element of the message if the message is visible, undefined
@@ -169,8 +437,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    _outputMessageFromQueue:
    function WCF__outputMessageFromQueue(aHudIdSupportsString, aItem)
    {
-+    if (Array.isArray(aItem)) {
-+      return this._outputMessageFromQueue(aItem);
++    if (!Array.isArray(aItem)) {
++      return this._outputMessageFromQueue2(aItem);
 +    }
 +
      let [category, methodOrNode, args] = aItem;
@@ -181,7 +449,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (!node) {
        return;
      }
-@@ -1581,16 +1555,75 @@ WebConsoleFrame.prototype = {
+@@ -1581,27 +1517,71 @@ WebConsoleFrame.prototype = {
      let nodeID = node.getAttribute("id");
      Services.obs.notifyObservers(aHudIdSupportsString,
                                   "web-console-message-created", nodeID);
@@ -204,48 +472,33 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  _outputMessageFromQueue2:
 +  function WCF__outputMessageFromQueue2(aHudIdSupportsString, aItem)
 +  {
-+    // ... todo
-+
-+    let afterNode = node._outputAfterNode;
-+    if (afterNode) {
-+      delete node._outputAfterNode;
-+    }
-+
-+    this.filterByType();
-+
-+    let isRepeated = false;
-+    if (node.classList.contains("webconsole-msg-cssparser")) {
-+      isRepeated = this.filterRepeatedCSS(node);
-+    }
-+
-+    if (!isRepeated &&
-+        !node.classList.contains("webconsole-msg-network") &&
-+        (node.classList.contains("webconsole-msg-console") ||
-+         node.classList.contains("webconsole-msg-exception") ||
-+         node.classList.contains("webconsole-msg-error"))) {
-+      isRepeated = this.filterRepeatedConsole(node);
-+    }
++    let isFiltered = this.filterMessage(aItem);
++    let isRepeated = this.filterRepeatedMessage(aItem);
 +
 +    let lastVisible = !isRepeated && !isFiltered;
 +    if (!isRepeated) {
-+      this.outputNode.insertBefore(node,
++      aItem.render();
++
++      let afterNode = aItem._afterMessage ?
++                      aItem._afterMessage.element : null;
++      aItem._afterMessage = null;
++
++      this.outputNode.insertBefore(aItem.element,
 +                                   afterNode ? afterNode.nextSibling : null);
-+      this._pruneCategoriesQueue[node.category] = true;
++
++      this._pruneCategoriesQueue[aItem.category] = true;
++
 +      if (afterNode) {
-+        lastVisible = this.outputNode.lastChild == node;
++        lastVisible = this.outputNode.lastChild == aItem.element;
 +      }
++
++      aItem.onOutput();
++
++      Services.obs.notifyObservers(aHudIdSupportsString,
++                                   "web-console-message-created", aItem.id);
 +    }
 +
-+    if (node._onOutput) {
-+      node._onOutput();
-+      delete node._onOutput;
-+    }
-+
-+    let nodeID = node.getAttribute("id");
-+    Services.obs.notifyObservers(aHudIdSupportsString,
-+                                 "web-console-message-created", nodeID);
-+
-+    return lastVisible ? node : null;
++    return lastVisible ? aItem.element : null;
 +  },
 +
 +  /**
@@ -257,7 +510,68 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    {
      let nodes = {};
  
-@@ -3086,16 +3119,135 @@ JSTerm.prototype = {
+     // Group the messages per category.
+     this._outputQueue.forEach(function(aItem, aIndex) {
+-      let [category] = aItem;
++      let category = Array.isArray(aItem) ? aItem[0] : aItem.category;
+       if (!(category in nodes)) {
+         nodes[category] = [];
+       }
+       nodes[category].push(aIndex);
+     }, this);
+ 
+     let pruned = 0;
+ 
+@@ -1626,16 +1606,21 @@ WebConsoleFrame.prototype = {
+    * Prune an item from the output queue.
+    *
+    * @private
+    * @param array aItem
+    *        The item you want to remove from the output queue.
+    */
+   _pruneItemFromQueue: function WCF__pruneItemFromQueue(aItem)
+   {
++    if (!Array.isArray(aItem)) {
++      aItem.pruneFromOutputQueue();
++      return;
++    }
++
+     let [category, methodOrNode, args] = aItem;
+     if (typeof methodOrNode != "function" &&
+         methodOrNode._evalCacheId && !methodOrNode._panelOpen) {
+       this.jsterm.clearObjectCache(methodOrNode._evalCacheId);
+     }
+ 
+     if (category == CATEGORY_NETWORK) {
+       let connectionId = null;
+@@ -1707,16 +1692,26 @@ WebConsoleFrame.prototype = {
+   /**
+    * Remove a given message from the output.
+    *
+    * @param nsIDOMNode aNode
+    *        The message node you want to remove.
+    */
+   removeOutputMessage: function WCF_removeOutputMessage(aNode)
+   {
++    if (aNode._messageObject) {
++      let msg = aNode._messageObject;
++      let hash = msg._messageObject.getHash();
++      aNode._messageObject.remove();
++      if (hash in this._messagesByHash) {
++        delete this._messagesByHash[hash];
++      }
++      return;
++    }
++
+     if (aNode._evalCacheId && !aNode._panelOpen) {
+       this.jsterm.clearObjectCache(aNode._evalCacheId);
+     }
+ 
+     if (aNode.classList.contains("webconsole-msg-cssparser")) {
+       let desc = aNode.childNodes[2].textContent;
+       let location = "";
+       if (aNode.childNodes[4]) {
+@@ -3086,16 +3081,278 @@ JSTerm.prototype = {
      this.autocompletePopup.destroy();
  
      this.inputNode.removeEventListener("keypress", this._keyPress, false);
@@ -270,26 +584,87 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +WebConsoleMessages.BaseMessage = function WCM_BaseMessage(aOptions)
 +{
++  this.id = gSequenceId();
 +  this.category = aOptions.category;
 +  this.severity = aOptions.severity;
++  this.owner = aOptions.owner;
++  this._onOutput = aOptions.onOutput;
++  this._afterMessage = aOptions.afterMessage;
 +};
 +
 +WebConsoleMessages.BaseMessage.prototype = {
++  id: null,
 +  element: null,
-+  filtered: false,
 +  rendered: false,
 +  visible: false,
++  repeatFilter: REPEAT_FILTER.LAST,
++  category: null,
++  severity: null,
++  owner: null,
++
++  _repeats: 0,
++  _onOutput: null,
++  _afterMessage: null,
++  _filteredByType: false,
++  _filteredByString: false,
++
++  get filtered() this._filteredByType || this._filteredByString,
++
++  getHash: function WCM_BM_getHash()
++  {
++  },
 +
 +  render: function WCM_BM_render()
 +  {
 +  },
 +
-+  filterByType: function WCM_BM_filterByType(aType)
++  get filteredByType() this._filteredByType,
++
++  set filteredByType(aValue)
 +  {
++    this._filteredByType = aValue;
++    if (this.element) {
++      if (aValue) {
++        this.element.classList.add("hud-filtered-by-type");
++      }
++      else {
++        this.element.classList.remove("hud-filtered-by-type");
++      }
++    }
 +  },
 +
-+  filterByString: function WCM_BM_filterByString(aString)
++  get filteredByString() this._filteredByString,
++
++  filterByString: function WCM_BM_filterByString(aSearch)
 +  {
++    let text = this.getTextForFilter();
++    if (!Utils.stringMatchesFilters(text, aSearch)) {
++      this._filteredByString = true;
++    }
++
++    if (this.element) {
++      if (this._filteredByString) {
++        this.element.classList.add("hud-filtered-by-string");
++      }
++      else {
++        this.element.classList.remove("hud-filtered-by-string");
++      }
++    }
++  },
++
++  get repeats() this._repeats,
++
++  set repeats(aValue)
++  {
++    this._repeats = aValue;
++    if (this._repeatElement) {
++      this._repeatElement.setAttribute("value", this._repeats);
++    }
++  },
++
++  getTextForFilter: function WCM_BM_getTestForFilter()
++  {
++    return this.getClipboardText();
 +  },
 +
 +  getClipboardText: function WCM_BM_getClipboardText()
@@ -301,6 +676,18 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  },
 +
 +  hide: function WCM_BM_hide()
++  {
++  },
++
++  onOutput: function WCM_BM_onOutput()
++  {
++    if (this._onOutput) {
++      this._onOutput();
++      this._onOutput = null;
++    }
++  },
++
++  pruneFromOutputQueue: function WCM_BM_pruneFromOutputQueue()
 +  {
 +  },
 +  
@@ -316,11 +703,81 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +  constructor: function WCM_NetworkRequest(aOptions)
 +  {
-+    aOptions.category = CATEGORY_NETWORK;
++    if ("category" in aOptions) {
++      aOptions.category = CATEGORY_NETWORK;
++    }
 +
 +    this.$constructor.call(this, aOptions);
 +
 +    this.httpActivity = aOptions.httpActivity;
++  },
++
++  render: function WCM_NR_render()
++  {
++    let document = this.owner.document;
++    let request = this.request;
++
++    let msgNode = document.createElementNS(XUL_NS, "hbox");
++
++    let methodNode = document.createElementNS(XUL_NS, "label");
++    methodNode.setAttribute("value", request.method);
++    methodNode.classList.add("webconsole-msg-body-piece");
++    msgNode.appendChild(methodNode);
++
++    let linkNode = document.createElementNS(XUL_NS, "hbox");
++    linkNode.flex = 1;
++    linkNode.classList.add("webconsole-msg-body-piece");
++    linkNode.classList.add("webconsole-msg-link");
++    msgNode.appendChild(linkNode);
++
++    let urlNode = document.createElementNS(XUL_NS, "label");
++    urlNode.flex = 1;
++    urlNode.setAttribute("crop", "center");
++    urlNode.setAttribute("title", request.url);
++    urlNode.setAttribute("tooltiptext", request.url);
++    urlNode.setAttribute("value", request.url);
++    urlNode.classList.add("hud-clickable");
++    urlNode.classList.add("webconsole-msg-body-piece");
++    urlNode.classList.add("webconsole-msg-url");
++    linkNode.appendChild(urlNode);
++
++    let severity = SEVERITY_LOG;
++    let mixedRequest =
++      WebConsoleUtils.isMixedHTTPSRequest(request.url,
++                                          this.owner.contentLocation);
++    if (mixedRequest) {
++      urlNode.classList.add("webconsole-mixed-content");
++      this.makeMixedContentNode(linkNode);
++      // If we define a SEVERITY_SECURITY in the future, switch this to
++      // SEVERITY_SECURITY.
++      severity = SEVERITY_WARNING;
++    }
++
++    let statusNode = document.createElementNS(XUL_NS, "label");
++    statusNode.setAttribute("value", "");
++    statusNode.classList.add("hud-clickable");
++    statusNode.classList.add("webconsole-msg-body-piece");
++    statusNode.classList.add("webconsole-msg-status");
++    linkNode.appendChild(statusNode);
++
++    let clipboardText = request.method + " " + request.url;
++
++    let messageNode = this.createMessageNode(CATEGORY_NETWORK, severity,
++                                             msgNode, null, null, clipboardText);
++
++    messageNode._connectionId = entry.connection;
++
++    this.owner.makeOutputMessageLink(messageNode, function WCF_net_message_link() {
++      if (!messageNode._panelOpen) {
++        this.openNetworkPanel(messageNode, networkInfo.httpActivity);
++      }
++    }.bind(this));
++
++    networkInfo.node = messageNode;
++
++    this._updateNetMessage(entry.connection);
++
++    return messageNode;
 +  },
 +
 +  updateHttpActivity: function WCM_NR_updateHttpActivity(aHttpActivity)
@@ -393,7 +850,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Flag to turn on and off scrolling.
     */
    scroll: true,
-@@ -3182,16 +3334,29 @@ var Utils = {
+@@ -3182,16 +3439,52 @@ var Utils = {
        let prefName = CATEGORY_CLASS_FRAGMENTS[aCategory];
        logLimit = Services.prefs.getIntPref("devtools.hud.loglimit." + prefName);
        logLimit = Math.max(logLimit, 1);
@@ -414,7 +871,30 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    }
 +
 +    return result;
-+  }
++  },
++
++  /**
++   * Check that the passed string matches the filter arguments.
++   *
++   * @param string aString
++   *        The string to search in.
++   * @param string aFilter
++   *        The string containing all of the words to filter on.
++   * @returns boolean
++   *          True if the given filter matches the string, otherwise false.
++   */
++  stringMatchesFilters: function Utils_stringMatchesFilters(aString, aFilter)
++  {
++    if (!aFilter || !aString) {
++      return true;
++    }
++
++    let searchStr = aString.toLowerCase();
++    let filterStrings = aFilter.toLowerCase().split(/\s+/);
++    return !filterStrings.some(function (f) {
++      return searchStr.indexOf(f) == -1;
++    });
++  },
  };
  
  ///////////////////////////////////////////////////////////////////////////////
