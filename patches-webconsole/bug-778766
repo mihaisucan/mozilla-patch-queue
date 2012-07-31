@@ -1,0 +1,425 @@
+# HG changeset patch
+# Parent 1fbf3da47806afb02f5d9c31f062ab8deba6c227
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1343745318 -10800
+
+Bug 778766 - Web Console output rewrite
+
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -1259,99 +1259,41 @@ WebConsoleFrame.prototype = {
+    *        NetworkMonitor.createActivityObject().
+    */
+   handleNetworkActivity: function WCF_handleNetworkActivity(aMessage)
+   {
+     let stage = aMessage.meta.stages[aMessage.meta.stages.length - 1];
+     let entry = aMessage.log.entries[0];
+ 
+     if (stage == "REQUEST_HEADER") {
+-      let networkInfo = {
+-        node: null,
++      let outputMessage = new WebConsoleMessages.NetworkRequest({
+         httpActivity: aMessage,
+-      };
+-
+-      this._networkRequests[entry.connection] = networkInfo;
+-      this.outputMessage(CATEGORY_NETWORK, this.logNetActivity,
+-                         [entry.connection]);
++      });
++
++      this._networkRequests[entry.connection] = outputMessage;
++      this.outputMessage2(outputMessage);
+       return;
+     }
+     else if (!(entry.connection in this._networkRequests)) {
+       return;
+     }
+ 
+-    let networkInfo = this._networkRequests[entry.connection];
+-    networkInfo.httpActivity = aMessage;
+-
+-    if (networkInfo.node) {
+-      this._updateNetMessage(entry.connection);
+-    }
++    let outputMessage = this._networkRequests[entry.connection];
++    outputMessage.updateHttpActivity(aMessage);
+ 
+     // For unit tests we pass the HTTP activity object to the test callback,
+     // once requests complete.
+     if (this.owner.lastFinishedRequestCallback &&
+         aMessage.meta.stages.indexOf("REQUEST_STOP") > -1 &&
+         aMessage.meta.stages.indexOf("TRANSACTION_CLOSE") > -1) {
+       this.owner.lastFinishedRequestCallback(aMessage);
+     }
+   },
+ 
+   /**
+-   * Update an output message to reflect the latest state of a network request,
+-   * given a network connection ID.
+-   *
+-   * @private
+-   * @param string aConnectionId
+-   *        The connection ID to update.
+-   */
+-  _updateNetMessage: function WCF__updateNetMessage(aConnectionId)
+-  {
+-    let networkInfo = this._networkRequests[aConnectionId];
+-    if (!networkInfo || !networkInfo.node) {
+-      return;
+-    }
+-
+-    let messageNode = networkInfo.node;
+-    let httpActivity = networkInfo.httpActivity;
+-    let stages = httpActivity.meta.stages;
+-    let hasTransactionClose = stages.indexOf("TRANSACTION_CLOSE") > -1;
+-    let hasResponseHeader = stages.indexOf("RESPONSE_HEADER") > -1;
+-    let entry = httpActivity.log.entries[0];
+-    let request = entry.request;
+-    let response = entry.response;
+-
+-    if (hasTransactionClose || hasResponseHeader) {
+-      let status = [];
+-      if (response.httpVersion && response.status) {
+-        status = [response.httpVersion, response.status, response.statusText];
+-      }
+-      if (hasTransactionClose) {
+-        status.push(l10n.getFormatStr("NetworkPanel.durationMS", [entry.time]));
+-      }
+-      let statusText = "[" + status.join(" ") + "]";
+-
+-      let linkNode = messageNode.querySelector(".webconsole-msg-link");
+-      let statusNode = linkNode.querySelector(".webconsole-msg-status");
+-      statusNode.setAttribute("value", statusText);
+-
+-      messageNode.clipboardText = [request.method, request.url, statusText]
+-                                  .join(" ");
+-
+-      if (hasResponseHeader && response.status >= MIN_HTTP_ERROR_CODE &&
+-          response.status <= MAX_HTTP_ERROR_CODE) {
+-        this.setMessageType(messageNode, CATEGORY_NETWORK, SEVERITY_ERROR);
+-      }
+-    }
+-
+-    if (messageNode._netPanel) {
+-      messageNode._netPanel.update();
+-    }
+-  },
+-
+-  /**
+    * Opens a NetworkPanel.
+    *
+    * @param nsIDOMNode aNode
+    *        The message node you want the panel to be anchored to.
+    * @param object aHttpActivity
+    *        The HTTP activity object that holds network request and response
+    *        information. This object is given to the NetworkPanel constructor.
+    * @return object
+@@ -1411,16 +1353,44 @@ WebConsoleFrame.prototype = {
+     if (!this._outputTimeout) {
+       this._outputTimeout =
+         this.window.setTimeout(this._flushMessageQueue.bind(this),
+                                OUTPUT_INTERVAL);
+     }
+   },
+ 
+   /**
++   * Output a message object. This filters a node appropriately, then sends it
++   * to the output, regrouping and pruning output as necessary.
++   *
++   * Note: this call is async - the given message object may not be displayed
++   * when you call this method.
++   *
++   * @see WebConsoleMessages for kinds of messages you can output.
++   * @param object aMessage
++   *        The message object you want to output.
++   */
++  outputMessage2: function WCF_outputMessage2(aMessage)
++  {
++    if (!this._outputQueue.length) {
++      // If the queue is empty we consider that now was the last output flush.
++      // This avoid an immediate output flush when the timer executes.
++      this._lastOutputFlush = Date.now();
++    }
++
++    this._outputQueue.push(aMessage);
++
++    if (!this._outputTimeout) {
++      this._outputTimeout =
++        this.window.setTimeout(this._flushMessageQueue.bind(this),
++                               OUTPUT_INTERVAL);
++    }
++  },
++
++  /**
+    * Try to flush the output message queue. This takes the messages in the
+    * output queue and displays them. Outputting stops at MESSAGES_IN_INTERVAL.
+    * Further output is queued to happen later - see OUTPUT_INTERVAL.
+    *
+    * @private
+    */
+   _flushMessageQueue: function WCF__flushMessageQueue()
+   {
+@@ -1529,16 +1499,20 @@ WebConsoleFrame.prototype = {
+    *        An item from the output queue - this item represents a message.
+    * @return nsIDOMElement|undefined
+    *         The DOM element of the message if the message is visible, undefined
+    *         otherwise.
+    */
+   _outputMessageFromQueue:
+   function WCF__outputMessageFromQueue(aHudIdSupportsString, aItem)
+   {
++    if (Array.isArray(aItem)) {
++      return this._outputMessageFromQueue(aItem);
++    }
++
+     let [category, methodOrNode, args] = aItem;
+ 
+     let node = typeof methodOrNode == "function" ?
+                methodOrNode.apply(this, args || []) :
+                methodOrNode;
+     if (!node) {
+       return;
+     }
+@@ -1581,16 +1555,75 @@ WebConsoleFrame.prototype = {
+     let nodeID = node.getAttribute("id");
+     Services.obs.notifyObservers(aHudIdSupportsString,
+                                  "web-console-message-created", nodeID);
+ 
+     return lastVisible ? node : null;
+   },
+ 
+   /**
++   * Output a message from the queue.
++   *
++   * @private
++   * @param nsISupportsString aHudIdSupportsString
++   *        The HUD ID as an nsISupportsString.
++   * @param array aItem
++   *        An item from the output queue - this item represents a message.
++   * @return nsIDOMElement|undefined
++   *         The DOM element of the message if the message is visible, undefined
++   *         otherwise.
++   */
++  _outputMessageFromQueue2:
++  function WCF__outputMessageFromQueue2(aHudIdSupportsString, aItem)
++  {
++    // ... todo
++
++    let afterNode = node._outputAfterNode;
++    if (afterNode) {
++      delete node._outputAfterNode;
++    }
++
++    this.filterByType();
++
++    let isRepeated = false;
++    if (node.classList.contains("webconsole-msg-cssparser")) {
++      isRepeated = this.filterRepeatedCSS(node);
++    }
++
++    if (!isRepeated &&
++        !node.classList.contains("webconsole-msg-network") &&
++        (node.classList.contains("webconsole-msg-console") ||
++         node.classList.contains("webconsole-msg-exception") ||
++         node.classList.contains("webconsole-msg-error"))) {
++      isRepeated = this.filterRepeatedConsole(node);
++    }
++
++    let lastVisible = !isRepeated && !isFiltered;
++    if (!isRepeated) {
++      this.outputNode.insertBefore(node,
++                                   afterNode ? afterNode.nextSibling : null);
++      this._pruneCategoriesQueue[node.category] = true;
++      if (afterNode) {
++        lastVisible = this.outputNode.lastChild == node;
++      }
++    }
++
++    if (node._onOutput) {
++      node._onOutput();
++      delete node._onOutput;
++    }
++
++    let nodeID = node.getAttribute("id");
++    Services.obs.notifyObservers(aHudIdSupportsString,
++                                 "web-console-message-created", nodeID);
++
++    return lastVisible ? node : null;
++  },
++
++  /**
+    * Prune the queue of messages to display. This avoids displaying messages
+    * that will be removed at the end of the queue anyway.
+    * @private
+    */
+   _pruneOutputQueue: function WCF__pruneOutputQueue()
+   {
+     let nodes = {};
+ 
+@@ -3086,16 +3119,135 @@ JSTerm.prototype = {
+     this.autocompletePopup.destroy();
+ 
+     this.inputNode.removeEventListener("keypress", this._keyPress, false);
+     this.inputNode.removeEventListener("input", this._inputEventHandler, false);
+     this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
+   },
+ };
+ 
++var WebConsoleMessages = {};
++
++WebConsoleMessages.BaseMessage = function WCM_BaseMessage(aOptions)
++{
++  this.category = aOptions.category;
++  this.severity = aOptions.severity;
++};
++
++WebConsoleMessages.BaseMessage.prototype = {
++  element: null,
++  filtered: false,
++  rendered: false,
++  visible: false,
++
++  render: function WCM_BM_render()
++  {
++  },
++
++  filterByType: function WCM_BM_filterByType(aType)
++  {
++  },
++
++  filterByString: function WCM_BM_filterByString(aString)
++  {
++  },
++
++  getClipboardText: function WCM_BM_getClipboardText()
++  {
++  },
++
++  show: function WCM_BM_show()
++  {
++  },
++
++  hide: function WCM_BM_hide()
++  {
++  },
++  
++  remove: function WCM_BM_remove()
++  {
++  },
++};
++
++WebConsoleMessages.NetworkRequest = Utils.extend(WebConsoleMessages.BaseMessage,
++{
++  url: null,
++  httpActivity: null,
++
++  constructor: function WCM_NetworkRequest(aOptions)
++  {
++    aOptions.category = CATEGORY_NETWORK;
++
++    this.$constructor.call(this, aOptions);
++
++    this.httpActivity = aOptions.httpActivity;
++  },
++
++  updateHttpActivity: function WCM_NR_updateHttpActivity(aHttpActivity)
++  {
++    this.httpActivity = aHttpActivity;
++    if (this.rendered) {
++      this._updateNetMessage(entry.connection);
++    }
++  },
++
++  /**
++   * Update an output message to reflect the latest state of a network request,
++   * given a network connection ID.
++   *
++   * @private
++   * @param string aConnectionId
++   *        The connection ID to update.
++   */
++  _updateNetMessage: function WCF__updateNetMessage(aConnectionId)
++  {
++    let networkInfo = this._networkRequests[aConnectionId];
++    if (!networkInfo || !networkInfo.node) {
++      return;
++    }
++
++    let messageNode = networkInfo.node;
++    let httpActivity = networkInfo.httpActivity;
++    let stages = httpActivity.meta.stages;
++    let hasTransactionClose = stages.indexOf("TRANSACTION_CLOSE") > -1;
++    let hasResponseHeader = stages.indexOf("RESPONSE_HEADER") > -1;
++    let entry = httpActivity.log.entries[0];
++    let request = entry.request;
++    let response = entry.response;
++
++    if (hasTransactionClose || hasResponseHeader) {
++      let status = [];
++      if (response.httpVersion && response.status) {
++        status = [response.httpVersion, response.status, response.statusText];
++      }
++      if (hasTransactionClose) {
++        status.push(l10n.getFormatStr("NetworkPanel.durationMS", [entry.time]));
++      }
++      let statusText = "[" + status.join(" ") + "]";
++
++      let linkNode = messageNode.querySelector(".webconsole-msg-link");
++      let statusNode = linkNode.querySelector(".webconsole-msg-status");
++      statusNode.setAttribute("value", statusText);
++
++      messageNode.clipboardText = [request.method, request.url, statusText]
++                                  .join(" ");
++
++      if (hasResponseHeader && response.status >= MIN_HTTP_ERROR_CODE &&
++          response.status <= MAX_HTTP_ERROR_CODE) {
++        this.setMessageType(messageNode, CATEGORY_NETWORK, SEVERITY_ERROR);
++      }
++    }
++
++    if (messageNode._netPanel) {
++      messageNode._netPanel.update();
++    }
++  },
++});
++
++
+ /**
+  * Utils: a collection of globally used functions.
+  */
+ var Utils = {
+   /**
+    * Flag to turn on and off scrolling.
+    */
+   scroll: true,
+@@ -3182,16 +3334,29 @@ var Utils = {
+       let prefName = CATEGORY_CLASS_FRAGMENTS[aCategory];
+       logLimit = Services.prefs.getIntPref("devtools.hud.loglimit." + prefName);
+       logLimit = Math.max(logLimit, 1);
+     }
+     catch (e) { }
+ 
+     return logLimit;
+   },
++
++  extend: function Utils_extend(aBaseObject, aNewObject)
++  {
++    let result = Object.create(aBaseObject.prototype);
++    for (let key in aNewObject) {
++      if (key in result.prototype) {
++        result.prototype["$" + key] = result.prototype[key];
++      }
++      result.prototype[key] = aNewObject[key];
++    }
++
++    return result;
++  }
+ };
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+ // CommandController
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ /**
+  * A controller (an instance of nsIController) that makes editing actions
