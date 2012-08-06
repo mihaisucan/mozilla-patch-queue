@@ -1,164 +1,10 @@
 # HG changeset patch
-# Parent c3475b69ddd6fc194f34e3f60fbdbae3b609a56e
+# Parent c8d94fe7506a46415651d3b41fa340155a1fa7d1
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1342790100 -10800
+# Date 1344267534 -10800
 
 Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
-diff --git a/browser/devtools/commandline/test/browser_gcli_calllog.js b/browser/devtools/commandline/test/browser_gcli_calllog.js
---- a/browser/devtools/commandline/test/browser_gcli_calllog.js
-+++ b/browser/devtools/commandline/test/browser_gcli_calllog.js
-@@ -37,38 +37,46 @@ function testCallLogStatus() {
- 
- function testCallLogExec() {
-   DeveloperToolbarTest.exec({
-     typed: "calllog stop",
-     args: { },
-     outputMatch: /No call logging/,
-   });
- 
-+  let hud = null;
-+  function onWebConsoleOpen(aSubject) {
-+    Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
-+
-+    aSubject.QueryInterface(Ci.nsISupportsString);
-+    hud = imported.HUDService.getHudReferenceById(aSubject.data);
-+    ok(hud.hudId in imported.HUDService.hudReferences, "console open");
-+
-+    DeveloperToolbarTest.exec({
-+      typed: "calllog stop",
-+      args: { },
-+      outputMatch: /Stopped call logging/,
-+    });
-+
-+    DeveloperToolbarTest.exec({
-+      typed: "console clear",
-+      args: {},
-+      blankOutput: true,
-+    });
-+
-+    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
-+    is(labels.length, 0, "no output in console");
-+
-+    DeveloperToolbarTest.exec({
-+      typed: "console close",
-+      args: {},
-+      blankOutput: true,
-+    });
-+  }
-+
-+  Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
-+
-   DeveloperToolbarTest.exec({
-     typed: "calllog start",
-     args: { },
-     outputMatch: /Call logging started/,
-   });
--
--  let hud = imported.HUDService.getHudByWindow(content);
--  ok(hud.hudId in imported.HUDService.hudReferences, "console open");
--
--  DeveloperToolbarTest.exec({
--    typed: "calllog stop",
--    args: { },
--    outputMatch: /Stopped call logging/,
--  });
--
--  DeveloperToolbarTest.exec({
--    typed: "console clear",
--    args: {},
--    blankOutput: true,
--  });
--
--  let labels = hud.jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
--  is(labels.length, 0, "no output in console");
--
--  DeveloperToolbarTest.exec({
--    typed: "console close",
--    args: {},
--    blankOutput: true,
--  });
- }
-diff --git a/browser/devtools/commandline/test/browser_gcli_commands.js b/browser/devtools/commandline/test/browser_gcli_commands.js
---- a/browser/devtools/commandline/test/browser_gcli_commands.js
-+++ b/browser/devtools/commandline/test/browser_gcli_commands.js
-@@ -24,43 +24,54 @@ function testEcho() {
-     typed: "echo message",
-     args: { message: "message" },
-     outputMatch: /^message$/,
-   });
-   */
- }
- 
- function testConsole(tab) {
-+  let hud = null;
-+  function onWebConsoleOpen(aSubject) {
-+    Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
-+
-+    aSubject.QueryInterface(Ci.nsISupportsString);
-+    hud = imported.HUDService.getHudReferenceById(aSubject.data);
-+    ok(hud.hudId in imported.HUDService.hudReferences, "console open");
-+
-+    hud.jsterm.execute("pprint(window)", onExecute);
-+  }
-+
-+  Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
-+
-   DeveloperToolbarTest.exec({
-     typed: "console open",
-     args: {},
-     blankOutput: true,
-   });
- 
--  let hud = imported.HUDService.getHudByWindow(content);
--  ok(hud.hudId in imported.HUDService.hudReferences, "console open");
-+  function onExecute() {
-+    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
-+    ok(labels.length > 0, "output for pprint(window)");
- 
--  hud.jsterm.execute("pprint(window)");
-+    hud._flushCallback = null;
- 
--  /*
--  // The web console is async and we can't force it with hud._flushMessageQueue
--  // So we are skipping the test for output until we have an event to wait on
--  let labels = hud.jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
--  ok(labels.length > 0, "output for pprint(window)");
--  */
-+    DeveloperToolbarTest.exec({
-+      typed: "console clear",
-+      args: {},
-+      blankOutput: true,
-+    });
- 
--  DeveloperToolbarTest.exec({
--    typed: "console clear",
--    args: {},
--    blankOutput: true,
--  });
-+    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
-+    is(labels.length, 0, "no output in console");
- 
--  let labels = hud.jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
--  is(labels.length, 0, "no output in console");
-+    DeveloperToolbarTest.exec({
-+      typed: "console close",
-+      args: {},
-+      blankOutput: true,
-+    });
- 
--  DeveloperToolbarTest.exec({
--    typed: "console close",
--    args: {},
--    blankOutput: true,
--  });
-+    ok(!(hud.hudId in imported.HUDService.hudReferences), "console closed");
- 
--  ok(!(hud.hudId in imported.HUDService.hudReferences), "console closed");
-+    imported = undefined;
-+    finish();
-+  }
- }
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
@@ -187,7 +33,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    function log(aMessage) {
      var _msg = aMessagePrefix + " " + aMessage + "\n";
      dump(_msg);
-@@ -572,28 +580,47 @@ WebConsole.prototype = {
+@@ -571,28 +579,47 @@ WebConsole.prototype = {
    get outputNode()
    {
      return this.ui ? this.ui.outputNode : null;
@@ -236,13 +82,13 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    _initUI: function WC__initUI()
 @@ -621,16 +648,21 @@ WebConsole.prototype = {
-    */
-   _onIframeLoad: function WC__onIframeLoad()
    {
      this.iframe.removeEventListener("load", this._onIframeLoad, true);
  
+     let position = Services.prefs.getCharPref("devtools.webconsole.position");
+ 
      this.iframeWindow = this.iframe.contentWindow.wrappedJSObject;
-     this.ui = new this.iframeWindow.WebConsoleFrame(this, this._currentUIPosition);
+     this.ui = new this.iframeWindow.WebConsoleFrame(this, position);
      this._setupMessageManager();
 +    this.proxy.connect(function() {
 +      if (this._messageManagerInitComplete) {
@@ -257,7 +103,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @private
     */
    _createOwnWindowPanel: function WC__createOwnWindowPanel()
-@@ -918,31 +950,44 @@ WebConsole.prototype = {
+@@ -919,31 +951,44 @@ WebConsole.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
@@ -304,7 +150,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    _onInitComplete: function WC__onInitComplete()
    {
-@@ -1052,16 +1097,20 @@ WebConsole.prototype = {
+@@ -1053,16 +1098,20 @@ WebConsole.prototype = {
    destroy: function WC_destroy()
    {
      this.sendMessageToContent("WebConsole:Destroy", {});
@@ -325,7 +171,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let panels = popupset.querySelectorAll("panel[hudId=" + this.hudId + "]");
      for (let panel of panels) {
        if (panel != this.consolePanel) {
-@@ -1086,16 +1135,153 @@ WebConsole.prototype = {
+@@ -1087,16 +1136,153 @@ WebConsole.prototype = {
      }
  
      if (this.splitter.parentNode) {
@@ -710,33 +556,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601909_reme
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -229,16 +229,25 @@ WebConsoleFrame.prototype = {
-    * Keep track of the categories we need to prune from time to time.
-    *
-    * @private
-    * @type array
-    */
-   _pruneCategoriesQueue: null,
- 
-   /**
-+   * Function invoked whenever the output queue is emptied. This is used by some
-+   * tests.
-+   *
-+   * @private
-+   * @type function
-+   */
-+  _flushCallback: null,
-+
-+  /**
-    * Store for tracking repeated CSS nodes.
-    * @private
-    * @type object
-    */
-   _cssNodes: null,
- 
-   /**
-    * Preferences for filtering messages by type.
-@@ -526,26 +535,22 @@ WebConsoleFrame.prototype = {
+@@ -535,26 +535,22 @@ WebConsoleFrame.prototype = {
          break;
        case "JSTerm:InspectObject":
          this.jsterm.handleInspectObject(aMessage.json);
@@ -766,7 +586,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          this.outputMessage(CATEGORY_NETWORK, this.logFileActivity,
                             [aMessage.json.uri]);
          break;
-@@ -1081,16 +1086,29 @@ WebConsoleFrame.prototype = {
+@@ -1146,16 +1142,29 @@ WebConsoleFrame.prototype = {
                                        aScriptError.errorMessage,
                                        aScriptError.sourceName,
                                        aScriptError.lineNumber, null, null,
@@ -796,116 +616,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *         The message element to display in the Web Console output.
     */
    logNetActivity: function WCF_logNetActivity(aConnectionId)
-@@ -1499,16 +1517,17 @@ WebConsoleFrame.prototype = {
-     // If the queue is not empty, schedule another flush.
-     if (this._outputQueue.length > 0) {
-       this._outputTimeout =
-         this.window.setTimeout(this._flushMessageQueue.bind(this),
-                                OUTPUT_INTERVAL);
-     }
-     else {
-       this._outputTimeout = null;
-+      this._flushCallback && this._flushCallback();
-     }
- 
-     this._lastOutputFlush = Date.now();
-   },
- 
-   /**
-    * Output a message from the queue.
-    *
-@@ -2180,41 +2199,53 @@ JSTerm.prototype = {
-   },
- 
-   /**
-    * The "JSTerm:EvalResult" message handler. This is the JSTerm execution
-    * result callback which is invoked whenever JavaScript code evaluation
-    * results come from the content process.
-    *
-    * @private
-+   * @param function [aCallback]
-+   *        Optional function to invoke when the evaluation result is added to
-+   *        the output.
-    * @param object aResponse
-    *        The JSTerm:EvalResult message received from the content process. See
-    *        JSTerm.handleEvalRequest() in HUDService-content.js for further
-    *        details.
-    * @param object aRequest
-    *        The JSTerm:EvalRequest message we sent to the content process.
-    * @see JSTerm.handleEvalRequest() in HUDService-content.js
-    */
-   _executeResultCallback:
--  function JST__executeResultCallback(aResponse, aRequest)
-+  function JST__executeResultCallback(aCallback, aResponse, aRequest)
-   {
-     let errorMessage = aResponse.errorMessage;
-     let resultString = aResponse.resultString;
- 
-     // Hide undefined results coming from JSTerm helper functions.
-     if (!errorMessage &&
-         resultString == "undefined" &&
-         aResponse.helperResult &&
-         !aResponse.inspectable &&
-         !aResponse.helperRawOutput) {
-       return;
-     }
- 
-     let afterNode = aRequest.outputNode;
- 
-+    if (aCallback) {
-+      let oldFlushCallback = this.hud._flushCallback;
-+      this.hud._flushCallback = function() {
-+        aCallback();
-+        oldFlushCallback && oldFlushCallback();
-+        this.hud._flushCallback = oldFlushCallback;
-+      }.bind(this);
-+    }
-+
-     if (aResponse.errorMessage) {
-       this.writeOutput(aResponse.errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
-                        afterNode, aResponse.timestamp);
-     }
-     else if (aResponse.inspectable) {
-       let node = this.writeOutputJS(aResponse.resultString,
-                                     this._evalOutputClick.bind(this, aResponse),
-                                     afterNode, aResponse.timestamp);
-@@ -2227,31 +2258,32 @@ JSTerm.prototype = {
-   },
- 
-   /**
-    * Execute a string. Execution happens asynchronously in the content process.
-    *
-    * @param string [aExecuteString]
-    *        The string you want to execute. If this is not provided, the current
-    *        user input is used - taken from |this.inputNode.value|.
-+   * @param function [aCallback]
-+   *        Optional function to invoke when the result is displayed.
-    */
--  execute: function JST_execute(aExecuteString)
-+  execute: function JST_execute(aExecuteString, aCallback)
-   {
-     // attempt to execute the content of the inputNode
-     aExecuteString = aExecuteString || this.inputNode.value;
-     if (!aExecuteString) {
-       this.writeOutput("no value to execute", CATEGORY_OUTPUT, SEVERITY_LOG);
-       return;
-     }
- 
-     let node = this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
- 
--    let messageToContent =
--      this.evalInContentSandbox(aExecuteString,
--                                this._executeResultCallback.bind(this));
-+    let onResult = this._executeResultCallback.bind(this, aCallback);
-+    let messageToContent = this.evalInContentSandbox(aExecuteString, onResult);
-     messageToContent.outputNode = node;
- 
-     this.history.push(aExecuteString);
-     this.historyIndex++;
-     this.historyPlaceHolder = this.history.length;
-     this.setInputValue("");
-     this.clearCompletion();
-   },
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
@@ -1208,7 +918,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/devtools/debugger/server/dbg-browser-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-browser-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-browser-actors.js
-@@ -240,27 +240,36 @@ BrowserTabActor.prototype = {
+@@ -247,27 +247,36 @@ BrowserTabActor.prototype = {
  
    actorPrefix: "tab",
  
@@ -1245,7 +955,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
    /**
     * Called by the root actor when the underlying tab is closed.
     */
-@@ -270,37 +279,59 @@ BrowserTabActor.prototype = {
+@@ -277,37 +286,59 @@ BrowserTabActor.prototype = {
      }
  
      if (this.attached) {
@@ -1307,10 +1017,10 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
      // Watch for globals being created in this tab.
      this.browser.addEventListener("DOMWindowCreated", this._onWindowCreated, true);
      this.browser.addEventListener("pageshow", this._onWindowCreated, true);
-     this._progressListener = new DebuggerProgressListener(this);
- 
-     this._attached = true;
-@@ -353,20 +384,16 @@ BrowserTabActor.prototype = {
+     if (this._tabbrowser) {
+       this._progressListener = new DebuggerProgressListener(this);
+     }
+@@ -362,20 +393,16 @@ BrowserTabActor.prototype = {
        return;
      }
  
