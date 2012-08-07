@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent c8d94fe7506a46415651d3b41fa340155a1fa7d1
+# Parent fba2eb0c80ab5106ca2e23a814efa24476010537
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1344267534 -10800
+# Date 1344367217 -10800
 
 Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
@@ -328,7 +328,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js b/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js
-@@ -9,80 +9,106 @@
+@@ -9,80 +9,110 @@
   * ***** END LICENSE BLOCK ***** */
  
  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
@@ -348,10 +348,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deac
 -  win2.removeEventListener(aEvent.type, arguments.callee, true);
 +  win2.removeEventListener(aEvent.type, win2Loaded, true);
  
-   tab2 = win2.gBrowser.addTab();
+-  tab2 = win2.gBrowser.addTab();
++  tab2 = win2.gBrowser.addTab(TEST_URI);
    win2.gBrowser.selectedTab = tab2;
    tab2.linkedBrowser.addEventListener("load", tab2Loaded, true);
-   tab2.linkedBrowser.contentWindow.location = TEST_URI;
+-  tab2.linkedBrowser.contentWindow.location = TEST_URI;
  }
  
  function tab2Loaded(aEvent) {
@@ -424,7 +425,13 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deac
 +  function testEnd() {
 +    ok(noErrors, "there were no errors");
  
-     win2.gBrowser.removeTab(tab2);
+-    win2.gBrowser.removeTab(tab2);
++    Array.forEach(win1.gBrowser.tabs, function(aTab) {
++      win1.gBrowser.removeTab(aTab);
++    });
++    Array.forEach(win2.gBrowser.tabs, function(aTab) {
++      win2.gBrowser.removeTab(aTab);
++    });
  
      executeSoon(function() {
        win2.close();
@@ -639,7 +646,8 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  XPCOMUtils.defineLazyServiceGetter(this, "socketTransportService",
                                     "@mozilla.org/network/socket-transport-service;1",
                                     "nsISocketTransportService");
-@@ -169,17 +170,18 @@ const ThreadStateTypes = {
+@@ -168,56 +169,61 @@ const ThreadStateTypes = {
+ };
  
  /**
   * Set of protocol messages that are sent by the server without a prior request
@@ -647,10 +655,9 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   */
  const UnsolicitedNotifications = {
    "newScript": "newScript",
-   "tabDetached": "tabDetached",
--  "tabNavigated": "tabNavigated"
-+  "tabNavigated": "tabNavigated",
 +  "pageError": "pageError",
+   "tabDetached": "tabDetached",
+   "tabNavigated": "tabNavigated"
  };
  
  /**
@@ -659,7 +666,13 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   */
  const DebugProtocolTypes = {
    "assign": "assign",
-@@ -192,32 +194,34 @@ const DebugProtocolTypes = {
+   "attach": "attach",
+   "clientEvaluate": "clientEvaluate",
+   "delete": "delete",
+   "detach": "detach",
+   "frames": "frames",
++  "getCachedMessages": "getCachedMessages",
+   "interrupt": "interrupt",
    "listTabs": "listTabs",
    "nameAndParameters": "nameAndParameters",
    "ownPropertyNames": "ownPropertyNames",
@@ -670,7 +683,8 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
    "scripts": "scripts",
 -  "setBreakpoint": "setBreakpoint"
 +  "setBreakpoint": "setBreakpoint",
-+  "getCachedMessages": "getCachedMessages",
++  "startListeners": "startListeners",
++  "stopListeners": "stopListeners",
  };
  
  const ROOT_ACTOR_NAME = "root";
@@ -695,7 +709,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  
  DebuggerClient.prototype = {
    /**
-@@ -263,20 +267,42 @@ DebuggerClient.prototype = {
+@@ -263,20 +269,42 @@ DebuggerClient.prototype = {
      let detachTab = function _detachTab() {
        if (this.activeTab) {
          this.activeTab.detach(closeTransport);
@@ -742,7 +756,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *
     * @param function aOnResponse
     *        Called with the response packet.
-@@ -296,26 +322,57 @@ DebuggerClient.prototype = {
+@@ -296,26 +324,57 @@ DebuggerClient.prototype = {
     * @param function aOnResponse
     *        Called with the response packet and a TabClient
     *        (which will be undefined on error).
@@ -778,7 +792,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +    let self = this;
 +    let packet = {
 +      to: aConsoleActor,
-+      type: DebugProtocolTypes.attach,
++      type: DebugProtocolTypes.startListeners,
 +      listeners: aListeners,
 +    };
 +
@@ -801,7 +815,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *        Called with the response packet and a ThreadClient
     *        (which will be undefined on error).
     */
-@@ -474,16 +531,113 @@ TabClient.prototype = {
+@@ -474,16 +533,113 @@ TabClient.prototype = {
        }
      });
    }
@@ -868,7 +882,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +  function WCC_startListeners(aListeners, aOnResponse) {
 +    let packet = {
 +      to: this._actor,
-+      type: DebugProtocolTypes.attach,
++      type: DebugProtocolTypes.startListeners,
 +      listeners: aListeners,
 +    };
 +    this._client.request(packet, aOnResponse);
@@ -888,7 +902,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +  function WCC_stopListeners(aListeners, aOnResponse) {
 +    let packet = {
 +      to: this._actor,
-+      type: DebugProtocolTypes.detach,
++      type: DebugProtocolTypes.stopListeners,
 +      listeners: aListeners,
 +    };
 +    this._client.request(packet, aOnResponse);
@@ -1066,7 +1080,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
-@@ -0,0 +1,325 @@
+@@ -0,0 +1,357 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -1105,7 +1119,7 @@ new file mode 100644
 + * @param object aConnection
 + *        The connection to the client, DebuggerServerConnection.
 + * @param nsIDOMElement aBrowser
-+ *        The xul:browser we live for.
++ *        The xul:browser we work with.
 + */
 +function WebConsoleActor(aConnection, aBrowser)
 +{
@@ -1115,6 +1129,23 @@ new file mode 100644
 +
 +WebConsoleActor.prototype =
 +{
++  /**
++   * The xul:browser we work with.
++   * @private
++   * @type nsIDOMElement
++   */
++  _browser: null,
++
++  /**
++   * The debugger server connection instance.
++   * @type object
++   */
++  conn: null,
++
++  /**
++   * The content window we work with.
++   * @type nsIDOMWindow
++   */
 +  get contentWindow() this._browser.contentWindow,
 +
 +  actorPrefix: "console",
@@ -1133,15 +1164,16 @@ new file mode 100644
 +      this.pageErrorListener.destroy();
 +      this.pageErrorListener = null;
 +    }
++    this.conn = this._browser = null;
 +  },
 +
 +  /**
-+   * Handler for the "attach" request.
++   * Handler for the "startListeners" request.
 +   *
 +   * @param object aRequest
 +   *        The JSON request object received from the Web Console client.
 +   */
-+  onAttach: function WCA_onAttach(aRequest)
++  onStartListeners: function WCA_onStartListeners(aRequest)
 +  {
 +    let startedListeners = [];
 +
@@ -1162,12 +1194,12 @@ new file mode 100644
 +  },
 +
 +  /**
-+   * Handler for the "detach" request.
++   * Handler for the "stopListeners" request.
 +   *
 +   * @param object aRequest
 +   *        The JSON request object received from the Web Console client.
 +   */
-+  onDetach: function WCA_onDetach(aRequest)
++  onStopListeners: function WCA_onStopListeners(aRequest)
 +  {
 +    let stoppedListeners = [];
 +    let toDetach = aRequest.listeners || [];
@@ -1261,8 +1293,8 @@ new file mode 100644
 +WebConsoleActor.prototype.requestTypes =
 +{
 +  getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
-+  attach: WebConsoleActor.prototype.onAttach,
-+  detach: WebConsoleActor.prototype.onDetach,
++  startListeners: WebConsoleActor.prototype.onStartListeners,
++  stopListeners: WebConsoleActor.prototype.onStopListeners,
 +};
 +
 +///////////////////////////////////////////////////////////////////////////////
@@ -1290,6 +1322,19 @@ new file mode 100644
 +PageErrorListener.prototype =
 +{
 +  QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
++
++  /**
++   * The content window for which we listen to page errors.
++   * @type nsIDOMWindow
++   */
++  window: null,
++
++  /**
++   * The listener object which is notified of page errors. It must have
++   * a onPageError method which is invoked with one argument: the nsIScriptError.
++   * @type object
++   */
++  listener: null,
 +
 +  /**
 +   * Initialize the nsIConsoleService listener.
@@ -1390,6 +1435,7 @@ new file mode 100644
 +  destroy: function PEL_destroy()
 +  {
 +    Services.console.unregisterListener(this);
++    this.listener = this.window = null;
 +  },
 +};
 diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
