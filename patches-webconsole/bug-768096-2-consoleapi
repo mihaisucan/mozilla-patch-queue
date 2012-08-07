@@ -1,6 +1,301 @@
 # HG changeset patch
 # Parent 7148d33cb57739d0981063cb8b4d43357ecec9a9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1344367792 -10800
+# Date 1344373879 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API
 
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -1256,16 +1256,25 @@ WebConsoleConnectionProxy.prototype = {
+    * for displaying.
+    */
+   _onPageError: function WCCP__onPageError(aType, aPacket)
+   {
+     this.owner.ui.handlePageError(aPacket.pageError);
+   },
+ 
+   /**
++   * The "consoleAPICall" message type handler. We redirect any message to
++   * the UI for displaying.
++   */
++  _onConsoleAPICall: function WCCP__onConsoleAPICall(aType, aPacket)
++  {
++    this.owner.ui.handlePageError(aPacket.pageError);
++  },
++
++  /**
+    * Disconnect the Web Console from the remote server.
+    */
+   disconnect: function WCCP_disconnect()
+   {
+     if (!this.client) {
+       return;
+     }
+ 
+diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
+@@ -60,32 +60,47 @@ WebConsoleActor.prototype =
+   conn: null,
+ 
+   /**
+    * The content window we work with.
+    * @type nsIDOMWindow
+    */
+   get contentWindow() this._browser.contentWindow,
+ 
++  /**
++   * The PageErrorListener instance.
++   * @type object
++   */
++  pageErrorListener: null,
++
++  /**
++   * The ConsoleAPIListener instance.
++   */
++  consoleAPIListener: null,
++
+   actorPrefix: "console",
+ 
+   grip: function WCA_grip()
+   {
+     return { actor: this.actorID };
+   },
+ 
+   /**
+    * Destroy the current WebConsoleActor instance.
+    */
+   disconnect: function WCA_disconnect()
+   {
+     if (this.pageErrorListener) {
+       this.pageErrorListener.destroy();
+       this.pageErrorListener = null;
+     }
++    if (this.consoleAPIListener) {
++      this.consoleAPIListener.destroy();
++      this.consoleAPIListener = null;
++    }
+     this.conn = this._browser = null;
+   },
+ 
+   /**
+    * Handler for the "startListeners" request.
+    *
+    * @param object aRequest
+    *        The JSON request object received from the Web Console client.
+@@ -100,16 +115,24 @@ WebConsoleActor.prototype =
+         case LISTENERS.PageError:
+           if (!this.pageErrorListener) {
+             this.pageErrorListener =
+               new PageErrorListener(this.contentWindow, this);
+             this.pageErrorListener.init();
+           }
+           startedListeners.push(listener);
+           break;
++        case LISTENERS.ConsoleAPI:
++          if (!this.consoleAPIListener) {
++            this.consoleAPIListener =
++              new ConsoleAPIListener(this.contentWindow, this);
++            this.consoleAPIListener.init();
++          }
++          startedListeners.push(listener);
++          break;
+       }
+     }
+     return { startedListeners: startedListeners };
+   },
+ 
+   /**
+    * Handler for the "stopListeners" request.
+    *
+@@ -133,16 +156,23 @@ WebConsoleActor.prototype =
+       switch (listener) {
+         case LISTENERS.PageError:
+           if (this.pageErrorListener) {
+             this.pageErrorListener.destroy();
+             this.pageErrorListener = null;
+           }
+           stoppedListeners.push(listener);
+           break;
++        case LISTENERS.ConsoleAPI:
++          if (this.consoleAPIListener) {
++            this.consoleAPIListener.destroy();
++            this.consoleAPIListener = null;
++          }
++          stoppedListeners.push(listener);
++          break;
+       }
+     }
+ 
+     return { stoppedListeners: stoppedListeners };
+   },
+ 
+   /**
+    * Handler for the "getCachedMessages" request. This method sends the cached
+@@ -189,27 +219,44 @@ WebConsoleActor.prototype =
+     };
+   },
+ 
+   /**
+    * Handler for page errors received from the PageErrorListener. This method
+    * sends the nsIScriptError to the remote Web Console client.
+    *
+    * @param nsIScriptError aPageError
+-   *        The page error we need to send to the remote.
++   *        The page error we need to send to the remote client.
+    */
+   onPageError: function WCA_onPageError(aPageError)
+   {
+     let packet = {
+       from: this.actorID,
+       type: "pageError",
+       pageError: aPageError,
+     };
+     this.conn.send(packet);
+   },
++
++  /**
++   * Handler for window.console API calls received from the ConsoleAPIListener.
++   * This method sends the object to the remote Web Console client.
++   *
++   * @param object aMessage
++   *        The console API call we need to send to the remote client.
++   */
++  onConsoleAPICall: function WCA_onConsoleAPICall(aMessage)
++  {
++    let packet = {
++      from: this.actorID,
++      type: "consoleAPICall",
++      message: aMessage,
++    };
++    this.conn.send(packet);
++  },
+ };
+ 
+ WebConsoleActor.prototype.requestTypes =
+ {
+   getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
+   startListeners: WebConsoleActor.prototype.onStartListeners,
+   stopListeners: WebConsoleActor.prototype.onStopListeners,
+ };
+@@ -350,8 +397,119 @@ PageErrorListener.prototype =
+    * Remove the nsIConsoleService listener.
+    */
+   destroy: function PEL_destroy()
+   {
+     Services.console.unregisterListener(this);
+     this.listener = this.window = null;
+   },
+ };
++
++///////////////////////////////////////////////////////////////////////////////
++// The window.console API observer
++///////////////////////////////////////////////////////////////////////////////
++
++/**
++ * The window.console API observer. This allows the window.console API messages
++ * to be sent to the remote Web Console instance.
++ *
++ * @constructor
++ * @param nsIDOMWindow aWindow
++ *        The window object for which we are created.
++ * @param object aListener
++ *        The listener object must have a method: onPageError. This method is
++ *        invoked with one argument, the nsIScriptError, whenever a relevant
++ *        page error is received.
++ */
++function ConsoleAPIListener(aWindow, aListener)
++{
++  this.window = aWindow;
++  this.listener = aListener;
++}
++
++ConsoleAPIListener.prototype =
++{
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
++
++  /**
++   * The content window for which we listen to window.console API calls.
++   * @type nsIDOMWindow
++   */
++  window: null,
++
++  /**
++   * The listener object which is notified of window.console API calls. It must
++   * have a onConsoleAPICall method which is invoked with one argument: the
++   * console API call object that comes from the observer service.
++   *
++   * @type object
++   */
++  listener: null,
++
++  /**
++   * Initialize the window.console API observer.
++   */
++  init: function CAL_init()
++  {
++    // Note that the observer is process-wide. We will filter the messages as
++    // needed, see CAO_observe().
++    Services.obs.addObserver(this, "console-api-log-event", false);
++  },
++
++  /**
++   * The console API message observer. When messages are received from the
++   * observer service we forward them to the remote Web Console instance.
++   *
++   * @param object aMessage
++   *        The message object receives from the observer service.
++   * @param string aTopic
++   *        The message topic received from the observer service.
++   */
++  observe: function CAL_observe(aMessage, aTopic)
++  {
++    if (!this.listener || !this.window || !aMessage) {
++      return;
++    }
++
++    let apiMessage = aMessage.wrappedJSObject;
++
++    let msgWindow = WebConsoleUtils.getWindowByOuterId(apiMessage.ID,
++                                                       this.window);
++    if (!msgWindow || msgWindow.top != this.window) {
++      // Not the same window!
++      return;
++    }
++
++    this.listener.onConsoleAPICall(apiMessage);
++  },
++
++  /**
++   * Get the cached messages for the current inner window.
++   *
++   * @return array
++   *         The array of cached messages. Each element is a Console API
++   *         prepared to be sent to the remote Web Console instance.
++   */
++  getCachedMessages: function CAL_getCachedMessages()
++  {
++    let innerWindowId = WebConsoleUtils.getInnerWindowId(this.window);
++    let messages = gConsoleStorage.getEvents(innerWindowId);
++    return message; // FIXME?
++  },
++
++  /**
++   * Handler for the "ClearCache" message.
++   */
++  handleClearCache: function CAL_handleClearCache()
++  {
++    let windowId = WebConsoleUtils.getInnerWindowId(this.window);
++    gConsoleStorage.clearEvents(windowId);
++  },
++
++  /**
++   * Destroy the console API listener.
++   */
++  destroy: function CAL_destroy()
++  {
++    Services.obs.removeObserver(this, "console-api-log-event");
++    this.window = this.listener = null;
++  },
++};
