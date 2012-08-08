@@ -1,13 +1,53 @@
 # HG changeset patch
-# Parent 7148d33cb57739d0981063cb8b4d43357ecec9a9
+# Parent d26cc1131f5f8b1ea1e07900580506a72768bd27
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1344373879 -10800
+# Date 1344457638 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -1256,16 +1256,25 @@ WebConsoleConnectionProxy.prototype = {
+@@ -1150,16 +1150,17 @@ WebConsole.prototype = {
+  *        The Web Console instance that owns this connection proxy.
+  */
+ function WebConsoleConnectionProxy(aWebConsole)
+ {
+   this.owner = aWebConsole;
+ 
+   this._onCachedMessages = this._onCachedMessages.bind(this);
+   this._onPageError = this._onPageError.bind(this);
++  this._onConsoleAPICall = this._onConsoleAPICall.bind(this);
+ }
+ 
+ WebConsoleConnectionProxy.prototype = {
+   /**
+    * The owning Web Console instance.
+    *
+    * @see WebConsole
+    * @type object
+@@ -1191,18 +1192,20 @@ WebConsoleConnectionProxy.prototype = {
+    *        Optional function to invoke when connection is established.
+    */
+   connect: function WCCP_connect(aCallback)
+   {
+     let transport = DebuggerServer.connectPipe();
+     let client = this.client = new DebuggerClient(transport);
+ 
+     client.addListener("pageError", this._onPageError);
++    client.addListener("consoleAPICall", this._onConsoleAPICall);
+ 
+-    let listeners = [WebConsoleClient.prototype.LISTENERS.PageError];
++    let listeners = [WebConsoleClient.prototype.LISTENERS.PageError,
++                     WebConsoleClient.prototype.LISTENERS.ConsoleAPI];
+ 
+     client.connect(function(aType, aTraits) {
+       client.listTabs(function(aResponse) {
+         let tab = aResponse.tabs[aResponse.selected];
+         client.attachConsole(tab.consoleActor, listeners,
+                              this._onAttachConsole.bind(this, aCallback));
+       }.bind(this));
+     }.bind(this));
+@@ -1256,25 +1259,35 @@ WebConsoleConnectionProxy.prototype = {
     * for displaying.
     */
    _onPageError: function WCCP__onPageError(aType, aPacket)
@@ -21,7 +61,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +   */
 +  _onConsoleAPICall: function WCCP__onConsoleAPICall(aType, aPacket)
 +  {
-+    this.owner.ui.handlePageError(aPacket.pageError);
++    this.owner.ui.handleConsoleAPICall(aPacket.message);
 +  },
 +
 +  /**
@@ -33,10 +73,120 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
        return;
      }
  
+     this.client.removeListener("pageError", this._onPageError);
++    this.client.removeListener("consoleAPICall", this._onConsoleAPICall);
+     this.client.close();
+ 
+     this.client = null;
+     this.webConsoleClient = null;
+     this.connected = false;
+   },
+ };
+ 
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -531,23 +531,16 @@ WebConsoleFrame.prototype = {
+         this.owner._receiveMessageWithCallback(aMessage.json);
+         break;
+       case "JSTerm:ClearOutput":
+         this.jsterm.clearOutput();
+         break;
+       case "JSTerm:InspectObject":
+         this.jsterm.handleInspectObject(aMessage.json);
+         break;
+-      case "WebConsole:ConsoleAPI":
+-        this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage,
+-                           [aMessage.json]);
+-        break;
+-      case "WebConsole:PageError":
+-        this.handlePageError(aMessage.json.pageError);
+-        break;
+       case "WebConsole:CachedMessages":
+         this._displayCachedConsoleMessages(aMessage.json.messages);
+         this.owner._onMessageManagerInitComplete();
+         break;
+       case "WebConsole:NetworkActivity":
+         this.handleNetworkActivity(aMessage.json);
+         break;
+       case "WebConsole:FileActivity":
+@@ -1065,16 +1058,28 @@ WebConsoleFrame.prototype = {
+         node.querySelector("tree").view = node.propertyTreeView;
+       };
+     }
+ 
+     return node;
+   },
+ 
+   /**
++   * Handle ConsoleAPICall objects received from the server. This method outputs
++   * the window.console API call.
++   *
++   * @param object aMessage
++   *        The console API message received from the server.
++   */
++  handleConsoleAPICall: function WCF_handleConsoleAPICall(aMessage)
++  {
++    this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage]);
++  },
++
++  /**
+    * The click event handler for objects shown inline coming from the
+    * window.console API.
+    *
+    * @private
+    * @param nsIDOMNode aMessage
+    *        The message element this handler corresponds to.
+    * @param nsIDOMNode aAnchor
+    *        The object inspector anchor element. This is the clickable element
 diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
-@@ -60,32 +60,47 @@ WebConsoleActor.prototype =
+@@ -37,59 +37,153 @@ const CACHED_MESSAGES = {
+  *        The connection to the client, DebuggerServerConnection.
+  * @param nsIDOMElement aBrowser
+  *        The xul:browser we work with.
+  */
+ function WebConsoleActor(aConnection, aBrowser)
+ {
+   this.conn = aConnection;
+   this._browser = aBrowser;
++
++  this._objectActorsPool = new ActorPool(this.conn);
++  this.conn.addActorPool(this._objectActorsPool);
++
++  this._objectActors = new WeakMap();
+ }
+ 
+ WebConsoleActor.prototype =
+ {
+   /**
+    * The xul:browser we work with.
+    * @private
+    * @type nsIDOMElement
+    */
+   _browser: null,
+ 
+   /**
++   * Actor pool for all of the object actors for objects we send to the client.
++   * @private
++   * @type object
++   * @see ActorPool
++   * @see this.objectGrip()
++   */
++  _objectActorsPool: null,
++
++  /**
++   * Weak map between objects and their WebConsoleObjectActor wrappers.
++   * @private
++   * @type object
++   */
++  _objectActors: null,
++
++  /**
+    * The debugger server connection instance.
+    * @type object
+    */
    conn: null,
  
    /**
@@ -80,11 +230,73 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    },
  
    /**
++   * Create a grip for the given value.  If the value is an object,
++   * a WebConsoleObjectActor will be created.
++   */
++  createValueGrip: function WCA_createValueGrip(aValue)
++  {
++    let type = typeof(aValue);
++    switch (type) {
++      case "boolean":
++      case "string":
++      case "number":
++        return aValue;
++      case "object":
++        return this.objectGrip(aValue);
++      default:
++        if (aValue === null) {
++          return { type: "null" };
++        }
++
++        if (aValue === undefined) {
++          return { type: "undefined" };
++        }
++
++        dbg_assert(false, "Failed to provide a grip for: " + aValue);
++        return null;
++    }
++  },
++
++  /**
++   * Create a grip for the given object.
++   *
++   * @param object aValue
++   *        The object you want.
++   */
++  objectGrip: function TA_objectGrip(aValue)
++  {
++    if (this._objectActors.has(aValue)) {
++      return this._objectActors.get(aValue).grip();
++    }
++
++    let actor = new WebConsoleObjectActor(aValue, this);
++    this._objectActorsPool.addActor(actor);
++    this._objectActors.set(aValue, actor);
++    return actor.grip();
++  },
++
++  /**
++   * Release an object grip for the given object actor.
++   *
++   * @param object aActor
++   *        The WebConsoleObjectActor instance you want to release.
++   */
++  releaseObject: function WCA_releaseObject(aActor)
++  {
++    this._objectActors.delete(aActor.obj);
++    this._objectActorsPool.removeActor(aActor.actorID);
++  },
++
++  /**
     * Handler for the "startListeners" request.
     *
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
-@@ -100,16 +115,24 @@ WebConsoleActor.prototype =
+    */
+   onStartListeners: function WCA_onStartListeners(aRequest)
+   {
+     let startedListeners = [];
+@@ -100,16 +194,24 @@ WebConsoleActor.prototype =
          case LISTENERS.PageError:
            if (!this.pageErrorListener) {
              this.pageErrorListener =
@@ -109,7 +321,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    /**
     * Handler for the "stopListeners" request.
     *
-@@ -133,16 +156,23 @@ WebConsoleActor.prototype =
+@@ -133,16 +235,23 @@ WebConsoleActor.prototype =
        switch (listener) {
          case LISTENERS.PageError:
            if (this.pageErrorListener) {
@@ -133,7 +345,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    /**
     * Handler for the "getCachedMessages" request. This method sends the cached
-@@ -189,27 +219,44 @@ WebConsoleActor.prototype =
+@@ -189,36 +298,225 @@ WebConsoleActor.prototype =
      };
    },
  
@@ -179,7 +391,188 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    startListeners: WebConsoleActor.prototype.onStartListeners,
    stopListeners: WebConsoleActor.prototype.onStopListeners,
  };
-@@ -350,8 +397,119 @@ PageErrorListener.prototype =
+ 
++/**
++ * Creates an actor for the specified object.
++ *
++ * @constructor
++ * @param object aObj
++ *        The object you want.
++ * @param object aWebConsoleActor
++ *        The parent WebConsoleActor instance for this object.
++ */
++function WebConsoleObjectActor(aObj, aWebConsoleActor)
++{
++  this.obj = aObj;
++  this.parentActor = aWebConsoleActor;
++}
++
++WebConsoleObjectActor.prototype =
++{
++  actorPrefix: "consoleObj",
++
++  /**
++   * Returns a grip for this actor for returning in a protocol message.
++   */
++  grip: function WCOA_grip()
++  {
++    return { "type": "object",
++             "class": this.obj.class,
++             "actor": this.actorID };
++  },
++
++  /**
++   * Releases this actor from the pool.
++   */
++  release: function WCOA_release()
++  {
++    this.parentActor.releaseObject(this);
++  },
++
++  /**
++   * Handle a protocol request to provide the names of the properties defined on
++   * the object and not its prototype.
++   *
++   * @param aRequest object
++   *        The protocol request object.
++   */
++  onOwnPropertyNames: function WCOA_onOwnPropertyNames(aRequest)
++  {
++    return { from: this.actorID,
++             ownPropertyNames: this.obj.getOwnPropertyNames() };
++  },
++
++  /**
++   * Handle a protocol request to provide the prototype and own properties of
++   * the object.
++   *
++   * @param aRequest object
++   *        The protocol request object.
++   */
++  onPrototypeAndProperties: function WCOA_onPrototypeAndProperties(aRequest)
++  {
++    let ownProperties = {};
++    for each (let name in this.obj.getOwnPropertyNames()) {
++      try {
++        let desc = this.obj.getOwnPropertyDescriptor(name);
++        ownProperties[name] = this._propertyDescriptor(desc);
++      } catch (e if e.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO") {
++        // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
++        // allowed.
++        dumpn("Error while getting the property descriptor for " + name +
++              ": " + e.name);
++      }
++    }
++    return { from: this.actorID,
++             prototype: this.parentActor.createValueGrip(this.obj.proto),
++             ownProperties: ownProperties };
++  },
++
++  /**
++   * Handle a protocol request to provide the prototype of the object.
++   *
++   * @param aRequest object
++   *        The protocol request object.
++   */
++  onPrototype: function WCOA_onPrototype(aRequest)
++  {
++    return { from: this.actorID,
++             prototype: this.parentActor.createValueGrip(this.obj.proto) };
++  },
++
++  /**
++   * Handle a protocol request to provide the property descriptor of the
++   * object's specified property.
++   *
++   * @param aRequest object
++   *        The protocol request object.
++   */
++  onProperty: function OA_onProperty(aRequest)
++  {
++    if (!aRequest.name) {
++      return { error: "missingParameter",
++               message: "no property name was specified" };
++    }
++
++    let desc = this.obj.getOwnPropertyDescriptor(aRequest.name);
++    return { from: this.actorID,
++             descriptor: this._propertyDescriptor(desc) };
++  },
++
++  /**
++   * A helper method that creates a property descriptor for the provided object,
++   * properly formatted for sending in a protocol response.
++   *
++   * @private
++   * @param aObject object
++   *        The object that the descriptor is generated for.
++   */
++  _propertyDescriptor: function WCOA__propertyDescriptor(aObject)
++  {
++    let descriptor = {};
++    descriptor.configurable = aObject.configurable;
++    descriptor.enumerable = aObject.enumerable;
++    if (aObject.value !== undefined) {
++      descriptor.writable = aObject.writable;
++      descriptor.value = this.parentActor.createValueGrip(aObject.value);
++    }
++    else {
++      descriptor.get = this.parentActor.createValueGrip(aObject.get);
++      descriptor.set = this.parentActor.createValueGrip(aObject.set);
++    }
++    return descriptor;
++  },
++
++  /**
++   * Handle a protocol request to provide the name and parameters of a function.
++   *
++   * @param aRequest object
++   *        The protocol request object.
++   */
++  onNameAndParameters: function WCOA_onNameAndParameters(aRequest)
++  {
++    if (this.obj.class !== "Function") {
++      return { error: "objectNotFunction",
++               message: "nameAndParameters request is only valid for object " +
++                        "grips with a 'Function' class." };
++    }
++
++    return { name: this.obj.name || null,
++             parameters: this.obj.parameterNames };
++  },
++
++  /**
++   * Handle a protocol request to release a thread-lifetime grip.
++   *
++   * @param aRequest object
++   *        The protocol request object.
++   */
++  onRelease: function WCOA_onRelease(aRequest)
++  {
++    this.release();
++    return {};
++  },
++};
++
++WebConsoleObjectActor.prototype.requestTypes =
++{
++  "nameAndParameters": WebConsoleObjectActor.prototype.onNameAndParameters,
++  "prototypeAndProperties": WebConsoleObjectActor.prototype.onPrototypeAndProperties,
++  "prototype": WebConsoleObjectActor.prototype.onPrototype,
++  "property": WebConsoleObjectActor.prototype.onProperty,
++  "ownPropertyNames": WebConsoleObjectActor.prototype.onOwnPropertyNames,
++  "release": WebConsoleObjectActor.prototype.onRelease,
++};
++
+ ///////////////////////////////////////////////////////////////////////////////
+ // The page errors listener
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ /**
+  * The nsIConsoleService listener. This is used to send all the page errors
+  * (JavaScript, CSS and more) to the remote Web Console instance.
+  *
+@@ -350,8 +648,222 @@ PageErrorListener.prototype =
     * Remove the nsIConsoleService listener.
     */
    destroy: function PEL_destroy()
@@ -264,8 +657,111 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      return;
 +    }
 +
-+    this.listener.onConsoleAPICall(apiMessage);
++    let messageToClient = {};
++    this._prepareApiMessageForRemote(apiMessage, messageToClient);
++    this.listener.onConsoleAPICall(messageToClient);
 +  },
++
++  /**
++   * Prepare a message from the console APi to be sent to the remote Web Console
++   * instance.
++   *
++   * @param object aOriginalMessage
++   *        The original message received from console-api-log-event.
++   * @param object aRemoteMessage
++   *        The object you want to send to the remote Web Console. This object
++   *        is updated to hold information from the original message. New
++   *        properties added:
++   *        - timeStamp
++   *        Message timestamp (same as the aOriginalMessage.timeStamp property).
++   *        - apiMessage
++   *        An object that copies almost all the properties from
++   *        aOriginalMessage. Arguments might be skipped if it holds references
++   *        to objects that cannot be sent as they are to the remote Web Console
++   *        instance.
++   *        - argumentsToString
++   *        Optional: the aOriginalMessage.arguments object stringified.
++   *
++   *        The apiMessage.arguments property is set to hold data appropriate
++   *        to the message level. A similar approach is used for
++   *        argumentsToString.
++   */
++  _prepareApiMessageForRemote:
++  function CAL__prepareApiMessageForRemote(aOriginalMessage, aRemoteMessage)
++  {
++    aRemoteMessage.apiMessage =
++      WebConsoleUtils.cloneObject(aOriginalMessage, true,
++        function(aKey, aValue, aObject) {
++          // We need to skip the arguments property from the original object.
++          if (aKey == "wrappedJSObject" || aObject === aOriginalMessage &&
++              aKey == "arguments") {
++            return false;
++          }
++          return true;
++        });
++
++    aRemoteMessage.timeStamp = aOriginalMessage.timeStamp;
++
++    switch (aOriginalMessage.level) {
++      case "trace":
++      case "time":
++      case "timeEnd":
++      case "group":
++      case "groupCollapsed":
++        aRemoteMessage.apiMessage.arguments =
++          WebConsoleUtils.cloneObject(aOriginalMessage.arguments, true);
++        break;
++
++      case "groupEnd":
++        aRemoteMessage.argumentsToString =
++          Array.map(aOriginalMessage.arguments || [],
++                    this._formatObject.bind(this));
++        break;
++
++      case "log":
++      case "info":
++      case "warn":
++      case "error":
++      case "debug":
++      case "dir": {
++        aRemoteMessage.objectsCacheId = Manager.sequenceId;
++        aRemoteMessage.argumentsToString = [];
++        let mapFunction = function(aItem) {
++          let formattedObject = this._formatObject(aItem);
++          aRemoteMessage.argumentsToString.push(formattedObject);
++          if (WebConsoleUtils.isObjectInspectable(aItem)) {
++            return JSTerm.prepareObjectForRemote(aItem,
++                                                 aRemoteMessage.objectsCacheId);
++          }
++          return formattedObject;
++        }.bind(this);
++
++        aRemoteMessage.apiMessage.arguments =
++          Array.map(aOriginalMessage.arguments || [], mapFunction);
++        break;
++      }
++      default:
++        Cu.reportError("Unknown Console API log level: " +
++                       aOriginalMessage.level);
++        break;
++    }
++  },
++
++  /**
++   * Format an object's value to be displayed in the Web Console.
++   *
++   * @private
++   * @param object aObject
++   *        The object you want to display.
++   * @return string
++   *         The string you can display for the given object.
++   */
++  _formatObject: function CAL__formatObject(aObject)
++  {
++    return typeof aObject == "string" ?
++           aObject : WebConsoleUtils.formatResult(aObject);
++  },
++
 +
 +  /**
 +   * Get the cached messages for the current inner window.
