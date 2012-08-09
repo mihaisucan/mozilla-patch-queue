@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent d26cc1131f5f8b1ea1e07900580506a72768bd27
+# Parent f8e9e3580ac514549e5450d52c39a47455af9d78
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1344457638 -10800
+# Date 1344543730 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -110,7 +110,57 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          this.handleNetworkActivity(aMessage.json);
          break;
        case "WebConsole:FileActivity":
-@@ -1065,16 +1058,28 @@ WebConsoleFrame.prototype = {
+@@ -925,34 +918,41 @@ WebConsoleFrame.prototype = {
+    *         The message element to display in the Web Console output.
+    */
+   logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
+   {
+     let body = null;
+     let clipboardText = null;
+     let sourceURL = null;
+     let sourceLine = 0;
+-    let level = aMessage.apiMessage.level;
+-    let args = aMessage.apiMessage.arguments;
+-    let argsToString = aMessage.argumentsToString;
++    let level = aMessage.level;
++    let args = aMessage.arguments;
+ 
+     switch (level) {
+       case "log":
+       case "info":
+       case "warn":
+       case "error":
+       case "debug":
+         body = {
+-          cacheId: aMessage.objectsCacheId,
+           remoteObjects: args,
+-          argsToString: argsToString,
+         };
+-        clipboardText = argsToString.join(" ");
+-        sourceURL = aMessage.apiMessage.filename;
+-        sourceLine = aMessage.apiMessage.lineNumber;
++        let clipboardArray = [];
++        args.forEach(function(aValue) {
++          if (typeof aValue == "object") {
++            clipboardArray.push(aValue.type == "object" ?
++                                aValue.toString : aValue.type);
++          }
++          else {
++            clipboardArray.push(aValue);
++          }
++        });
++        clipboardText = clipboardArray.join(" ");
++        sourceURL = aMessage.filename;
++        sourceLine = aMessage.lineNumber;
+         break;
+ 
+       case "trace":
+         let filename = WebConsoleUtils.abbreviateSourceURL(args[0].filename);
+         let functionName = args[0].functionName ||
+                            l10n.getStr("stacktrace.anonymousFunction");
+         let lineNumber = args[0].lineNumber;
+ 
+@@ -1065,16 +1065,28 @@ WebConsoleFrame.prototype = {
          node.querySelector("tree").view = node.propertyTreeView;
        };
      }
@@ -139,6 +189,59 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        The message element this handler corresponds to.
     * @param nsIDOMNode aAnchor
     *        The object inspector anchor element. This is the clickable element
+@@ -2010,17 +2022,17 @@ WebConsoleFrame.prototype = {
+    *        output.
+    * @param object aBody
+    *        The object given by this.logConsoleAPIMessage(). This object holds
+    *        the call information that we need to display.
+    */
+   _makeConsoleLogMessageBody:
+   function WCF__makeConsoleLogMessageBody(aMessage, aContainer, aBody)
+   {
+-    aMessage._evalCacheId = aBody.cacheId;
++    aMessage._objectActors = aBody.remoteObjects;
+ 
+     Object.defineProperty(aMessage, "_panelOpen", {
+       get: function() {
+         let nodes = aContainer.querySelectorAll(".hud-clickable");
+         return Array.prototype.some.call(nodes, function(aNode) {
+           return aNode._panelOpen;
+         });
+       },
+@@ -2028,26 +2040,30 @@ WebConsoleFrame.prototype = {
+       configurable: false
+     });
+ 
+     aBody.remoteObjects.forEach(function(aItem, aIndex) {
+       if (aContainer.firstChild) {
+         aContainer.appendChild(this.document.createTextNode(" "));
+       }
+ 
+-      let text = aBody.argsToString[aIndex];
+-      if (!Array.isArray(aItem)) {
++      if (typeof aItem != "object" || aItem.type != "object") {
++        // Primitives like strings and numbers are not sent as objects.
++        // But null and undefined are sent as objects with the type property
++        // telling which type of value we have.
++        let text = typeof aItem == "object" ? aItem.type : aItem;
+         aContainer.appendChild(this.document.createTextNode(text));
+         return;
+       }
+ 
++      // For inspectable objects.
+       let elem = this.document.createElement("description");
+       elem.classList.add("hud-clickable");
+       elem.setAttribute("aria-haspopup", "true");
+-      elem.appendChild(this.document.createTextNode(text));
++      elem.appendChild(this.document.createTextNode(aItem.toString));
+ 
+       this._addMessageLinkCallback(elem,
+         this._consoleLogClick.bind(this, aMessage, elem, aItem));
+ 
+       aContainer.appendChild(elem);
+     }, this);
+   },
+ 
 diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
@@ -417,7 +520,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +  grip: function WCOA_grip()
 +  {
 +    return { "type": "object",
-+             "class": this.obj.class,
++             "toString": WebConsoleUtils.formatResult(this.obj),
 +             "actor": this.actorID };
 +  },
 +
@@ -572,7 +675,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
   * The nsIConsoleService listener. This is used to send all the page errors
   * (JavaScript, CSS and more) to the remote Web Console instance.
   *
-@@ -350,8 +648,222 @@ PageErrorListener.prototype =
+@@ -350,8 +648,170 @@ PageErrorListener.prototype =
     * Remove the nsIConsoleService listener.
     */
    destroy: function PEL_destroy()
@@ -593,15 +696,18 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 + * @constructor
 + * @param nsIDOMWindow aWindow
 + *        The window object for which we are created.
-+ * @param object aListener
-+ *        The listener object must have a method: onPageError. This method is
-+ *        invoked with one argument, the nsIScriptError, whenever a relevant
-+ *        page error is received.
++ * @param object aOwner
++ *        The owner object must have the following methods:
++ *        - onConsoleAPICall(). This method is invoked with one argument, the
++ *        Console API message that comes from the observer service, whenever
++ *        a relevant console API call is received.
++ *        - createValueGrip(). This method is used to create object actors for
++ *        objects passed to the console API.
 + */
-+function ConsoleAPIListener(aWindow, aListener)
++function ConsoleAPIListener(aWindow, aOwner)
 +{
 +  this.window = aWindow;
-+  this.listener = aListener;
++  this.owner = aOwner;
 +}
 +
 +ConsoleAPIListener.prototype =
@@ -615,13 +721,14 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +  window: null,
 +
 +  /**
-+   * The listener object which is notified of window.console API calls. It must
++   * The owner object which is notified of window.console API calls. It must
 +   * have a onConsoleAPICall method which is invoked with one argument: the
 +   * console API call object that comes from the observer service.
 +   *
 +   * @type object
++   * @see WebConsoleActor
 +   */
-+  listener: null,
++  owner: null,
 +
 +  /**
 +   * Initialize the window.console API observer.
@@ -629,8 +736,9 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +  init: function CAL_init()
 +  {
 +    // Note that the observer is process-wide. We will filter the messages as
-+    // needed, see CAO_observe().
++    // needed, see CAL_observe().
 +    Services.obs.addObserver(this, "console-api-log-event", false);
++    dump("CAL_init\n");
 +  },
 +
 +  /**
@@ -644,12 +752,11 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   */
 +  observe: function CAL_observe(aMessage, aTopic)
 +  {
-+    if (!this.listener || !this.window || !aMessage) {
++    if (!this.owner || !this.window || !aMessage) {
 +      return;
 +    }
 +
 +    let apiMessage = aMessage.wrappedJSObject;
-+
 +    let msgWindow = WebConsoleUtils.getWindowByOuterId(apiMessage.ID,
 +                                                       this.window);
 +    if (!msgWindow || msgWindow.top != this.window) {
@@ -657,9 +764,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      return;
 +    }
 +
-+    let messageToClient = {};
-+    this._prepareApiMessageForRemote(apiMessage, messageToClient);
-+    this.listener.onConsoleAPICall(messageToClient);
++    let messageToClient = this._prepareApiMessageForRemote(apiMessage);
++    this.owner.onConsoleAPICall(messageToClient);
 +  },
 +
 +  /**
@@ -668,83 +774,28 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   *
 +   * @param object aOriginalMessage
 +   *        The original message received from console-api-log-event.
-+   * @param object aRemoteMessage
-+   *        The object you want to send to the remote Web Console. This object
-+   *        is updated to hold information from the original message. New
-+   *        properties added:
-+   *        - timeStamp
-+   *        Message timestamp (same as the aOriginalMessage.timeStamp property).
-+   *        - apiMessage
-+   *        An object that copies almost all the properties from
-+   *        aOriginalMessage. Arguments might be skipped if it holds references
-+   *        to objects that cannot be sent as they are to the remote Web Console
-+   *        instance.
-+   *        - argumentsToString
-+   *        Optional: the aOriginalMessage.arguments object stringified.
-+   *
-+   *        The apiMessage.arguments property is set to hold data appropriate
-+   *        to the message level. A similar approach is used for
-+   *        argumentsToString.
++   * @return object
++   *         The object that can be sent to the remote client.
 +   */
 +  _prepareApiMessageForRemote:
-+  function CAL__prepareApiMessageForRemote(aOriginalMessage, aRemoteMessage)
++  function CAL__prepareApiMessageForRemote(aOriginalMessage)
 +  {
-+    aRemoteMessage.apiMessage =
-+      WebConsoleUtils.cloneObject(aOriginalMessage, true,
-+        function(aKey, aValue, aObject) {
-+          // We need to skip the arguments property from the original object.
-+          if (aKey == "wrappedJSObject" || aObject === aOriginalMessage &&
-+              aKey == "arguments") {
-+            return false;
-+          }
-+          return true;
-+        });
++    let result = WebConsoleUtils.cloneObject(aOriginalMessage, true,
++      function(aKey, aValue, aObject) {
++        // We need to skip the arguments property from the original object.
++        if (aKey == "wrappedJSObject" || aObject === aOriginalMessage &&
++            aKey == "arguments") {
++          return false;
++        }
++        return true;
++      });
 +
-+    aRemoteMessage.timeStamp = aOriginalMessage.timeStamp;
++    result.arguments = Array.map(aOriginalMessage.arguments || [],
++      function(aObj) {
++        return this.owner.createValueGrip(aObj);
++      }, this);
 +
-+    switch (aOriginalMessage.level) {
-+      case "trace":
-+      case "time":
-+      case "timeEnd":
-+      case "group":
-+      case "groupCollapsed":
-+        aRemoteMessage.apiMessage.arguments =
-+          WebConsoleUtils.cloneObject(aOriginalMessage.arguments, true);
-+        break;
-+
-+      case "groupEnd":
-+        aRemoteMessage.argumentsToString =
-+          Array.map(aOriginalMessage.arguments || [],
-+                    this._formatObject.bind(this));
-+        break;
-+
-+      case "log":
-+      case "info":
-+      case "warn":
-+      case "error":
-+      case "debug":
-+      case "dir": {
-+        aRemoteMessage.objectsCacheId = Manager.sequenceId;
-+        aRemoteMessage.argumentsToString = [];
-+        let mapFunction = function(aItem) {
-+          let formattedObject = this._formatObject(aItem);
-+          aRemoteMessage.argumentsToString.push(formattedObject);
-+          if (WebConsoleUtils.isObjectInspectable(aItem)) {
-+            return JSTerm.prepareObjectForRemote(aItem,
-+                                                 aRemoteMessage.objectsCacheId);
-+          }
-+          return formattedObject;
-+        }.bind(this);
-+
-+        aRemoteMessage.apiMessage.arguments =
-+          Array.map(aOriginalMessage.arguments || [], mapFunction);
-+        break;
-+      }
-+      default:
-+        Cu.reportError("Unknown Console API log level: " +
-+                       aOriginalMessage.level);
-+        break;
-+    }
++    return result;
 +  },
 +
 +  /**
@@ -792,6 +843,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +  destroy: function CAL_destroy()
 +  {
 +    Services.obs.removeObserver(this, "console-api-log-event");
-+    this.window = this.listener = null;
++    this.window = this.owner = null;
 +  },
 +};
