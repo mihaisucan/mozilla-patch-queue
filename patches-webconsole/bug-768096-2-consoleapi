@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent f8e9e3580ac514549e5450d52c39a47455af9d78
+# Parent 151e47aa39484596eb32c3c5ad95e469e1e4fdf2
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1344543730 -10800
+# Date 1344629669 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -83,6 +83,350 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    },
  };
  
+diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
+--- a/browser/devtools/webconsole/PropertyPanel.jsm
++++ b/browser/devtools/webconsole/PropertyPanel.jsm
+@@ -22,37 +22,38 @@ var EXPORTED_SYMBOLS = ["PropertyPanel",
+ 
+ /**
+  * This is an implementation of the nsITreeView interface. For comments on the
+  * interface properties, see the documentation:
+  * https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsITreeView
+  */
+ var PropertyTreeView = function() {
+   this._rows = [];
+-  this._objectCache = {};
++  this._objectCache = [];
+ };
+ 
+ PropertyTreeView.prototype = {
+   /**
+    * Stores the visible rows of the tree.
+    * @private
+    */
+   _rows: null,
+ 
+   /**
+    * Stores the nsITreeBoxObject for this tree.
+    * @private
+    */
+   _treeBox: null,
+ 
+   /**
+-   * Stores cached information about local objects being inspected.
++   * Holds all of the known IDs of object actors.
+    * @private
++   * @type array
+    */
+-  _objectCache: null,
++  _objectActors: null,
+ 
+   /**
+    * Use this setter to update the content of the tree.
+    *
+    * @param object aData
+    *        A meta object that holds information about the object you want to
+    *        display in the property panel. Object properties:
+    *        - object:
+@@ -88,29 +89,26 @@ PropertyTreeView.prototype = {
+     let oldLen = this._rows.length;
+ 
+     this._cleanup();
+ 
+     if (!aData) {
+       return;
+     }
+ 
+-    if (aData.remoteObject) {
+-      this._rootCacheId = aData.rootCacheId;
+-      this._panelCacheId = aData.panelCacheId;
+-      this._remoteObjectProvider = aData.remoteObjectProvider;
+-      this._rows = [].concat(aData.remoteObject);
+-      this._updateRemoteObject(this._rows, 0);
++    if (aData.objectActor) {
++      this._objectPropertiesProvider = aData.objectPropertiesProvider;
++      this._rows = this._propertiesToRows(aData.objectProperties, 0);
+     }
+     else if (aData.object) {
+       this._rows = this._inspectObject(aData.object);
+     }
+     else {
+-      throw new Error("First argument must have a .remoteObject or " +
+-                      "an .object property!");
++      throw new Error("First argument must have an objectActor or an " +
++                      "object property!");
+     }
+ 
+     if (this._treeBox) {
+       this._treeBox.beginUpdateBatch();
+       if (oldLen) {
+         this._treeBox.rowCountChanged(0, -oldLen);
+       }
+       this._treeBox.rowCountChanged(0, this._rows.length);
+@@ -123,23 +121,32 @@ PropertyTreeView.prototype = {
+    * adds properties to each array element.
+    *
+    * @private
+    * @param array aObject
+    *        The remote object you want prepared for use with the tree view.
+    * @param number aLevel
+    *        The level you want to give to each property in the remote object.
+    */
+-  _updateRemoteObject: function PTV__updateRemoteObject(aObject, aLevel)
++  _propertiesToRows: function PTV__propertiesToRows(aObject, aLevel)
+   {
+-    aObject.forEach(function(aElement) {
+-      aElement.level = aLevel;
+-      aElement.isOpened = false;
+-      aElement.children = null;
+-    });
++    let result = [];
++    for (let prop in aObject) {
++      let descriptor = aObject[prop];
++      descriptor._name = prop;
++      descriptor._level = aLevel;
++      descriptor._open = false;
++      descriptor._children = null;
++      result.push(descriptor);
++      if (typeof descriptor.value == "object" &&
++          descriptor.value.actor) {
++        this._objectActors.push(descriptor.value.actor);
++      }
++    }
++    return result;
+   },
+ 
+   /**
+    * Inspect a local object.
+    *
+    * @private
+    * @param object aObject
+    *        The object you want to inspect.
+@@ -184,26 +191,30 @@ PropertyTreeView.prototype = {
+   /** nsITreeView interface implementation **/
+ 
+   selection: null,
+ 
+   get rowCount()                     { return this._rows.length; },
+   setTree: function(treeBox)         { this._treeBox = treeBox;  },
+   getCellText: function(idx, column) {
+     let row = this._rows[idx];
+-    return row.name + ": " + row.value;
++    return row._name + ": " +
++           (row.get ?
++            "Getter" :
++            WebConsoleUtils.objectActorGripToString(row.value));
+   },
+   getLevel: function(idx) {
+-    return this._rows[idx].level;
++    return this._rows[idx]._level;
+   },
+   isContainer: function(idx) {
+-    return !!this._rows[idx].inspectable;
++    return typeof this._rows[idx].value == "object" &&
++           this._rows[idx].value.type == "object";
+   },
+   isContainerOpen: function(idx) {
+-    return this._rows[idx].isOpened;
++    return this._rows[idx]._open;
+   },
+   isContainerEmpty: function(idx)    { return false; },
+   isSeparator: function(idx)         { return false; },
+   isSorted: function()               { return false; },
+   isEditable: function(idx, column)  { return false; },
+   isSelectable: function(row, col)   { return true; },
+ 
+   getParentIndex: function(idx)
+@@ -216,71 +227,66 @@ PropertyTreeView.prototype = {
+         return t;
+       }
+     }
+     return -1;
+   },
+ 
+   hasNextSibling: function(idx, after)
+   {
+-    var thisLevel = this.getLevel(idx);
+-    return this._rows.slice(after + 1).some(function (r) r.level == thisLevel);
++    let thisLevel = this.getLevel(idx);
++    return this._rows.slice(after + 1).some(function (r) r._level == thisLevel);
+   },
+ 
+   toggleOpenState: function(idx)
+   {
+     let item = this._rows[idx];
+-    if (!item.inspectable) {
++    if (!this.isContainer(idx)) {
+       return;
+     }
+ 
+-    if (item.isOpened) {
++    if (item._open) {
+       this._treeBox.beginUpdateBatch();
+-      item.isOpened = false;
++      item._open = false;
+ 
+-      var thisLevel = item.level;
++      var thisLevel = item._level;
+       var t = idx + 1, deleteCount = 0;
+       while (t < this._rows.length && this.getLevel(t++) > thisLevel) {
+         deleteCount++;
+       }
+ 
+       if (deleteCount) {
+         this._rows.splice(idx + 1, deleteCount);
+         this._treeBox.rowCountChanged(idx + 1, -deleteCount);
+       }
+       this._treeBox.invalidateRow(idx);
+       this._treeBox.endUpdateBatch();
+     }
+     else {
+       let levelUpdate = true;
+-      let callback = function _onRemoteResponse(aResponse) {
++      let callback = function _onRemoteResponse(aProperties) {
+         this._treeBox.beginUpdateBatch();
+-        item.isOpened = true;
+-
+         if (levelUpdate) {
+-          this._updateRemoteObject(aResponse.object, item.level + 1);
+-          item.children = aResponse.object;
++          item._children = this._propertiesToRows(aProperties, item._level + 1);
+         }
+ 
+-        this._rows.splice.apply(this._rows, [idx + 1, 0].concat(item.children));
++        this._rows.splice.apply(this._rows, [idx + 1, 0].concat(item._children));
+ 
+-        this._treeBox.rowCountChanged(idx + 1, item.children.length);
++        this._treeBox.rowCountChanged(idx + 1, item._children.length);
+         this._treeBox.invalidateRow(idx);
+         this._treeBox.endUpdateBatch();
++        item._open = true;
+       }.bind(this);
+ 
+-      if (!item.children) {
+-        let fromCacheId = item.level > 0 ? this._panelCacheId :
+-                                           this._rootCacheId;
+-        this._remoteObjectProvider(fromCacheId, item.objectId,
+-                                   this._panelCacheId, callback);
++      if (!item._children) {
++        this._objectPropertiesProvider(item.value.actor, callback);
+       }
+       else {
+         levelUpdate = false;
+-        callback({object: item.children});
++        callback(item._children);
+       }
+     }
+   },
+ 
+   getImageSrc: function(idx, column) { },
+   getProgressMode : function(idx,column) { },
+   getCellValue: function(idx, column) { },
+   cycleHeader: function(col, elem) { },
+@@ -297,24 +303,25 @@ PropertyTreeView.prototype = {
+   setCellText: function(row, col, value)                { },
+   drop: function(index, orientation, dataTransfer)      { },
+   canDrop: function(index, orientation, dataTransfer)   { return false; },
+ 
+   _cleanup: function PTV__cleanup()
+   {
+     if (this._rows.length) {
+       // Reset the existing _rows children to the initial state.
+-      this._updateRemoteObject(this._rows, 0);
+       this._rows = [];
+     }
+ 
+-    delete this._objectCache;
+-    delete this._rootCacheId;
+-    delete this._panelCacheId;
+-    delete this._remoteObjectProvider;
++    if (this._objectActors.length) {
++      // TODO: release object actors.
++    }
++
++    delete this._objectActors;
++    delete this._objectPropertiesProvider;
+   },
+ };
+ 
+ ///////////////////////////////////////////////////////////////////////////
+ //// Helper for creating the panel.
+ 
+ /**
+  * Creates a DOMNode and sets all the attributes of aAttributes on the created
+diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/webconsole/WebConsoleUtils.jsm
+--- a/browser/devtools/webconsole/WebConsoleUtils.jsm
++++ b/browser/devtools/webconsole/WebConsoleUtils.jsm
+@@ -223,28 +223,37 @@ var WebConsoleUtils = {
+    * @param mixed aResult
+    *        The evaluation result object you want displayed.
+    * @return string
+    *         The string that can be displayed.
+    */
+   formatResult: function WCU_formatResult(aResult)
+   {
+     let output = "";
+-    let type = this.getResultType(aResult);
++    let type = null;
++    try {
++      type = this.getResultType(aResult);
++    }
++    catch (ex) { }
+ 
+     switch (type) {
+       case "string":
+         output = this.formatResultString(aResult);
+         break;
+       case "boolean":
+       case "date":
+       case "error":
+       case "number":
+       case "regexp":
+-        output = aResult.toString();
++        try {
++          output = aResult + "";
++        }
++        catch (ex) {
++          output = ex;
++        }
+         break;
+       case "null":
+       case "undefined":
+         output = type;
+         break;
+       default:
+         try {
+           if (aResult.toSource) {
+@@ -659,16 +668,29 @@ var WebConsoleUtils = {
+       let requestURI = Services.io.newURI(aRequest, null, null);
+       let contentURI = Services.io.newURI(aLocation, null, null);
+       return (contentURI.scheme == "https" && requestURI.scheme != "https");
+     }
+     catch (ex) {
+       return false;
+     }
+   },
++
++  objectActorGripToString: function WCU_objectActorGripToString(aGrip)
++  {
++    // Primitives like strings and numbers are not sent as objects.
++    // But null and undefined are sent as objects with the type property
++    // telling which type of value we have.
++    if (typeof aGrip == "object") {
++      return aGrip.type == "object" ?
++             aGrip.displayString :
++             aGrip.type;
++    }
++    return aGrip + "";
++  },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // Localization
+ //////////////////////////////////////////////////////////////////////////
+ 
+ WebConsoleUtils.l10n = {
+   /**
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -110,7 +454,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          this.handleNetworkActivity(aMessage.json);
          break;
        case "WebConsole:FileActivity":
-@@ -925,34 +918,41 @@ WebConsoleFrame.prototype = {
+@@ -925,35 +918,35 @@ WebConsoleFrame.prototype = {
     *         The message element to display in the Web Console output.
     */
    logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
@@ -130,29 +474,26 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        case "info":
        case "warn":
        case "error":
-       case "debug":
-         body = {
+-      case "debug":
+-        body = {
 -          cacheId: aMessage.objectsCacheId,
-           remoteObjects: args,
+-          remoteObjects: args,
 -          argsToString: argsToString,
-         };
+-        };
 -        clipboardText = argsToString.join(" ");
 -        sourceURL = aMessage.apiMessage.filename;
 -        sourceLine = aMessage.apiMessage.lineNumber;
++      case "debug": {
++        body = { arguments: args };
 +        let clipboardArray = [];
 +        args.forEach(function(aValue) {
-+          if (typeof aValue == "object") {
-+            clipboardArray.push(aValue.type == "object" ?
-+                                aValue.toString : aValue.type);
-+          }
-+          else {
-+            clipboardArray.push(aValue);
-+          }
++          clipboardArray.push(WebConsoleUtils.objectActorGripToString(aValue));
 +        });
 +        clipboardText = clipboardArray.join(" ");
 +        sourceURL = aMessage.filename;
 +        sourceLine = aMessage.lineNumber;
          break;
++      }
  
        case "trace":
          let filename = WebConsoleUtils.abbreviateSourceURL(args[0].filename);
@@ -160,7 +501,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                             l10n.getStr("stacktrace.anonymousFunction");
          let lineNumber = args[0].lineNumber;
  
-@@ -1065,16 +1065,28 @@ WebConsoleFrame.prototype = {
+         body = l10n.getFormatStr("stacktrace.outputMessage",
+@@ -1065,64 +1058,74 @@ WebConsoleFrame.prototype = {
          node.querySelector("tree").view = node.propertyTreeView;
        };
      }
@@ -189,17 +531,83 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        The message element this handler corresponds to.
     * @param nsIDOMNode aAnchor
     *        The object inspector anchor element. This is the clickable element
-@@ -2010,17 +2022,17 @@ WebConsoleFrame.prototype = {
+    *        in the console.log message we display.
+-   * @param array aRemoteObject
+-   *        The remote object representation.
++   * @param object aObjectActor
++   *        The object actor grip.
+    */
+   _consoleLogClick:
+-  function WCF__consoleLogClick(aMessage, aAnchor, aRemoteObject)
++  function WCF__consoleLogClick(aMessage, aAnchor, aObjectActor)
+   {
+     if (aAnchor._panelOpen) {
+       return;
+     }
+ 
+     let options = {
+       title: aAnchor.textContent,
+       anchor: aAnchor,
+ 
+       // Data to inspect.
+       data: {
+-        // This is where the resultObject children are cached.
+-        rootCacheId: aMessage._evalCacheId,
+-        remoteObject: aRemoteObject,
+-        // This is where all objects retrieved by the panel will be cached.
+-        panelCacheId: "HUDPanel-" + gSequenceId(),
+-        remoteObjectProvider: this.jsterm.remoteObjectProvider.bind(this.jsterm),
++        objectPropertiesProvider: this.objectPropertiesProvider.bind(this),
+       },
+     };
+ 
+-    let propPanel = this.jsterm.openPropertyPanel(options);
+-    propPanel.panel.setAttribute("hudId", this.hudId);
+-
+     let onPopupHide = function JST__evalInspectPopupHide() {
+       propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
+ 
+       this.jsterm.clearObjectCache(options.data.panelCacheId);
+ 
+       if (!aMessage.parentNode && aMessage._evalCacheId) {
+         this.jsterm.clearObjectCache(aMessage._evalCacheId);
+       }
+     }.bind(this);
+ 
+-    propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
++    this.objectPropertiesProvider(aObjectAnchor,
++      function _onObjectProperties(aProperties) {
++        options.data.objectProperties = aProperties;
++        let propPanel = this.jsterm.openPropertyPanel(options);
++        propPanel.panel.setAttribute("hudId", this.hudId);
++        propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
++      });
+   },
+ 
+   /**
+    * Reports an error in the page source, either JavaScript or CSS.
+    *
+    * @param nsIScriptError aScriptError
+    *        The error message to report.
+    * @return nsIDOMElement|undefined
+@@ -2005,54 +2008,59 @@ WebConsoleFrame.prototype = {
+    * @private
+    * @param nsIDOMElement aMessage
+    *        The message element that holds the output for the given call.
+    * @param nsIDOMElement aContainer
+    *        The specific element that will hold each part of the console.log
     *        output.
     * @param object aBody
     *        The object given by this.logConsoleAPIMessage(). This object holds
-    *        the call information that we need to display.
+-   *        the call information that we need to display.
++   *        the call information that we need to display - mainly the arguments
++   *        array of the given API call.
     */
    _makeConsoleLogMessageBody:
    function WCF__makeConsoleLogMessageBody(aMessage, aContainer, aBody)
    {
 -    aMessage._evalCacheId = aBody.cacheId;
-+    aMessage._objectActors = aBody.remoteObjects;
++    aMessage._objectActors = [];
  
      Object.defineProperty(aMessage, "_panelOpen", {
        get: function() {
@@ -208,22 +616,21 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            return aNode._panelOpen;
          });
        },
-@@ -2028,26 +2040,30 @@ WebConsoleFrame.prototype = {
+       enumerable: true,
        configurable: false
      });
  
-     aBody.remoteObjects.forEach(function(aItem, aIndex) {
+-    aBody.remoteObjects.forEach(function(aItem, aIndex) {
++    aBody.arguments.forEach(function(aItem) {
        if (aContainer.firstChild) {
          aContainer.appendChild(this.document.createTextNode(" "));
        }
  
 -      let text = aBody.argsToString[aIndex];
 -      if (!Array.isArray(aItem)) {
++      let text = WebConsoleUtils.objectActorGripToString(aItem);
++
 +      if (typeof aItem != "object" || aItem.type != "object") {
-+        // Primitives like strings and numbers are not sent as objects.
-+        // But null and undefined are sent as objects with the type property
-+        // telling which type of value we have.
-+        let text = typeof aItem == "object" ? aItem.type : aItem;
          aContainer.appendChild(this.document.createTextNode(text));
          return;
        }
@@ -232,16 +639,22 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        let elem = this.document.createElement("description");
        elem.classList.add("hud-clickable");
        elem.setAttribute("aria-haspopup", "true");
--      elem.appendChild(this.document.createTextNode(text));
-+      elem.appendChild(this.document.createTextNode(aItem.toString));
+       elem.appendChild(this.document.createTextNode(text));
  
        this._addMessageLinkCallback(elem,
          this._consoleLogClick.bind(this, aMessage, elem, aItem));
  
        aContainer.appendChild(elem);
++
++      aMessage._objectActors.push(aItem.actor);
      }, this);
    },
  
+   /**
+    * Creates the XUL label that displays the textual location of an incoming
+    * message.
+    *
+    * @param string aSourceURL
 diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
@@ -448,7 +861,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    /**
     * Handler for the "getCachedMessages" request. This method sends the cached
-@@ -189,36 +298,225 @@ WebConsoleActor.prototype =
+@@ -189,36 +298,170 @@ WebConsoleActor.prototype =
      };
    },
  
@@ -519,9 +932,11 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   */
 +  grip: function WCOA_grip()
 +  {
-+    return { "type": "object",
-+             "toString": WebConsoleUtils.formatResult(this.obj),
-+             "actor": this.actorID };
++    return {
++      "type": "object",
++      "displayString": WebConsoleUtils.formatResult(this.obj),
++      "actor": this.actorID,
++    };
 +  },
 +
 +  /**
@@ -539,67 +954,32 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   * @param aRequest object
 +   *        The protocol request object.
 +   */
-+  onOwnPropertyNames: function WCOA_onOwnPropertyNames(aRequest)
-+  {
-+    return { from: this.actorID,
-+             ownPropertyNames: this.obj.getOwnPropertyNames() };
-+  },
-+
-+  /**
-+   * Handle a protocol request to provide the prototype and own properties of
-+   * the object.
-+   *
-+   * @param aRequest object
-+   *        The protocol request object.
-+   */
-+  onPrototypeAndProperties: function WCOA_onPrototypeAndProperties(aRequest)
++  onOwnProperties: function WCOA_onOwnProperties(aRequest)
 +  {
 +    let ownProperties = {};
-+    for each (let name in this.obj.getOwnPropertyNames()) {
++
++    for each (let name in Object.getOwnPropertyNames(this.obj)) {
++      let desc = null;
 +      try {
-+        let desc = this.obj.getOwnPropertyDescriptor(name);
-+        ownProperties[name] = this._propertyDescriptor(desc);
-+      } catch (e if e.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO") {
++        desc = Object.getOwnPropertyDescriptor(this.obj, name);
++      }
++      catch (ex if (ex.name == "NS_ERROR_XPC_BAD_CONVERT_JS" ||
++                    ex.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO")) {
 +        // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
 +        // allowed.
 +        dumpn("Error while getting the property descriptor for " + name +
-+              ": " + e.name);
++              ": " + ex);
++      }
++
++      if (desc) {
++        ownProperties[name] = this._propertyDescriptor(desc);
 +      }
 +    }
-+    return { from: this.actorID,
-+             prototype: this.parentActor.createValueGrip(this.obj.proto),
-+             ownProperties: ownProperties };
-+  },
 +
-+  /**
-+   * Handle a protocol request to provide the prototype of the object.
-+   *
-+   * @param aRequest object
-+   *        The protocol request object.
-+   */
-+  onPrototype: function WCOA_onPrototype(aRequest)
-+  {
-+    return { from: this.actorID,
-+             prototype: this.parentActor.createValueGrip(this.obj.proto) };
-+  },
-+
-+  /**
-+   * Handle a protocol request to provide the property descriptor of the
-+   * object's specified property.
-+   *
-+   * @param aRequest object
-+   *        The protocol request object.
-+   */
-+  onProperty: function OA_onProperty(aRequest)
-+  {
-+    if (!aRequest.name) {
-+      return { error: "missingParameter",
-+               message: "no property name was specified" };
-+    }
-+
-+    let desc = this.obj.getOwnPropertyDescriptor(aRequest.name);
-+    return { from: this.actorID,
-+             descriptor: this._propertyDescriptor(desc) };
++    return {
++      from: this.actorID,
++      ownProperties: ownProperties,
++    };
 +  },
 +
 +  /**
@@ -615,8 +995,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    let descriptor = {};
 +    descriptor.configurable = aObject.configurable;
 +    descriptor.enumerable = aObject.enumerable;
++    descriptor.writable = aObject.writable;
 +    if (aObject.value !== undefined) {
-+      descriptor.writable = aObject.writable;
 +      descriptor.value = this.parentActor.createValueGrip(aObject.value);
 +    }
 +    else {
@@ -624,24 +1004,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      descriptor.set = this.parentActor.createValueGrip(aObject.set);
 +    }
 +    return descriptor;
-+  },
-+
-+  /**
-+   * Handle a protocol request to provide the name and parameters of a function.
-+   *
-+   * @param aRequest object
-+   *        The protocol request object.
-+   */
-+  onNameAndParameters: function WCOA_onNameAndParameters(aRequest)
-+  {
-+    if (this.obj.class !== "Function") {
-+      return { error: "objectNotFunction",
-+               message: "nameAndParameters request is only valid for object " +
-+                        "grips with a 'Function' class." };
-+    }
-+
-+    return { name: this.obj.name || null,
-+             parameters: this.obj.parameterNames };
 +  },
 +
 +  /**
@@ -659,11 +1021,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +
 +WebConsoleObjectActor.prototype.requestTypes =
 +{
-+  "nameAndParameters": WebConsoleObjectActor.prototype.onNameAndParameters,
-+  "prototypeAndProperties": WebConsoleObjectActor.prototype.onPrototypeAndProperties,
-+  "prototype": WebConsoleObjectActor.prototype.onPrototype,
-+  "property": WebConsoleObjectActor.prototype.onProperty,
-+  "ownPropertyNames": WebConsoleObjectActor.prototype.onOwnPropertyNames,
++  "ownProperties": WebConsoleObjectActor.prototype.onOwnProperties,
 +  "release": WebConsoleObjectActor.prototype.onRelease,
 +};
 +
@@ -675,7 +1033,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
   * The nsIConsoleService listener. This is used to send all the page errors
   * (JavaScript, CSS and more) to the remote Web Console instance.
   *
-@@ -350,8 +648,170 @@ PageErrorListener.prototype =
+@@ -350,8 +593,170 @@ PageErrorListener.prototype =
     * Remove the nsIConsoleService listener.
     */
    destroy: function PEL_destroy()
