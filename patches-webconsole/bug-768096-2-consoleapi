@@ -1,13 +1,32 @@
 # HG changeset patch
-# Parent 151e47aa39484596eb32c3c5ad95e469e1e4fdf2
+# Parent 30feda0b40992df12ed42e962ef0bb66cdd2f5df
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1344629669 -10800
+# Date 1344892237 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -1150,16 +1150,17 @@ WebConsole.prototype = {
+@@ -595,16 +595,18 @@ WebConsole.prototype = {
+    * object holds methods used for connecting, listening and disconnecting from
+    * the remote server, using the remote debugging protocol.
+    *
+    * @see WebConsoleConnectionProxy
+    * @type object
+    */
+   proxy: null,
+ 
++  get webConsoleClient() this.proxy.webConsoleClient,
++
+   /**
+    * Initialize the Web Console instance.
+    * @private
+    */
+   _init: function WC__init()
+   {
+     this.chromeDocument = this.tab.ownerDocument;
+     this.chromeWindow = this.chromeDocument.defaultView;
+@@ -1150,16 +1152,17 @@ WebConsole.prototype = {
   *        The Web Console instance that owns this connection proxy.
   */
  function WebConsoleConnectionProxy(aWebConsole)
@@ -25,7 +44,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @see WebConsole
     * @type object
-@@ -1191,18 +1192,20 @@ WebConsoleConnectionProxy.prototype = {
+@@ -1191,18 +1194,20 @@ WebConsoleConnectionProxy.prototype = {
     *        Optional function to invoke when connection is established.
     */
    connect: function WCCP_connect(aCallback)
@@ -47,7 +66,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
                               this._onAttachConsole.bind(this, aCallback));
        }.bind(this));
      }.bind(this));
-@@ -1256,25 +1259,35 @@ WebConsoleConnectionProxy.prototype = {
+@@ -1256,25 +1261,35 @@ WebConsoleConnectionProxy.prototype = {
     * for displaying.
     */
    _onPageError: function WCCP__onPageError(aType, aPacket)
@@ -96,7 +115,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
  var PropertyTreeView = function() {
    this._rows = [];
 -  this._objectCache = {};
-+  this._objectCache = [];
++  this._objectActors = [];
  };
  
  PropertyTreeView.prototype = {
@@ -143,7 +162,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
 -      this._remoteObjectProvider = aData.remoteObjectProvider;
 -      this._rows = [].concat(aData.remoteObject);
 -      this._updateRemoteObject(this._rows, 0);
-+    if (aData.objectActor) {
++    if (aData.objectPropertiesProvider) {
 +      this._objectPropertiesProvider = aData.objectPropertiesProvider;
 +      this._rows = this._propertiesToRows(aData.objectProperties, 0);
      }
@@ -188,7 +207,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
 +      descriptor._open = false;
 +      descriptor._children = null;
 +      result.push(descriptor);
-+      if (typeof descriptor.value == "object" &&
++      if (typeof descriptor.value == "object" && descriptor.value &&
 +          descriptor.value.actor) {
 +        this._objectActors.push(descriptor.value.actor);
 +      }
@@ -344,7 +363,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
 +      // TODO: release object actors.
 +    }
 +
-+    delete this._objectActors;
++    this._objectActors = [];
 +    delete this._objectPropertiesProvider;
    },
  };
@@ -430,7 +449,26 @@ diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/browser/devtools/
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -531,23 +531,16 @@ WebConsoleFrame.prototype = {
+@@ -275,16 +275,18 @@ WebConsoleFrame.prototype = {
+   outputNode: null,
+ 
+   /**
+    * The input element that allows the user to filter messages by string.
+    * @type nsIDOMElement
+    */
+   filterBox: null,
+ 
++  get webConsoleClient() this.owner.webConsoleClient,
++
+   _saveRequestAndResponseBodies: false,
+ 
+   /**
+    * Tells whether to save the bodies of network requests and responses.
+    * Disabled by default to save memory.
+    * @type boolean
+    */
+   get saveRequestAndResponseBodies() this._saveRequestAndResponseBodies,
+@@ -531,23 +533,16 @@ WebConsoleFrame.prototype = {
          this.owner._receiveMessageWithCallback(aMessage.json);
          break;
        case "JSTerm:ClearOutput":
@@ -454,7 +492,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          this.handleNetworkActivity(aMessage.json);
          break;
        case "WebConsole:FileActivity":
-@@ -925,35 +918,35 @@ WebConsoleFrame.prototype = {
+@@ -925,35 +920,35 @@ WebConsoleFrame.prototype = {
     *         The message element to display in the Web Console output.
     */
    logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
@@ -502,7 +540,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let lineNumber = args[0].lineNumber;
  
          body = l10n.getFormatStr("stacktrace.outputMessage",
-@@ -1065,64 +1058,74 @@ WebConsoleFrame.prototype = {
+@@ -1065,64 +1060,74 @@ WebConsoleFrame.prototype = {
          node.querySelector("tree").view = node.propertyTreeView;
        };
      }
@@ -575,13 +613,13 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }.bind(this);
  
 -    propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
-+    this.objectPropertiesProvider(aObjectAnchor,
++    this.objectPropertiesProvider(aObjectActor.actor,
 +      function _onObjectProperties(aProperties) {
 +        options.data.objectProperties = aProperties;
 +        let propPanel = this.jsterm.openPropertyPanel(options);
 +        propPanel.panel.setAttribute("hudId", this.hudId);
 +        propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
-+      });
++      }.bind(this));
    },
  
    /**
@@ -590,7 +628,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -2005,54 +2008,59 @@ WebConsoleFrame.prototype = {
+@@ -2005,54 +2010,59 @@ WebConsoleFrame.prototype = {
     * @private
     * @param nsIDOMElement aMessage
     *        The message element that holds the output for the given call.
@@ -655,6 +693,105 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * message.
     *
     * @param string aSourceURL
+@@ -2222,16 +2232,38 @@ WebConsoleFrame.prototype = {
+         strings.push("[" + timestampString + "] " + item.clipboardText);
+       }
+     }
+ 
+     clipboardHelper.copyString(strings.join("\n"), this.document);
+   },
+ 
+   /**
++   * Object properties provider. This function gives you the properties of the
++   * remote object you want.
++   *
++   * @param string aActor
++   *        The object actor ID from which you want the properties.
++   * @param function aCallback
++   *        Function you want invoked once the properties are received.
++   */
++  objectPropertiesProvider:
++  function WCF_objectPropertiesProvider(aActor, aCallback)
++  {
++    this.webConsoleClient.getObjectOwnProperties(aActor, function(aResponse) {
++      if (aResponse.error) {
++        Cu.reportError("Failed to retrieve the object properties from the " +
++                       "server. Error: " + aResponse.error);
++        return;
++      }
++      aCallback(aResponse.ownProperties);
++    });
++  },
++
++  /**
+    * Destroy the HUD object. Call this method to avoid memory leaks when the Web
+    * Console is closed.
+    */
+   destroy: function WCF_destroy()
+   {
+     if (this.jsterm) {
+       this.jsterm.destroy();
+     }
+diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
+--- a/toolkit/devtools/debugger/dbg-client.jsm
++++ b/toolkit/devtools/debugger/dbg-client.jsm
+@@ -189,20 +189,21 @@ const DebugProtocolTypes = {
+   "clientEvaluate": "clientEvaluate",
+   "delete": "delete",
+   "detach": "detach",
+   "frames": "frames",
+   "getCachedMessages": "getCachedMessages",
+   "interrupt": "interrupt",
+   "listTabs": "listTabs",
+   "nameAndParameters": "nameAndParameters",
++  "ownProperties": "ownProperties",
+   "ownPropertyNames": "ownPropertyNames",
++  "prototypeAndProperties": "prototypeAndProperties",
+   "property": "property",
+   "prototype": "prototype",
+-  "prototypeAndProperties": "prototypeAndProperties",
+   "resume": "resume",
+   "scripts": "scripts",
+   "setBreakpoint": "setBreakpoint",
+   "startListeners": "startListeners",
+   "stopListeners": "stopListeners",
+ };
+ 
+ const ROOT_ACTOR_NAME = "root";
+@@ -578,16 +579,33 @@ WebConsoleClient.prototype = {
+       to: this._actor,
+       type: DebugProtocolTypes.getCachedMessages,
+       messageTypes: aTypes,
+     };
+     this._client.request(packet, aOnResponse);
+   },
+ 
+   /**
++   * Retrieve the properties of an object.
++   *
++   * @param string aActor
++   *        The WebConsoleObjectActor ID to send the request to.
++   * @param function aOnResponse
++   *        The function invoked when the response is received.
++   */
++  getObjectOwnProperties:
++  function WCC_getObjectOwnProperties(aActor, aOnResponse) {
++    let packet = {
++      to: aActor,
++      type: DebugProtocolTypes.ownProperties,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
+    * Start the given Web Console listeners.
+    *
+    * @see this.LISTENERS
+    * @param array aListeners
+    *        Array of listeners you want to start. See this.LISTENERS for
+    *        known listeners.
+    * @param function aOnResponse
+    *        Function to invoke when the server response is received.
 diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
@@ -671,7 +808,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +  this._objectActorsPool = new ActorPool(this.conn);
 +  this.conn.addActorPool(this._objectActorsPool);
 +
-+  this._objectActors = new WeakMap();
++  this._objectActors = new Map();
  }
  
  WebConsoleActor.prototype =
@@ -693,7 +830,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +  _objectActorsPool: null,
 +
 +  /**
-+   * Weak map between objects and their WebConsoleObjectActor wrappers.
++   * Map between objects and their WebConsoleObjectActor wrappers.
 +   * @private
 +   * @type object
 +   */
@@ -779,7 +916,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   * @param object aValue
 +   *        The object you want.
 +   */
-+  objectGrip: function TA_objectGrip(aValue)
++  objectGrip: function WCA_objectGrip(aValue)
 +  {
 +    if (this._objectActors.has(aValue)) {
 +      return this._objectActors.get(aValue).grip();
@@ -861,7 +998,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    /**
     * Handler for the "getCachedMessages" request. This method sends the cached
-@@ -189,36 +298,170 @@ WebConsoleActor.prototype =
+@@ -189,36 +298,166 @@ WebConsoleActor.prototype =
      };
    },
  
@@ -959,9 +1096,9 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    let ownProperties = {};
 +
 +    for each (let name in Object.getOwnPropertyNames(this.obj)) {
-+      let desc = null;
 +      try {
-+        desc = Object.getOwnPropertyDescriptor(this.obj, name);
++        let desc = Object.getOwnPropertyDescriptor(this.obj, name);
++        ownProperties[name] = this._propertyDescriptor(desc);
 +      }
 +      catch (ex if (ex.name == "NS_ERROR_XPC_BAD_CONVERT_JS" ||
 +                    ex.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO")) {
@@ -969,10 +1106,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +        // allowed.
 +        dumpn("Error while getting the property descriptor for " + name +
 +              ": " + ex);
-+      }
-+
-+      if (desc) {
-+        ownProperties[name] = this._propertyDescriptor(desc);
 +      }
 +    }
 +
@@ -1033,7 +1166,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
   * The nsIConsoleService listener. This is used to send all the page errors
   * (JavaScript, CSS and more) to the remote Web Console instance.
   *
-@@ -350,8 +593,170 @@ PageErrorListener.prototype =
+@@ -350,8 +589,170 @@ PageErrorListener.prototype =
     * Remove the nsIConsoleService listener.
     */
    destroy: function PEL_destroy()
