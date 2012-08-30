@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent fba2eb0c80ab5106ca2e23a814efa24476010537
+# Parent 185cb4260f01302256439d271443f2547cf3f131
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1344367217 -10800
+# Date 1346353316 -10800
 
 Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
@@ -33,7 +33,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    function log(aMessage) {
      var _msg = aMessagePrefix + " " + aMessage + "\n";
      dump(_msg);
-@@ -571,28 +579,47 @@ WebConsole.prototype = {
+@@ -573,28 +581,47 @@ WebConsole.prototype = {
    get outputNode()
    {
      return this.ui ? this.ui.outputNode : null;
@@ -81,7 +81,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @private
     */
    _initUI: function WC__initUI()
-@@ -621,16 +648,21 @@ WebConsole.prototype = {
+@@ -623,16 +650,21 @@ WebConsole.prototype = {
    {
      this.iframe.removeEventListener("load", this._onIframeLoad, true);
  
@@ -103,7 +103,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @private
     */
    _createOwnWindowPanel: function WC__createOwnWindowPanel()
-@@ -919,31 +951,44 @@ WebConsole.prototype = {
+@@ -921,31 +953,44 @@ WebConsole.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
@@ -150,7 +150,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    _onInitComplete: function WC__onInitComplete()
    {
-@@ -1053,16 +1098,20 @@ WebConsole.prototype = {
+@@ -1055,16 +1100,20 @@ WebConsole.prototype = {
    destroy: function WC_destroy()
    {
      this.sendMessageToContent("WebConsole:Destroy", {});
@@ -171,7 +171,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      let panels = popupset.querySelectorAll("panel[hudId=" + this.hudId + "]");
      for (let panel of panels) {
        if (panel != this.consolePanel) {
-@@ -1087,16 +1136,153 @@ WebConsole.prototype = {
+@@ -1089,16 +1138,136 @@ WebConsole.prototype = {
      }
  
      if (this.splitter.parentNode) {
@@ -192,7 +192,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +{
 +  this.owner = aWebConsole;
 +
-+  this._onCachedMessages = this._onCachedMessages.bind(this);
 +  this._onPageError = this._onPageError.bind(this);
 +}
 +
@@ -272,22 +271,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +
 +    this.connected = true;
 +    aCallback && aCallback();
-+
-+    //let msg = [this.webConsoleClient.CACHED_MESSAGES.PageError];
-+    //this.webConsoleClient.getCachedMessages(msgs,
-+    //                                        this._onCachedMessages);
-+  },
-+
-+  // TODO: This is almost working. Need to implement ConsoleAPI support in the
-+  // WebConsoleActor and it's done.
-+  _onCachedMessages: function WCCP__onCachedMessages(aResponse)
-+  {
-+    if (aResponse.error) {
-+      Cu.reportError("Web Console getCachedMessages error: " + aResponse.error +
-+                     " " + aResponse.message);
-+      return;
-+    }
-+    //dump("WCCP__onCachedMessages " + aResponse.messages.length + "\n");
 +  },
 +
 +  /**
@@ -563,7 +546,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601909_reme
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -535,26 +535,22 @@ WebConsoleFrame.prototype = {
+@@ -596,26 +596,22 @@ WebConsoleFrame.prototype = {
          break;
        case "JSTerm:InspectObject":
          this.jsterm.handleInspectObject(aMessage.json);
@@ -593,7 +576,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          this.outputMessage(CATEGORY_NETWORK, this.logFileActivity,
                             [aMessage.json.uri]);
          break;
-@@ -1146,16 +1142,29 @@ WebConsoleFrame.prototype = {
+@@ -1207,16 +1203,29 @@ WebConsoleFrame.prototype = {
                                        aScriptError.errorMessage,
                                        aScriptError.sourceName,
                                        aScriptError.lineNumber, null, null,
@@ -646,7 +629,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  XPCOMUtils.defineLazyServiceGetter(this, "socketTransportService",
                                     "@mozilla.org/network/socket-transport-service;1",
                                     "nsISocketTransportService");
-@@ -168,56 +169,61 @@ const ThreadStateTypes = {
+@@ -168,16 +169,17 @@ const ThreadStateTypes = {
  };
  
  /**
@@ -661,8 +644,10 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  };
  
  /**
-  * Set of debug protocol request types that specify the protocol request being
-  * sent to the server.
+  * Set of pause types that are sent by the server and not as an immediate
+  * response to a client request.
+  */
+@@ -194,41 +196,45 @@ const UnsolicitedPauses = {
   */
  const DebugProtocolTypes = {
    "assign": "assign",
@@ -709,7 +694,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  
  DebuggerClient.prototype = {
    /**
-@@ -263,20 +269,42 @@ DebuggerClient.prototype = {
+@@ -274,20 +280,42 @@ DebuggerClient.prototype = {
      let detachTab = function _detachTab() {
        if (this.activeTab) {
          this.activeTab.detach(closeTransport);
@@ -756,7 +741,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *
     * @param function aOnResponse
     *        Called with the response packet.
-@@ -296,26 +324,57 @@ DebuggerClient.prototype = {
+@@ -307,26 +335,57 @@ DebuggerClient.prototype = {
     * @param function aOnResponse
     *        Called with the response packet and a TabClient
     *        (which will be undefined on error).
@@ -815,7 +800,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *        Called with the response packet and a ThreadClient
     *        (which will be undefined on error).
     */
-@@ -474,16 +533,113 @@ TabClient.prototype = {
+@@ -495,16 +554,113 @@ TabClient.prototype = {
        }
      });
    }
