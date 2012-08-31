@@ -1,14 +1,48 @@
 # HG changeset patch
-# Parent 185cb4260f01302256439d271443f2547cf3f131
+# Parent ee7a3bddfe5fe68e8d67fff178c94de679bffbe0
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1346356169 -10800
+# Date 1346437241 -10800
 
 Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
 +++ b/browser/devtools/webconsole/HUDService-content.js
-@@ -180,16 +180,18 @@ let Manager = {
+@@ -6,30 +6,31 @@
+ 
+ "use strict";
+ 
+ // This code is appended to the browser content script.
+ (function _HUDServiceContent() {
+ let Cc = Components.classes;
+ let Ci = Components.interfaces;
+ let Cu = Components.utils;
++const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ 
+ let tempScope = {};
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm", tempScope);
+ Cu.import("resource://gre/modules/Services.jsm", tempScope);
+ Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", tempScope);
+-Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
++Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tempScope);
+ Cu.import("resource:///modules/NetworkHelper.jsm", tempScope);
+ Cu.import("resource://gre/modules/NetUtil.jsm", tempScope);
+ 
+ let XPCOMUtils = tempScope.XPCOMUtils;
+ let Services = tempScope.Services;
+ let gConsoleStorage = tempScope.ConsoleAPIStorage;
+ let WebConsoleUtils = tempScope.WebConsoleUtils;
+-let l10n = WebConsoleUtils.l10n;
++let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ let JSPropertyProvider = tempScope.JSPropertyProvider;
+ let NetworkHelper = tempScope.NetworkHelper;
+ let NetUtil = tempScope.NetUtil;
+ tempScope = null;
+ 
+ let activityDistributor = Cc["@mozilla.org/network/http-activity-distributor;1"].getService(Ci.nsIHttpActivityDistributor);
+ 
+ let _alive = true; // Track if this content script should still be alive.
+@@ -180,16 +181,18 @@ let Manager = {
        aMessage.features.forEach(function(aFeature) {
          this.enableFeature(aFeature, aMessage[aFeature]);
        }, this);
@@ -30,7 +64,33 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -534,17 +534,17 @@ WebConsole.prototype = {
+@@ -13,22 +13,20 @@ const Cu = Components.utils;
+ const CONSOLEAPI_CLASS_ID = "{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}";
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                   "resource://gre/modules/Services.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+-                                  "resource:///modules/WebConsoleUtils.jsm");
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+ 
+-XPCOMUtils.defineLazyGetter(this, "l10n", function() {
+-  return WebConsoleUtils.l10n;
+-});
+-
++const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
++let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ var EXPORTED_SYMBOLS = ["HUDService"];
+ 
+ function LogFactory(aMessagePrefix)
+ {
+   function log(aMessage) {
+     var _msg = aMessagePrefix + " " + aMessage + "\n";
+     dump(_msg);
+@@ -534,17 +532,17 @@ WebConsole.prototype = {
    /**
     * Message names that the HUD listens for. These messages come from the remote
     * Web Console content script.
@@ -49,7 +109,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    /**
     * The xul:panel that holds the Web Console when it is positioned as a window.
     * @type nsIDOMElement
-@@ -921,44 +921,30 @@ WebConsole.prototype = {
+@@ -921,44 +919,30 @@ WebConsole.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
  
@@ -95,6 +155,117 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @see this.sendMessageToContent
     * @private
     * @param object aResponse
+diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
+--- a/browser/devtools/webconsole/Makefile.in
++++ b/browser/devtools/webconsole/Makefile.in
+@@ -11,14 +11,13 @@ VPATH		= @srcdir@
+ include $(DEPTH)/config/autoconf.mk
+ 
+ EXTRA_JS_MODULES = \
+ 		HUDService.jsm \
+ 		PropertyPanel.jsm \
+ 		NetworkHelper.jsm \
+ 		NetworkPanel.jsm \
+ 		AutocompletePopup.jsm \
+-		WebConsoleUtils.jsm \
+ 		$(NULL)
+ 
+ TEST_DIRS = test
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/NetworkPanel.jsm
+--- a/browser/devtools/webconsole/NetworkPanel.jsm
++++ b/browser/devtools/webconsole/NetworkPanel.jsm
+@@ -17,21 +17,20 @@ XPCOMUtils.defineLazyServiceGetter(this,
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
+                                   "resource:///modules/NetworkHelper.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+                                   "resource://gre/modules/NetUtil.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+-                                  "resource:///modules/WebConsoleUtils.jsm");
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+ 
+-XPCOMUtils.defineLazyGetter(this, "l10n", function() {
+-  return WebConsoleUtils.l10n;
+-});
++const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
++let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ var EXPORTED_SYMBOLS = ["NetworkPanel"];
+ 
+ /**
+  * Creates a new NetworkPanel.
+  *
+  * @param nsIDOMNode aParent
+  *        Parent node to append the created panel to.
+diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
+--- a/browser/devtools/webconsole/PropertyPanel.jsm
++++ b/browser/devtools/webconsole/PropertyPanel.jsm
+@@ -8,17 +8,17 @@
+ 
+ const Cc = Components.classes;
+ const Ci = Components.interfaces;
+ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+-                                  "resource:///modules/WebConsoleUtils.jsm");
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+ 
+ var EXPORTED_SYMBOLS = ["PropertyPanel", "PropertyTreeView"];
+ 
+ ///////////////////////////////////////////////////////////////////////////
+ //// PropertyTreeView.
+ 
+ /**
+  * This is an implementation of the nsITreeView interface. For comments on the
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_580454_timestamp_l10n.js b/browser/devtools/webconsole/test/browser_webconsole_bug_580454_timestamp_l10n.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_580454_timestamp_l10n.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_580454_timestamp_l10n.js
+@@ -16,17 +16,17 @@ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("DOMContentLoaded", testTimestamp, false);
+ 
+   function testTimestamp()
+   {
+     browser.removeEventListener("DOMContentLoaded", testTimestamp, false);
+     const TEST_TIMESTAMP = 12345678;
+     let date = new Date(TEST_TIMESTAMP);
+-    let localizedString = WebConsoleUtils.l10n.timestampString(TEST_TIMESTAMP);
++    let localizedString = WCU_l10n.timestampString(TEST_TIMESTAMP);
+     isnot(localizedString.indexOf(date.getHours()), -1, "the localized " +
+           "timestamp contains the hours");
+     isnot(localizedString.indexOf(date.getMinutes()), -1, "the localized " +
+           "timestamp contains the minutes");
+     isnot(localizedString.indexOf(date.getSeconds()), -1, "the localized " +
+           "timestamp contains the seconds");
+     isnot(localizedString.indexOf(date.getMilliseconds()), -1, "the localized " +
+           "timestamp contains the milliseconds");
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js b/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
+@@ -76,16 +76,16 @@ function testContextMenuCopy() {
+   let selectedNode = outputNode.getItemAtIndex(0);
+ 
+   HUD = outputNode = null;
+   waitForClipboard(getExpectedClipboardText(selectedNode), clipboardSetup,
+     finishTest, finishTest);
+ }
+ 
+ function getExpectedClipboardText(aItem) {
+-  return "[" + WebConsoleUtils.l10n.timestampString(aItem.timestamp) + "] " +
++  return "[" + WCU_l10n.timestampString(aItem.timestamp) + "] " +
+          aItem.clipboardText;
+ }
+ 
+ function clipboardSetup() {
+   goDoCommand("cmd_copy");
+ }
+ 
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js b/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js
@@ -330,6 +501,88 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601909_reme
    }, true);
  }
  
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js
+@@ -75,11 +75,11 @@ function performTest(HUD) {
+ 
+   ok(HUD.outputNode.selectedItem, "we have a selected message");
+ 
+   waitForClipboard(getExpectedClipboardText(HUD.outputNode.selectedItem),
+     clipboard_setup, clipboard_copy_done, clipboard_copy_done);
+ }
+ 
+ function getExpectedClipboardText(aItem) {
+-  return "[" + WebConsoleUtils.l10n.timestampString(aItem.timestamp) + "] " +
++  return "[" + WCU_l10n.timestampString(aItem.timestamp) + "] " +
+          aItem.clipboardText;
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js b/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
+@@ -53,17 +53,17 @@ function nextTest() {
+   }
+ }
+ 
+ function getExpectedClipboardText(aItemCount) {
+   let expectedClipboardText = [];
+   for (let i = 0; i < aItemCount; i++) {
+     let item = outputNode.getItemAtIndex(i);
+     expectedClipboardText.push("[" +
+-      WebConsoleUtils.l10n.timestampString(item.timestamp) + "] " +
++      WCU_l10n.timestampString(item.timestamp) + "] " +
+       item.clipboardText);
+   }
+   return expectedClipboardText.join("\n");
+ }
+ 
+ function clipboardSetup() {
+   goDoCommand("cmd_copy");
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+@@ -10,17 +10,17 @@ function test() {
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+ }
+ 
+ function consoleOpened(HUD) {
+   let tmp = {};
+-  Cu.import("resource:///modules/WebConsoleUtils.jsm", tmp);
++  Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tmp);
+   let WCU = tmp.WebConsoleUtils;
+   let JSPropertyProvider = tmp.JSPropertyProvider;
+   tmp = null;
+ 
+   let jsterm = HUD.jsterm;
+   let win = content.wrappedJSObject;
+ 
+   // Make sure autocomplete does not walk through iterators and generators.
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+@@ -18,17 +18,17 @@ var gHUD;
+ 
+ function consoleOpened(aHud) {
+   gHUD = aHud;
+   let jsterm = gHUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+ 
+   let tmp = {};
+-  Cu.import("resource:///modules/WebConsoleUtils.jsm", tmp);
++  Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tmp);
+   let WCU = tmp.WebConsoleUtils;
+   tmp = null;
+ 
+   ok(!popup.isOpen, "popup is not open");
+ 
+   popup._panel.addEventListener("popupshown", function onShown() {
+     popup._panel.removeEventListener("popupshown", onShown, false);
+ 
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_chrome.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_chrome.js
@@ -362,6 +615,138 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/bro
    let input = jsterm.inputNode;
    ok(hud.outputNode, "we have an output node");
  
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js b/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js
+@@ -47,17 +47,17 @@ function testClipboard() {
+ 
+   outputNode.selectAll();
+   outputNode.focus();
+ 
+   let clipboardTexts = [];
+   for (let i = 0; i < outputNode.itemCount; i++) {
+     let item = outputNode.getItemAtIndex(i);
+     clipboardTexts.push("[" +
+-                        WebConsoleUtils.l10n.timestampString(item.timestamp) +
++                        WCU_l10n.timestampString(item.timestamp) +
+                         "] " + item.clipboardText);
+   }
+ 
+   waitForClipboard(clipboardTexts.join("\n"),
+                    function() { goDoCommand("cmd_copy"); },
+                    finishTest, finishTest);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
+@@ -59,21 +59,16 @@ function checkNodeKeyValue(aPanel, aId, 
+ 
+   ok(false, "content check failed for " + aId + ", key " + aKey);
+ }
+ 
+ function testGen() {
+   let hud = HUDService.getHudByWindow(content);
+   let filterBox = hud.ui.filterBox;
+ 
+-  let tempScope  = {};
+-  Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
+-  let l10n = tempScope.WebConsoleUtils.l10n;
+-  tempScope = null;
+-
+   let httpActivity = {
+     meta: {
+       stages: [],
+       discardRequestBody: true,
+       discardResponseBody: true,
+     },
+     log: {
+       entries: [{
+@@ -437,17 +432,17 @@ function testGen() {
+     responseBodyCached: false,
+     responseBodyUnknownType: true,
+     responseNoBody: false,
+     responseImage: false,
+     responseImageCached: false
+   });
+ 
+   let responseString =
+-    l10n.getFormatStr("NetworkPanel.responseBodyUnableToDisplay.content",
++    WCU_l10n.getFormatStr("NetworkPanel.responseBodyUnableToDisplay.content",
+                       ["application/x-shockwave-flash"]);
+   checkNodeContent(networkPanel, "responseBodyUnknownTypeContent", responseString);
+   networkPanel.panel.hidePopup();
+ 
+   /*
+ 
+   // This test disabled. See bug 603620.
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
+@@ -12,17 +12,17 @@ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", testPropertyProvider, true);
+ }
+ 
+ function testPropertyProvider() {
+   browser.removeEventListener("load", testPropertyProvider, true);
+ 
+   let tmp = {};
+-  Cu.import("resource:///modules/WebConsoleUtils.jsm", tmp);
++  Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tmp);
+   let JSPropertyProvider = tmp.JSPropertyProvider;
+   tmp = null;
+ 
+   let completion = JSPropertyProvider(content, "thisIsNotDefined");
+   is (completion.matches.length, 0, "no match for 'thisIsNotDefined");
+ 
+   // This is a case the PropertyProvider can't handle. Should return null.
+   completion = JSPropertyProvider(content, "window[1].acb");
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -1,18 +1,20 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ let tempScope = {};
+ Cu.import("resource:///modules/HUDService.jsm", tempScope);
+ let HUDService = tempScope.HUDService;
+-Cu.import("resource:///modules/WebConsoleUtils.jsm", tempScope);
++Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tempScope);
+ let WebConsoleUtils = tempScope.WebConsoleUtils;
++const WEBCONSOLE_STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
++let WCU_l10n = new WebConsoleUtils.l10n(WEBCONSOLE_STRINGS_URI);
+ 
+ function log(aMsg)
+ {
+   dump("*** WebConsoleTest: " + aMsg + "\n");
+ }
+ 
+ function pprint(aObj)
+ {
+@@ -196,17 +198,17 @@ function finishTest()
+ }
+ 
+ function tearDown()
+ {
+   HUDService.deactivateHUDForContext(gBrowser.selectedTab);
+   while (gBrowser.tabs.length > 1) {
+     gBrowser.removeCurrentTab();
+   }
+-  tab = browser = hudId = hud = filterBox = outputNode = cs = null;
++  WCU_l10n = tab = browser = hudId = hud = filterBox = outputNode = cs = null;
+ }
+ 
+ registerCleanupFunction(tearDown);
+ 
+ waitForExplicitFinish();
+ 
+ /**
+  * Polls a given function waiting for it to become true.
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -391,7 +776,33 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                                    "resource:///modules/PropertyPanel.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "PropertyTreeView",
-@@ -182,27 +191,46 @@ function WebConsoleFrame(aWebConsoleOwne
+@@ -27,21 +36,20 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetworkPanel",
+                                   "resource:///modules/NetworkPanel.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "AutocompletePopup",
+                                   "resource:///modules/AutocompletePopup.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+-                                  "resource:///modules/WebConsoleUtils.jsm");
+-
+-XPCOMUtils.defineLazyGetter(this, "l10n", function() {
+-  return WebConsoleUtils.l10n;
+-});
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
++
++const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
++let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ 
+ // The XUL namespace.
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ 
+ const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/en/Security/MixedContent";
+ 
+ // The amount of time in milliseconds that must pass between messages to
+@@ -182,27 +190,46 @@ function WebConsoleFrame(aWebConsoleOwne
    this._onPositionConsoleCommand = this._onPositionConsoleCommand.bind(this);
  
    this._initDefaultFilterPrefs();
@@ -438,7 +849,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Holds the network requests currently displayed by the Web Console. Each key
     * represents the connection ID and the value is network request information.
-@@ -307,16 +335,31 @@ WebConsoleFrame.prototype = {
+@@ -307,16 +334,31 @@ WebConsoleFrame.prototype = {
            this._saveRequestAndResponseBodies,
        },
      };
@@ -470,7 +881,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      let doc = this.document;
  
      this.filterBox = doc.querySelector(".hud-filter-box");
-@@ -463,16 +506,29 @@ WebConsoleFrame.prototype = {
+@@ -463,16 +505,29 @@ WebConsoleFrame.prototype = {
          someChecked = someChecked || checked;
        }, this);
  
@@ -500,7 +911,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    _onPositionConsoleCommand: function WCF__onPositionConsoleCommand(aEvent)
    {
-@@ -596,26 +652,21 @@ WebConsoleFrame.prototype = {
+@@ -596,26 +651,21 @@ WebConsoleFrame.prototype = {
          break;
        case "JSTerm:InspectObject":
          this.jsterm.handleInspectObject(aMessage.json);
@@ -529,7 +940,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          this.outputMessage(CATEGORY_NETWORK, this.logFileActivity,
                             [aMessage.json.uri]);
          break;
-@@ -624,16 +675,30 @@ WebConsoleFrame.prototype = {
+@@ -624,16 +674,30 @@ WebConsoleFrame.prototype = {
          break;
        case "JSTerm:NonNativeConsoleAPI":
          this.outputMessage(CATEGORY_JS, this.logWarningAboutReplacedAPI);
@@ -560,7 +971,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        The event that triggered the filter change.
     */
    _toggleFilter: function WCF__toggleFilter(aEvent)
-@@ -1207,16 +1272,29 @@ WebConsoleFrame.prototype = {
+@@ -1207,16 +1271,29 @@ WebConsoleFrame.prototype = {
                                        aScriptError.errorMessage,
                                        aScriptError.sourceName,
                                        aScriptError.lineNumber, null, null,
@@ -590,7 +1001,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *         The message element to display in the Web Console output.
     */
    logNetActivity: function WCF_logNetActivity(aConnectionId)
-@@ -2279,16 +2357,20 @@ WebConsoleFrame.prototype = {
+@@ -2279,16 +2356,20 @@ WebConsoleFrame.prototype = {
    },
  
    /**
@@ -611,7 +1022,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
  /**
   * Create a JSTerminal (a JavaScript command line). This is attached to an
-@@ -3449,14 +3531,138 @@ CommandController.prototype = {
+@@ -3449,14 +3530,138 @@ CommandController.prototype = {
          break;
        case "cmd_fontSizeReset":
          this.owner.changeFontSize("");
@@ -750,6 +1161,25 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  }
  gSequenceId.n = 0;
  
+diff --git a/toolkit/devtools/Makefile.in b/toolkit/devtools/Makefile.in
+--- a/toolkit/devtools/Makefile.in
++++ b/toolkit/devtools/Makefile.in
+@@ -7,14 +7,15 @@ topsrcdir = @top_srcdir@
+ srcdir    = @srcdir@
+ VPATH     = @srcdir@
+ 
+ include $(topsrcdir)/config/config.mk
+ 
+ PARALLEL_DIRS += \
+   debugger \
+   sourcemap \
++  webconsole \
+   $(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
+ 
+ libs::
+ 	$(NSINSTALL) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
@@ -1228,7 +1658,7 @@ new file mode 100644
 +                                  "resource://gre/modules/Services.jsm");
 +
 +XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
-+                                  "resource:///modules/WebConsoleUtils.jsm");
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
 +
 +const LISTENERS = {
 +  PageError: "PageError",
@@ -1580,3 +2010,104 @@ diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
    content/global/devtools/dbg-script-actors.js    (debugger/server/dbg-script-actors.js)
    content/global/devtools/dbg-browser-actors.js   (debugger/server/dbg-browser-actors.js)
 +  content/global/devtools/dbg-webconsole-actors.js   (debugger/server/dbg-webconsole-actors.js)
+diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/Makefile.in
+@@ -0,0 +1,17 @@
++# This Source Code Form is subject to the terms of the Mozilla Public
++# License, v. 2.0. If a copy of the MPL was not distributed with this
++# file, You can obtain one at http://mozilla.org/MPL/2.0/.
++
++DEPTH = ../../..
++topsrcdir = @top_srcdir@
++srcdir = @srcdir@
++VPATH = @srcdir@
++
++include $(DEPTH)/config/autoconf.mk
++
++#TEST_DIRS += tests
++
++include $(topsrcdir)/config/rules.mk
++
++libs::
++	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
+diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+rename from browser/devtools/webconsole/WebConsoleUtils.jsm
+rename to toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/browser/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -12,18 +12,16 @@ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                   "resource://gre/modules/Services.jsm");
+ 
+ var EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider"];
+ 
+-const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+-
+ const TYPES = { OBJECT: 0,
+                 FUNCTION: 1,
+                 ARRAY: 2,
+                 OTHER: 3,
+                 ITERATOR: 4,
+                 GETTER: 5,
+                 GENERATOR: 6,
+                 STRING: 7
+@@ -640,17 +638,32 @@ var WebConsoleUtils = {
+     }
+   },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // Localization
+ //////////////////////////////////////////////////////////////////////////
+ 
+-WebConsoleUtils.l10n = {
++WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
++{
++  this._bundleUri = aBundleURI;
++};
++
++WebConsoleUtils.l10n.prototype = {
++  _stringBundle: null,
++
++  get stringBundle()
++  {
++    if (!this._stringBundle) {
++      this._stringBundle = Services.strings.createBundle(this._bundleUri);
++    }
++    return this._stringBundle;
++  },
++
+   /**
+    * Generates a formatted timestamp string for displaying in console messages.
+    *
+    * @param integer [aMilliseconds]
+    *        Optional, allows you to specify the timestamp in milliseconds since
+    *        the UNIX epoch.
+    * @return string
+    *         The timestamp formatted for display.
+@@ -705,20 +718,16 @@ WebConsoleUtils.l10n = {
+     catch (ex) {
+       Cu.reportError("Failed to format string: " + aName);
+       throw ex;
+     }
+     return result;
+   },
+ };
+ 
+-XPCOMUtils.defineLazyGetter(WebConsoleUtils.l10n, "stringBundle", function() {
+-  return Services.strings.createBundle(STRINGS_URI);
+-});
+-
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // JS Completer
+ //////////////////////////////////////////////////////////////////////////
+ 
+ var JSPropertyProvider = (function _JSPP(WCU) {
+ const STATE_NORMAL = 0;
+ const STATE_QUOTE = 2;
