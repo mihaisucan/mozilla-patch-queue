@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent ee7a3bddfe5fe68e8d67fff178c94de679bffbe0
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1346437241 -10800
+# Date 1346437710 -10800
 
 Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
@@ -1639,7 +1639,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
-@@ -0,0 +1,357 @@
+@@ -0,0 +1,219 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -1658,6 +1658,9 @@ new file mode 100644
 +                                  "resource://gre/modules/Services.jsm");
 +
 +XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "PageErrorListener",
 +                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
 +
 +const LISTENERS = {
@@ -1856,6 +1859,133 @@ new file mode 100644
 +  stopListeners: WebConsoleActor.prototype.onStopListeners,
 +};
 +
+diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
+--- a/toolkit/devtools/jar.mn
++++ b/toolkit/devtools/jar.mn
+@@ -2,8 +2,9 @@
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ toolkit.jar:
+   content/global/devtools/dbg-transport.js        (debugger/dbg-transport.js)
+   content/global/devtools/dbg-server.js        		(debugger/server/dbg-server.js)
+   content/global/devtools/dbg-script-actors.js    (debugger/server/dbg-script-actors.js)
+   content/global/devtools/dbg-browser-actors.js   (debugger/server/dbg-browser-actors.js)
++  content/global/devtools/dbg-webconsole-actors.js   (debugger/server/dbg-webconsole-actors.js)
+diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/Makefile.in
+@@ -0,0 +1,17 @@
++# This Source Code Form is subject to the terms of the Mozilla Public
++# License, v. 2.0. If a copy of the MPL was not distributed with this
++# file, You can obtain one at http://mozilla.org/MPL/2.0/.
++
++DEPTH = ../../..
++topsrcdir = @top_srcdir@
++srcdir = @srcdir@
++VPATH = @srcdir@
++
++include $(DEPTH)/config/autoconf.mk
++
++#TEST_DIRS += tests
++
++include $(topsrcdir)/config/rules.mk
++
++libs::
++	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
+diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+rename from browser/devtools/webconsole/WebConsoleUtils.jsm
+rename to toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/browser/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -10,19 +10,18 @@ const Cc = Components.classes;
+ const Ci = Components.interfaces;
+ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                   "resource://gre/modules/Services.jsm");
+ 
+-var EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider"];
+-
+-const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
++var EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider",
++                        "PageErrorListener"];
+ 
+ const TYPES = { OBJECT: 0,
+                 FUNCTION: 1,
+                 ARRAY: 2,
+                 OTHER: 3,
+                 ITERATOR: 4,
+                 GETTER: 5,
+                 GENERATOR: 6,
+@@ -640,17 +639,32 @@ var WebConsoleUtils = {
+     }
+   },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // Localization
+ //////////////////////////////////////////////////////////////////////////
+ 
+-WebConsoleUtils.l10n = {
++WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
++{
++  this._bundleUri = aBundleURI;
++};
++
++WebConsoleUtils.l10n.prototype = {
++  _stringBundle: null,
++
++  get stringBundle()
++  {
++    if (!this._stringBundle) {
++      this._stringBundle = Services.strings.createBundle(this._bundleUri);
++    }
++    return this._stringBundle;
++  },
++
+   /**
+    * Generates a formatted timestamp string for displaying in console messages.
+    *
+    * @param integer [aMilliseconds]
+    *        Optional, allows you to specify the timestamp in milliseconds since
+    *        the UNIX epoch.
+    * @return string
+    *         The timestamp formatted for display.
+@@ -705,20 +719,16 @@ WebConsoleUtils.l10n = {
+     catch (ex) {
+       Cu.reportError("Failed to format string: " + aName);
+       throw ex;
+     }
+     return result;
+   },
+ };
+ 
+-XPCOMUtils.defineLazyGetter(WebConsoleUtils.l10n, "stringBundle", function() {
+-  return Services.strings.createBundle(STRINGS_URI);
+-});
+-
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // JS Completer
+ //////////////////////////////////////////////////////////////////////////
+ 
+ var JSPropertyProvider = (function _JSPP(WCU) {
+ const STATE_NORMAL = 0;
+ const STATE_QUOTE = 2;
+@@ -1007,8 +1017,150 @@ function getMatchedProps(aObj, aOptions 
+   }
+ 
+   return names;
+ }
+ 
+ 
+ return JSPropertyProvider;
+ })(WebConsoleUtils);
++
 +///////////////////////////////////////////////////////////////////////////////
 +// The page errors listener
 +///////////////////////////////////////////////////////////////////////////////
@@ -1997,117 +2127,3 @@ new file mode 100644
 +    this.listener = this.window = null;
 +  },
 +};
-diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
---- a/toolkit/devtools/jar.mn
-+++ b/toolkit/devtools/jar.mn
-@@ -2,8 +2,9 @@
- # License, v. 2.0. If a copy of the MPL was not distributed with this
- # file, You can obtain one at http://mozilla.org/MPL/2.0/.
- 
- toolkit.jar:
-   content/global/devtools/dbg-transport.js        (debugger/dbg-transport.js)
-   content/global/devtools/dbg-server.js        		(debugger/server/dbg-server.js)
-   content/global/devtools/dbg-script-actors.js    (debugger/server/dbg-script-actors.js)
-   content/global/devtools/dbg-browser-actors.js   (debugger/server/dbg-browser-actors.js)
-+  content/global/devtools/dbg-webconsole-actors.js   (debugger/server/dbg-webconsole-actors.js)
-diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
-new file mode 100644
---- /dev/null
-+++ b/toolkit/devtools/webconsole/Makefile.in
-@@ -0,0 +1,17 @@
-+# This Source Code Form is subject to the terms of the Mozilla Public
-+# License, v. 2.0. If a copy of the MPL was not distributed with this
-+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-+
-+DEPTH = ../../..
-+topsrcdir = @top_srcdir@
-+srcdir = @srcdir@
-+VPATH = @srcdir@
-+
-+include $(DEPTH)/config/autoconf.mk
-+
-+#TEST_DIRS += tests
-+
-+include $(topsrcdir)/config/rules.mk
-+
-+libs::
-+	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
-diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-rename from browser/devtools/webconsole/WebConsoleUtils.jsm
-rename to toolkit/devtools/webconsole/WebConsoleUtils.jsm
---- a/browser/devtools/webconsole/WebConsoleUtils.jsm
-+++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -12,18 +12,16 @@ const Cu = Components.utils;
- 
- Cu.import("resource://gre/modules/XPCOMUtils.jsm");
- 
- XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                   "resource://gre/modules/Services.jsm");
- 
- var EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider"];
- 
--const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
--
- const TYPES = { OBJECT: 0,
-                 FUNCTION: 1,
-                 ARRAY: 2,
-                 OTHER: 3,
-                 ITERATOR: 4,
-                 GETTER: 5,
-                 GENERATOR: 6,
-                 STRING: 7
-@@ -640,17 +638,32 @@ var WebConsoleUtils = {
-     }
-   },
- };
- 
- //////////////////////////////////////////////////////////////////////////
- // Localization
- //////////////////////////////////////////////////////////////////////////
- 
--WebConsoleUtils.l10n = {
-+WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
-+{
-+  this._bundleUri = aBundleURI;
-+};
-+
-+WebConsoleUtils.l10n.prototype = {
-+  _stringBundle: null,
-+
-+  get stringBundle()
-+  {
-+    if (!this._stringBundle) {
-+      this._stringBundle = Services.strings.createBundle(this._bundleUri);
-+    }
-+    return this._stringBundle;
-+  },
-+
-   /**
-    * Generates a formatted timestamp string for displaying in console messages.
-    *
-    * @param integer [aMilliseconds]
-    *        Optional, allows you to specify the timestamp in milliseconds since
-    *        the UNIX epoch.
-    * @return string
-    *         The timestamp formatted for display.
-@@ -705,20 +718,16 @@ WebConsoleUtils.l10n = {
-     catch (ex) {
-       Cu.reportError("Failed to format string: " + aName);
-       throw ex;
-     }
-     return result;
-   },
- };
- 
--XPCOMUtils.defineLazyGetter(WebConsoleUtils.l10n, "stringBundle", function() {
--  return Services.strings.createBundle(STRINGS_URI);
--});
--
- 
- //////////////////////////////////////////////////////////////////////////
- // JS Completer
- //////////////////////////////////////////////////////////////////////////
- 
- var JSPropertyProvider = (function _JSPP(WCU) {
- const STATE_NORMAL = 0;
- const STATE_QUOTE = 2;
