@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent 11f5c58ce117cc8c7c5dc86f60d6deb47392b3b4
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1346675929 -10800
+# Date 1346691631 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API and JS evaluation
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -32,6 +32,29 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    consolePanel: null,
  
    /**
+@@ -896,20 +892,20 @@ WebConsole.prototype = {
+   {
+     HUDService.animate(this.hudId, ANIMATE_OUT, function() {
+       HUDService.deactivateHUDForContext(this.tab, true);
+     }.bind(this));
+   },
+ 
+   /**
+    * The clear output button handler.
++   * @private
+    */
+-  onClearButton: function WC_onClearButton()
++  _onClearButton: function WC__onClearButton()
+   {
+-    this.ui.jsterm.clearOutput(true);
+     this.chromeWindow.DeveloperToolbar.resetErrorsCount(this.tab);
+   },
+ 
+   /**
+    * Setup the message manager used to communicate with the Web Console content
+    * script. This method loads the content script, adds the message listeners
+    * and initializes the connection to the content script.
+    *
 @@ -919,18 +915,17 @@ WebConsole.prototype = {
    {
      this.messageManager.loadFrameScript(CONTENT_SCRIPT_URL, true);
@@ -541,7 +564,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/bro
    jsterm.execute("pprint(print)");
    checkResult(function(nodes) {
 -    return nodes[0].textContent.indexOf("aJSTerm.") > -1;
-+    return nodes[0].textContent.indexOf("aOwner._helper") > -1;
++    return nodes[0].textContent.indexOf("aOwner.helperResult") > -1;
    }, "pprint(function) shows source", 1);
    yield;
  
@@ -601,7 +624,30 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @type boolean
     */
    get saveRequestAndResponseBodies() this._saveRequestAndResponseBodies,
-@@ -636,50 +650,29 @@ WebConsoleFrame.prototype = {
+@@ -392,18 +406,20 @@ WebConsoleFrame.prototype = {
+       saveBodies.setAttribute("checked", this.saveRequestAndResponseBodies);
+     }.bind(this));
+ 
+     this.closeButton = doc.getElementById("webconsole-close-button");
+     this.closeButton.addEventListener("command",
+                                       this.owner.onCloseButton.bind(this.owner));
+ 
+     let clearButton = doc.getElementsByClassName("webconsole-clear-console-button")[0];
+-    clearButton.addEventListener("command",
+-                                 this.owner.onClearButton.bind(this.owner));
++    clearButton.addEventListener("command", function WCF__onClearButton() {
++      this.owner._onClearButton();
++      this.jsterm.clearOutput(true);
++    }.bind(this));
+   },
+ 
+   /**
+    * Initialize the default filter preferences.
+    * @private
+    */
+   _initDefaultFilterPrefs: function WCF__initDefaultFilterPrefs()
+   {
+@@ -636,50 +652,29 @@ WebConsoleFrame.prototype = {
     */
    receiveMessage: function WCF_receiveMessage(aMessage)
    {
@@ -652,7 +698,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * manager.
     *
     * @private
-@@ -1003,88 +996,98 @@ WebConsoleFrame.prototype = {
+@@ -1003,88 +998,98 @@ WebConsoleFrame.prototype = {
  
      return false;
    },
@@ -780,7 +826,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          body = l10n.getFormatStr("stacktrace.outputMessage",
                                   [filename, functionName, lineNumber]);
  
-@@ -1096,77 +1099,63 @@ WebConsoleFrame.prototype = {
+@@ -1096,77 +1101,63 @@ WebConsoleFrame.prototype = {
          args.forEach(function(aFrame) {
            clipboardText += aFrame.filename + " :: " +
                             aFrame.functionName + " :: " +
@@ -869,7 +915,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.makeOutputMessageLink(node, function _traceNodeClickCallback() {
          if (node._panelOpen) {
            return;
-@@ -1178,80 +1167,88 @@ WebConsoleFrame.prototype = {
+@@ -1178,80 +1169,88 @@ WebConsoleFrame.prototype = {
          };
  
          let propPanel = this.jsterm.openPropertyPanel(options);
@@ -980,7 +1026,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1423,24 +1420,22 @@ WebConsoleFrame.prototype = {
+@@ -1423,24 +1422,22 @@ WebConsoleFrame.prototype = {
      }.bind(this));
  
      return outputNode;
@@ -1008,7 +1054,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param object aMessage
     *        The HTTP activity object. This object needs to hold two properties:
-@@ -1822,37 +1817,59 @@ WebConsoleFrame.prototype = {
+@@ -1822,37 +1819,59 @@ WebConsoleFrame.prototype = {
     * @private
     * @param array aItem
     *        The item you want to remove from the output queue.
@@ -1073,7 +1119,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Ensures that the number of message nodes of type aCategory don't exceed that
     * category's line limit by removing old messages as needed.
     *
-@@ -1886,33 +1903,31 @@ WebConsoleFrame.prototype = {
+@@ -1886,33 +1905,31 @@ WebConsoleFrame.prototype = {
    pruneConsoleDirNode: function WCF_pruneConsoleDirNode(aMessageNode)
    {
      if (aMessageNode.parentNode) {
@@ -1110,7 +1156,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        if (aNode.childNodes[4]) {
          location = aNode.childNodes[4].getAttribute("title");
        }
-@@ -2027,17 +2042,17 @@ WebConsoleFrame.prototype = {
+@@ -2027,17 +2044,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -1129,7 +1175,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2102,20 +2117,20 @@ WebConsoleFrame.prototype = {
+@@ -2102,20 +2119,20 @@ WebConsoleFrame.prototype = {
  
        bodyContainer.appendChild(tree);
        node.appendChild(bodyContainer);
@@ -1154,7 +1200,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        node.appendChild(bodyNode);
      }
      node.appendChild(repeatContainer);
-@@ -2134,45 +2149,46 @@ WebConsoleFrame.prototype = {
+@@ -2134,45 +2151,46 @@ WebConsoleFrame.prototype = {
     * @private
     * @param nsIDOMElement aMessage
     *        The message element that holds the output for the given call.
@@ -1207,7 +1253,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this._addMessageLinkCallback(elem,
          this._consoleLogClick.bind(this, aMessage, elem, aItem));
  
-@@ -2351,21 +2367,82 @@ WebConsoleFrame.prototype = {
+@@ -2351,21 +2369,82 @@ WebConsoleFrame.prototype = {
          strings.push("[" + timestampString + "] " + item.clipboardText);
        }
      }
@@ -1290,7 +1336,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.jsterm.destroy();
      }
    },
-@@ -2387,22 +2464,26 @@ function JSTerm(aWebConsoleFrame)
+@@ -2387,22 +2466,26 @@ function JSTerm(aWebConsoleFrame)
  
    this.lastCompletion = { value: null };
    this.history = [];
@@ -1317,7 +1363,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Last input value.
-@@ -2417,16 +2498,22 @@ JSTerm.prototype = {
+@@ -2417,16 +2500,22 @@ JSTerm.prototype = {
    history: null,
  
    /**
@@ -1340,7 +1386,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Initialize the JSTerminal UI.
     * @private
     */
-@@ -2448,82 +2535,96 @@ JSTerm.prototype = {
+@@ -2448,82 +2537,104 @@ JSTerm.prototype = {
     * @param string aString
     *        String to evaluate in the content process JavaScript sandbox.
     * @param function [aCallback]
@@ -1403,6 +1449,14 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +          break;
 +        case "inspectObject":
 +          this.handleInspectObject(helperResult.input, helperResult.object);
++          break;
++        case "error":
++          try {
++            errorMessage = l10n.getStr(helperResult.message);
++          }
++          catch (ex) {
++            errorMessage = helperResult.message;
++          }
 +          break;
 +      }
 +    }
@@ -1473,7 +1527,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
-@@ -2538,18 +2639,18 @@ JSTerm.prototype = {
+@@ -2538,18 +2649,18 @@ JSTerm.prototype = {
      if (!aExecuteString) {
        this.writeOutput("no value to execute", CATEGORY_OUTPUT, SEVERITY_LOG);
        return;
@@ -1494,7 +1548,26 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.clearCompletion();
    },
  
-@@ -3017,28 +3118,28 @@ JSTerm.prototype = {
+@@ -2690,17 +2801,17 @@ JSTerm.prototype = {
+ 
+     hud.groupDepth = 0;
+     hud._outputQueue.forEach(hud._pruneItemFromQueue, hud);
+     hud._outputQueue = [];
+     hud._networkRequests = {};
+     hud._cssNodes = {};
+ 
+     if (aClearStorage) {
+-      hud.owner.sendMessageToContent("ConsoleAPI:ClearCache", {});
++      this.webConsoleClient.clearMessagesCache();
+     }
+   },
+ 
+   /**
+    * Updates the size of the input field (command line) to fit its contents.
+    *
+    * @returns void
+    */
+@@ -3017,28 +3128,28 @@ JSTerm.prototype = {
     */
    _updateCompletionResult:
    function JST__updateCompletionResult(aType, aCallback)
@@ -1530,7 +1603,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * accordingly.
     *
     * @param function [aCallback=null]
-@@ -3047,19 +3148,18 @@ JSTerm.prototype = {
+@@ -3047,19 +3158,18 @@ JSTerm.prototype = {
     *        The JSON message which holds the completion results received from
     *        the content process.
     */
@@ -1552,7 +1625,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.clearCompletion();
        return;
      }
-@@ -3205,99 +3305,105 @@ JSTerm.prototype = {
+@@ -3205,99 +3315,105 @@ JSTerm.prototype = {
        objectId: aObjectId,
        resultCacheId: aResultCacheId,
      };
@@ -1685,7 +1758,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param object aOptions
-@@ -3316,42 +3422,52 @@ JSTerm.prototype = {
+@@ -3316,42 +3432,52 @@ JSTerm.prototype = {
                                      aNewResponse)
    {
      if (aNewResponse.errorMessage) {
@@ -1758,7 +1831,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    destroy: function JST_destroy()
    {
      this.clearCompletion();
-@@ -3547,34 +3663,51 @@ CommandController.prototype = {
+@@ -3547,34 +3673,51 @@ CommandController.prototype = {
   * @param object aWebConsole
   *        The Web Console instance that owns this connection proxy.
   */
@@ -1810,7 +1883,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        // Always allow connections from nsIPipe transports.
        DebuggerServer.init(function () { return true; });
        DebuggerServer.addBrowserActors();
-@@ -3588,18 +3721,20 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3588,18 +3731,20 @@ WebConsoleConnectionProxy.prototype = {
     *        Optional function to invoke when connection is established.
     */
    connect: function WCCP_connect(aCallback)
@@ -1833,7 +1906,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                               this._onAttachConsole.bind(this, aCallback));
        }.bind(this));
      }.bind(this));
-@@ -3623,39 +3758,105 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3623,39 +3768,105 @@ WebConsoleConnectionProxy.prototype = {
      if (aResponse.error) {
        Cu.reportError("attachConsole failed: " + aResponse.error + " " +
                       aResponse.message);
@@ -2010,7 +2083,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *        If specified, will be called with the response packet when
     *        debugging server responds.
     */
-@@ -565,16 +580,77 @@ WebConsoleClient.prototype = {
+@@ -565,16 +580,88 @@ WebConsoleClient.prototype = {
        to: this._actor,
        type: "getCachedMessages",
        messageTypes: aTypes,
@@ -2077,6 +2150,17 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +      cursor: aCursor,
 +    };
 +    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Clear the cache of messages (page errors and console API calls).
++   */
++  clearMessagesCache: function WCC_clearMessagesCache() {
++    let packet = {
++      to: this._actor,
++      type: "clearMessagesCache",
++    };
++    this._client.request(packet);
 +  },
 +
 +  /**
@@ -2175,7 +2259,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
 +
 +XPCOMUtils.defineLazyModuleGetter(this, "JSPropertyProvider",
-+                                  "resource:///modules/WebConsoleUtils.jsm");
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
 +
 +XPCOMUtils.defineLazyModuleGetter(this, "ConsoleAPIStorage",
 +                                  "resource://gre/modules/ConsoleAPIStorage.jsm");
@@ -2414,7 +2498,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      if (!toDetach.length) {
        // If no specific listeners are requested to be detached, we stop all
        // listeners.
-@@ -136,28 +281,38 @@ WebConsoleActor.prototype =
+@@ -136,84 +281,395 @@ WebConsoleActor.prototype =
        switch (listener) {
          case LISTENERS.PageError:
            if (this.pageErrorListener) {
@@ -2453,9 +2537,39 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
        return {
          error: "missingParameter",
          message: "The messageTypes parameter is missing.",
-@@ -182,38 +337,268 @@ WebConsoleActor.prototype =
+       };
+     }
+ 
+     let messages = [];
+ 
+     while (types.length > 0) {
+-      switch (types.shift()) {
++      let type = types.shift();
++      let cache = [];
++      switch (type) {
+         case CACHED_MESSAGES.ConsoleAPI:
+           if (this.consoleAPIListener) {
+-            messages.push.apply(messages,
+-                                this.consoleAPIListener.getCachedMessages());
++            cache = this.consoleAPIListener.getCachedMessages();
+           }
+           break;
+         case CACHED_MESSAGES.PageError:
+           if (this.pageErrorListener) {
+-            messages.push.apply(messages,
+-                                this.pageErrorListener.getCachedMessages());
++            cache = this.pageErrorListener.getCachedMessages();
+           }
            break;
        }
++
++      cache.forEach(function(aMessage) {
++        aMessage._type = type;
++        if (type == CACHED_MESSAGES.ConsoleAPI) {
++          aMessage = this.prepareConsoleMessageForRemote(aMessage);
++        }
++        messages.push(aMessage);
++      }, this);
      }
  
      messages.sort(function(a, b) { return a.timeStamp - b.timeStamp; });
@@ -2482,8 +2596,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    let result, error = null;
 +    let timestamp;
 +
-+    this._helperResult = null;
-+    this._evalInput = input;
++    this.helperResult = null;
++    this.evalInput = input;
 +    try {
 +      timestamp = Date.now();
 +      result = this.evalInSandbox(input);
@@ -2492,9 +2606,9 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      error = ex;
 +    }
 +
-+    let helperResult = this._helperResult;
-+    delete this._helperResult;
-+    delete this._evalInput;
++    let helperResult = this.helperResult;
++    delete this.helperResult;
++    delete this.evalInput;
 +
 +    return {
 +      from: this.actorID,
@@ -2525,6 +2639,17 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      matches: result.matches || [],
 +      matchProp: result.matchProp,
 +    };
++  },
++
++  /**
++   * The "clearMessagesCache" request handler.
++   */
++  onClearMessagesCache: function WCA_onClearMessagesCache()
++  {
++    // TODO: Bug 717611 - Web Console clear button does not clear cached errors
++    let windowId = WebConsoleUtils.getInnerWindowId(this.window);
++    ConsoleAPIStorage.clearEvents(windowId);
++    return {};
 +  },
 +
 +  /**
@@ -2622,19 +2747,70 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    let packet = {
 +      from: this.actorID,
 +      type: "consoleAPICall",
-+      message: aMessage,
++      message: this.prepareConsoleMessageForRemote(aMessage),
 +    };
 +    this.conn.send(packet);
 +  },
 +
 +  /**
++   * Prepare a message from the console API to be sent to the remote Web Console
++   * instance.
++   *
++   * @param object aMessage
++   *        The original message received from console-api-log-event.
++   * @return object
++   *         The object that can be sent to the remote client.
++   */
++  prepareConsoleMessageForRemote:
++  function WCA_prepareConsoleMessageForRemote(aMessage)
++  {
++    let result = WebConsoleUtils.cloneObject(aMessage, true,
++      function(aKey, aValue, aObject) {
++        // We need to skip the arguments property from the original object: to
++        // avoid deep-copying the objects that come from the page. We handle the
++        // arguments in a different way.
++        if (aKey == "wrappedJSObject" || aObject === aMessage &&
++            aKey == "arguments") {
++          return false;
++        }
++        return true;
++      });
++
++    switch (result.level) {
++      case "trace":
++      case "group":
++      case "groupCollapsed":
++      case "time":
++      case "timeEnd":
++        result.arguments = aMessage.arguments;
++        break;
++      default:
++        result.arguments = Array.map(aMessage.arguments || [],
++          function(aObj) {
++            return this.createValueGrip(aObj);
++          }, this);
++
++        if (result.level == "dir") {
++          result.objectProperties = [];
++          let first = result.arguments[0];
++          if (typeof first == "object" && first && first.inspectable) {
++            let actor = this.getObjectActorByID(first.actor);
++            result.objectProperties = actor.onInspectProperties().properties;
++          }
++        }
++        break;
++    }
++
++    return result;
++  },
++
++  /**
 +   * Find the XUL window that owns the content window.
 +   *
-+   * @private
 +   * @return Window
 +   *         The XUL window that owns the content window.
 +   */
-+  _chromeWindow: function WCA__chromeWindow()
++  chromeWindow: function WCA_chromeWindow()
 +  {
 +    return this.window.QueryInterface(Ci.nsIInterfaceRequestor)
 +           .getInterface(Ci.nsIWebNavigation).QueryInterface(Ci.nsIDocShell)
@@ -2649,6 +2825,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    stopListeners: WebConsoleActor.prototype.onStopListeners,
 +  evaluateJS: WebConsoleActor.prototype.onEvaluateJS,
 +  autocomplete: WebConsoleActor.prototype.onAutocomplete,
++  clearMessagesCache: WebConsoleActor.prototype.onClearMessagesCache,
  };
  
 +/**
@@ -2727,7 +2904,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -10,18 +10,29 @@ const Cc = Components.classes;
+@@ -10,18 +10,32 @@ const Cc = Components.classes;
  const Ci = Components.interfaces;
  const Cu = Components.utils;
  
@@ -2738,6 +2915,9 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  
 -var EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider",
 -                        "PageErrorListener"];
++XPCOMUtils.defineLazyModuleGetter(this, "ConsoleAPIStorage",
++                                  "resource://gre/modules/ConsoleAPIStorage.jsm");
++
 +var EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider", "JSTermHelpers",
 +                        "PageErrorListener", "ConsoleAPIListener"];
 +
@@ -2759,7 +2939,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
                  ITERATOR: 4,
                  GETTER: 5,
                  GENERATOR: 6,
-@@ -208,17 +219,22 @@ var WebConsoleUtils = {
+@@ -208,17 +222,22 @@ var WebConsoleUtils = {
        case "string":
          output = this.formatResultString(aResult);
          break;
@@ -2783,7 +2963,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        default:
          try {
            if (aResult.toSource) {
-@@ -304,18 +320,25 @@ var WebConsoleUtils = {
+@@ -304,18 +323,25 @@ var WebConsoleUtils = {
     *        The evaluation result object you want to check.
     * @return string
     *         Constructor name or type: string, number, boolean, regexp, date,
@@ -2811,7 +2991,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    /**
     * Figures out the type of aObject and the string to display as the object
     * value.
-@@ -437,37 +460,53 @@ var WebConsoleUtils = {
+@@ -437,37 +463,53 @@ var WebConsoleUtils = {
     * @return boolean
     *         True if the given property is a getter, false otherwise.
     */
@@ -2877,7 +3057,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     * @param object aObject
     *        The object to get the properties from.
     * @param object aObjectCache
-@@ -544,48 +583,220 @@ var WebConsoleUtils = {
+@@ -544,48 +586,220 @@ var WebConsoleUtils = {
        if (pair.inspectable && aObjectCache) {
          pair.objectId = ++gObjectId;
          aObjectCache[pair.objectId] = value;
@@ -3125,7 +3305,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     *         True if the given object is an iterator or a generator, otherwise
     *         false is returned.
     */
-@@ -633,16 +844,169 @@ var WebConsoleUtils = {
+@@ -633,16 +847,169 @@ var WebConsoleUtils = {
        let requestURI = Services.io.newURI(aRequest, null, null);
        let contentURI = Services.io.newURI(aLocation, null, null);
        return (contentURI.scheme == "https" && requestURI.scheme != "https");
@@ -3295,7 +3475,23 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  
  WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
  {
-@@ -1159,8 +1523,393 @@ PageErrorListener.prototype =
+@@ -1143,24 +1510,353 @@ PageErrorListener.prototype =
+     (errors.value || []).forEach(function(aError) {
+       if (!(aError instanceof Ci.nsIScriptError) ||
+           aError.innerWindowID != innerWindowId ||
+           !this.isCategoryAllowed(aError.category)) {
+         return;
+       }
+ 
+       let remoteMessage = WebConsoleUtils.cloneObject(aError);
+-      remoteMessage._type = CACHED_MESSAGES.PageError;
+       result.push(remoteMessage);
+     }, this);
+ 
+     return result;
+   },
+ 
+   /**
     * Remove the nsIConsoleService listener.
     */
    destroy: function PEL_destroy()
@@ -3372,7 +3568,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   */
 +  observe: function CAL_observe(aMessage, aTopic)
 +  {
-+    if (!this.owner || !this.window || !aMessage) {
++    if (!this.owner || !this.window) {
 +      return;
 +    }
 +
@@ -3384,59 +3580,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +      return;
 +    }
 +
-+    let messageToClient = this._prepareMessageForRemote(apiMessage);
-+    this.owner.onConsoleAPICall(messageToClient);
-+  },
-+
-+  /**
-+   * Prepare a message from the console APi to be sent to the remote Web Console
-+   * instance.
-+   *
-+   * @param object aOriginalMessage
-+   *        The original message received from console-api-log-event.
-+   * @return object
-+   *         The object that can be sent to the remote client.
-+   */
-+  _prepareMessageForRemote: function CAL__prepareMessageForRemote(aMessage)
-+  {
-+    let result = WebConsoleUtils.cloneObject(aMessage, true,
-+      function(aKey, aValue, aObject) {
-+        // We need to skip the arguments property from the original object: to
-+        // avoid deep-copying the objects that come from the page. We handle the
-+        // arguments in a different way.
-+        if (aKey == "wrappedJSObject" || aObject === aMessage &&
-+            aKey == "arguments") {
-+          return false;
-+        }
-+        return true;
-+      });
-+
-+    switch (result.level) {
-+      case "trace":
-+      case "group":
-+      case "groupCollapsed":
-+      case "time":
-+      case "timeEnd":
-+        result.arguments = aMessage.arguments;
-+        break;
-+      default:
-+        result.arguments = Array.map(aMessage.arguments || [],
-+          function(aObj) {
-+            return this.owner.createValueGrip(aObj);
-+          }, this);
-+
-+        if (result.level == "dir") {
-+          result.objectProperties = [];
-+          let first = result.arguments[0];
-+          if (typeof first == "object" && first && first.inspectable) {
-+            let actor = this.owner.getObjectActorByID(first.actor);
-+            result.objectProperties = actor.onInspectProperties().properties;
-+          }
-+        }
-+        break;
-+    }
-+
-+    return result;
++    this.owner.onConsoleAPICall(apiMessage);
 +  },
 +
 +  /**
@@ -3450,11 +3594,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +  {
 +    let innerWindowId = WebConsoleUtils.getInnerWindowId(this.window);
 +    let messages = ConsoleAPIStorage.getEvents(innerWindowId);
-+    return messages.map(function(aMessage) {
-+      let result = this._prepareMessageForRemote(aMessage.wrappedJSObject);
-+      result._type = CACHED_MESSAGES.ConsoleAPI;
-+      return result;
-+    }, this);
++    return messages;
 +  },
 +
 +  /**
@@ -3516,7 +3656,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   *        xPath search query to execute.
 +   * @param [optional] nsIDOMNode aContext
 +   *        Context to run the xPath query on. Uses window.document if not set.
-+   * @returns array of nsIDOMNode
++   * @return array of nsIDOMNode
 +   */
 +  aOwner.sandbox.$x = function JSTH_$x(aXPath, aContext)
 +  {
@@ -3554,7 +3694,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +  Object.defineProperty(aOwner.sandbox, "$0", {
 +    get: function() {
 +      try {
-+        return aOwner._chromeWindow().InspectorUI.selection;
++        return aOwner.chromeWindow().InspectorUI.selection;
 +      }
 +      catch (ex) {
 +        aOwner.window.console.error(ex.message);
@@ -3569,7 +3709,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   */
 +  aOwner.sandbox.clear = function JSTH_clear()
 +  {
-+    aOwner._helperResult = {
++    aOwner.helperResult = {
 +      type: "clearOutput",
 +    };
 +  };
@@ -3579,7 +3719,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   *
 +   * @param object aObject
 +   *        Object to return the property names from.
-+   * @returns array of string
++   * @return array of strings
 +   */
 +  aOwner.sandbox.keys = function JSTH_keys(aObject)
 +  {
@@ -3591,7 +3731,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   *
 +   * @param object aObject
 +   *        Object to display the values from.
-+   * @returns array of string
++   * @return array of string
 +   */
 +  aOwner.sandbox.values = function JSTH_values(aObject)
 +  {
@@ -3615,7 +3755,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   */
 +  aOwner.sandbox.help = function JSTH_help()
 +  {
-+    aOwner._helperResult = {};
++    aOwner.helperResult = {};
 +    aOwner.window.open(
 +        "https://developer.mozilla.org/AppLinks/WebConsoleHelp?locale=" +
 +        aOwner.window.navigator.language, "help", "");
@@ -3634,9 +3774,9 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +      return aObject;
 +    }
 +
-+    aOwner._helperResult = {
++    aOwner.helperResult = {
 +      type: "inspectObject",
-+      input: aOwner._evalInput,
++      input: aOwner.evalInput,
 +      object: aOwner.createValueGrip(obj),
 +    };
 +  };
@@ -3652,13 +3792,14 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +  {
 +    if (aObject === null || aObject === undefined || aObject === true ||
 +        aObject === false) {
-+      aOwner._helperResult = {};
-+      aOwner.window.console
-+        .error(WebConsoleUtils.l10n.getStr("helperFuncUnsupportedTypeError"));
++      aOwner.helperResult = {
++        type: "error",
++        message: "helperFuncUnsupportedTypeError",
++      };
 +      return;
 +    }
 +
-+    aOwner._helperResult = { rawOutput: true };
++    aOwner.helperResult = { rawOutput: true };
 +
 +    if (typeof aObject == "function") {
 +      return aObject + "\n";
@@ -3681,11 +3822,11 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   *
 +   * @param string aString
 +   *        A string you want to output.
-+   * @returns void
++   * @return void
 +   */
 +  aOwner.sandbox.print = function JSTH_print(aString)
 +  {
-+    aOwner._helperResult = { rawOutput: true };
++    aOwner.helperResult = { rawOutput: true };
 +    return String(aString);
 +  };
 +}
