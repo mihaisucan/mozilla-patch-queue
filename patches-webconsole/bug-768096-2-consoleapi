@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent 11f5c58ce117cc8c7c5dc86f60d6deb47392b3b4
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1346691631 -10800
+# Date 1346698372 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API and JS evaluation
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -1567,7 +1567,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @returns void
     */
-@@ -3017,28 +3128,28 @@ JSTerm.prototype = {
+@@ -3017,28 +3128,29 @@ JSTerm.prototype = {
     */
    _updateCompletionResult:
    function JST__updateCompletionResult(aType, aCallback)
@@ -1585,7 +1585,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    let input = this.inputNode.value;
 +    let cursor = this.inputNode.selectionStart;
 +
-+    // TODO: throttle updates, deal with slow/high latency network connections.
++    // TODO: Bug 787986 - throttle/disable updates, deal with slow/high latency
++    // network connections.
      this.lastCompletion = {
 -      requestId: message.id,
 +      requestId: requestId,
@@ -1603,7 +1604,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * accordingly.
     *
     * @param function [aCallback=null]
-@@ -3047,19 +3158,18 @@ JSTerm.prototype = {
+@@ -3047,19 +3159,18 @@ JSTerm.prototype = {
     *        The JSON message which holds the completion results received from
     *        the content process.
     */
@@ -1625,7 +1626,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.clearCompletion();
        return;
      }
-@@ -3205,99 +3315,105 @@ JSTerm.prototype = {
+@@ -3205,99 +3316,105 @@ JSTerm.prototype = {
        objectId: aObjectId,
        resultCacheId: aResultCacheId,
      };
@@ -1758,7 +1759,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param object aOptions
-@@ -3316,42 +3432,52 @@ JSTerm.prototype = {
+@@ -3316,42 +3433,52 @@ JSTerm.prototype = {
                                      aNewResponse)
    {
      if (aNewResponse.errorMessage) {
@@ -1831,7 +1832,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    destroy: function JST_destroy()
    {
      this.clearCompletion();
-@@ -3547,34 +3673,51 @@ CommandController.prototype = {
+@@ -3547,34 +3674,51 @@ CommandController.prototype = {
   * @param object aWebConsole
   *        The Web Console instance that owns this connection proxy.
   */
@@ -1883,7 +1884,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        // Always allow connections from nsIPipe transports.
        DebuggerServer.init(function () { return true; });
        DebuggerServer.addBrowserActors();
-@@ -3588,18 +3731,20 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3588,18 +3732,20 @@ WebConsoleConnectionProxy.prototype = {
     *        Optional function to invoke when connection is established.
     */
    connect: function WCCP_connect(aCallback)
@@ -1906,7 +1907,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                               this._onAttachConsole.bind(this, aCallback));
        }.bind(this));
      }.bind(this));
-@@ -3623,39 +3768,105 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3623,39 +3769,105 @@ WebConsoleConnectionProxy.prototype = {
      if (aResponse.error) {
        Cu.reportError("attachConsole failed: " + aResponse.error + " " +
                       aResponse.message);
@@ -2272,7 +2273,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  const CACHED_MESSAGES = {
    PageError: "PageError",
    ConsoleAPI: "ConsoleAPI",
-@@ -40,89 +52,222 @@ const CACHED_MESSAGES = {
+@@ -40,89 +52,221 @@ const CACHED_MESSAGES = {
   *        The connection to the client, DebuggerServerConnection.
   * @param nsIDOMElement aBrowser
   *        The xul:browser we work with.
@@ -2436,7 +2437,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   */
 +  releaseObject: function WCA_releaseObject(aActor)
 +  {
-+    dump("WCA_releaseObject " + aActor.actorID + " " + aActor.obj + "\n");
 +    this._objectActors.delete(aActor.obj);
 +    this._objectActorsPool.removeActor(aActor.actorID);
 +  },
@@ -2498,7 +2498,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      if (!toDetach.length) {
        // If no specific listeners are requested to be detached, we stop all
        // listeners.
-@@ -136,84 +281,395 @@ WebConsoleActor.prototype =
+@@ -136,84 +280,393 @@ WebConsoleActor.prototype =
        switch (listener) {
          case LISTENERS.PageError:
            if (this.pageErrorListener) {
@@ -2874,9 +2874,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   */
 +  onInspectProperties: function WCOA_onInspectProperties()
 +  {
-+    // TODO: use LongStringActor for strings that are too long. Maybe we could
-+    // just substr() for now? We don't really need to allow very long strings
-+    // here, anyway. Thoughts?
++    // TODO: Bug 787981 - use LongStringActor for strings that are too long.
 +    let createObjectActor = this.parent.createObjectActor.bind(this.parent);
 +    let props = WebConsoleUtils.inspectObject(this.obj, createObjectActor);
 +    return {
@@ -3475,7 +3473,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  
  WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
  {
-@@ -1143,24 +1510,353 @@ PageErrorListener.prototype =
+@@ -1143,24 +1510,352 @@ PageErrorListener.prototype =
      (errors.value || []).forEach(function(aError) {
        if (!(aError instanceof Ci.nsIScriptError) ||
            aError.innerWindowID != innerWindowId ||
@@ -3682,11 +3680,10 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +  /**
 +   * Returns the currently selected object in the highlighter.
 +   *
-+   * Warning: this implementation crosses the process boundaries! This is not
++   * TODO: this implementation crosses the client/server boundaries! This is not
 +   * usable within a remote browser. To implement this feature correctly we need
 +   * support for remote inspection capabilities within the Inspector as well.
-+   *
-+   * TODO: file a bug about this issue.
++   * See bug 787975.
 +   *
 +   * @return nsIDOMElement|null
 +   *         The DOM element currently selected in the highlighter.
