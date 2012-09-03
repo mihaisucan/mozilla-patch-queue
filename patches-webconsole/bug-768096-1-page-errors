@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent ee7a3bddfe5fe68e8d67fff178c94de679bffbe0
+# Parent 2e5e12afabde5ac2c09b6a138c8dff12e79324a1
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1346437710 -10800
+# Date 1346674957 -10800
 
 Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
@@ -1203,7 +1203,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  XPCOMUtils.defineLazyServiceGetter(this, "socketTransportService",
                                     "@mozilla.org/network/socket-transport-service;1",
                                     "nsISocketTransportService");
-@@ -168,16 +169,17 @@ const ThreadStateTypes = {
+@@ -160,16 +161,17 @@ const ThreadStateTypes = {
  };
  
  /**
@@ -1221,36 +1221,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   * Set of pause types that are sent by the server and not as an immediate
   * response to a client request.
   */
-@@ -194,41 +196,45 @@ const UnsolicitedPauses = {
-  */
- const DebugProtocolTypes = {
-   "assign": "assign",
-   "attach": "attach",
-   "clientEvaluate": "clientEvaluate",
-   "delete": "delete",
-   "detach": "detach",
-   "frames": "frames",
-+  "getCachedMessages": "getCachedMessages",
-   "interrupt": "interrupt",
-   "listTabs": "listTabs",
-   "nameAndParameters": "nameAndParameters",
-   "ownPropertyNames": "ownPropertyNames",
-   "property": "property",
-   "prototype": "prototype",
-   "prototypeAndProperties": "prototypeAndProperties",
-   "resume": "resume",
-   "scripts": "scripts",
--  "setBreakpoint": "setBreakpoint"
-+  "setBreakpoint": "setBreakpoint",
-+  "startListeners": "startListeners",
-+  "stopListeners": "stopListeners",
- };
- 
- const ROOT_ACTOR_NAME = "root";
- 
- /**
-  * Creates a client for the remote debugging protocol server. This client
-  * provides the means to communicate with the server and exchange the messages
+@@ -188,16 +190,17 @@ const ROOT_ACTOR_NAME = "root";
   * required by the protocol in a traditional JavaScript API.
   */
  function DebuggerClient(aTransport)
@@ -1268,7 +1239,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  
  DebuggerClient.prototype = {
    /**
-@@ -274,20 +280,42 @@ DebuggerClient.prototype = {
+@@ -243,20 +246,42 @@ DebuggerClient.prototype = {
      let detachTab = function _detachTab() {
        if (this.activeTab) {
          this.activeTab.detach(closeTransport);
@@ -1315,14 +1286,14 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *
     * @param function aOnResponse
     *        Called with the response packet.
-@@ -307,26 +335,57 @@ DebuggerClient.prototype = {
+@@ -276,26 +301,57 @@ DebuggerClient.prototype = {
     * @param function aOnResponse
     *        Called with the response packet and a TabClient
     *        (which will be undefined on error).
     */
    attachTab: function DC_attachTab(aTabActor, aOnResponse) {
      let self = this;
-     let packet = { to: aTabActor, type: DebugProtocolTypes.attach };
+     let packet = { to: aTabActor, type: "attach" };
      this.request(packet, function(aResponse) {
 +      let tabClient;
        if (!aResponse.error) {
@@ -1351,7 +1322,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +    let self = this;
 +    let packet = {
 +      to: aConsoleActor,
-+      type: DebugProtocolTypes.startListeners,
++      type: "startListeners",
 +      listeners: aListeners,
 +    };
 +
@@ -1374,7 +1345,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *        Called with the response packet and a ThreadClient
     *        (which will be undefined on error).
     */
-@@ -495,16 +554,113 @@ TabClient.prototype = {
+@@ -464,16 +520,113 @@ TabClient.prototype = {
        }
      });
    }
@@ -1421,7 +1392,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +  function WCC_getCachedMessages(aTypes, aOnResponse) {
 +    let packet = {
 +      to: this._actor,
-+      type: DebugProtocolTypes.getCachedMessages,
++      type: "getCachedMessages",
 +      messageTypes: aTypes,
 +    };
 +    this._client.request(packet, aOnResponse);
@@ -1441,7 +1412,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +  function WCC_startListeners(aListeners, aOnResponse) {
 +    let packet = {
 +      to: this._actor,
-+      type: DebugProtocolTypes.startListeners,
++      type: "startListeners",
 +      listeners: aListeners,
 +    };
 +    this._client.request(packet, aOnResponse);
@@ -1461,7 +1432,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +  function WCC_stopListeners(aListeners, aOnResponse) {
 +    let packet = {
 +      to: this._actor,
-+      type: DebugProtocolTypes.stopListeners,
++      type: "stopListeners",
 +      listeners: aListeners,
 +    };
 +    this._client.request(packet, aOnResponse);
@@ -1617,7 +1588,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
 diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
 --- a/toolkit/devtools/debugger/server/dbg-server.js
 +++ b/toolkit/devtools/debugger/server/dbg-server.js
-@@ -111,16 +111,17 @@ var DebuggerServer = {
+@@ -114,16 +114,17 @@ var DebuggerServer = {
      loadSubScript.call(this, aURL);
    },
  
