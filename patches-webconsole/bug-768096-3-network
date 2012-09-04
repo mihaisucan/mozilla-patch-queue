@@ -1,9 +1,31 @@
 # HG changeset patch
 # Parent 5311ecc66ae34b6681a8f480175b2c4bd5bdede7
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1346762233 -10800
+# Date 1346788524 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 3: network logging
 
+diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
+--- a/browser/devtools/webconsole/HUDService-content.js
++++ b/browser/devtools/webconsole/HUDService-content.js
+@@ -13,17 +13,17 @@ let Ci = Components.interfaces;
+ let Cu = Components.utils;
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ 
+ let tempScope = {};
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm", tempScope);
+ Cu.import("resource://gre/modules/Services.jsm", tempScope);
+ Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", tempScope);
+ Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tempScope);
+-Cu.import("resource:///modules/NetworkHelper.jsm", tempScope);
++Cu.import("resource://gre/modules/devtools/NetworkHelper.jsm", tempScope);
+ Cu.import("resource://gre/modules/NetUtil.jsm", tempScope);
+ 
+ let XPCOMUtils = tempScope.XPCOMUtils;
+ let Services = tempScope.Services;
+ let gConsoleStorage = tempScope.ConsoleAPIStorage;
+ let WebConsoleUtils = tempScope.WebConsoleUtils;
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ let JSPropertyProvider = tempScope.JSPropertyProvider;
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
@@ -26,16 +48,477 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     */
    consolePanel: null,
  
+diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
+--- a/browser/devtools/webconsole/Makefile.in
++++ b/browser/devtools/webconsole/Makefile.in
+@@ -8,16 +8,15 @@ topsrcdir	= @top_srcdir@
+ srcdir		= @srcdir@
+ VPATH		= @srcdir@
+ 
+ include $(DEPTH)/config/autoconf.mk
+ 
+ EXTRA_JS_MODULES = \
+ 		HUDService.jsm \
+ 		PropertyPanel.jsm \
+-		NetworkHelper.jsm \
+ 		NetworkPanel.jsm \
+ 		AutocompletePopup.jsm \
+ 		$(NULL)
+ 
+ TEST_DIRS = test
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/NetworkPanel.jsm
+--- a/browser/devtools/webconsole/NetworkPanel.jsm
++++ b/browser/devtools/webconsole/NetworkPanel.jsm
+@@ -11,17 +11,17 @@ const Ci = Components.interfaces;
+ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "mimeService", "@mozilla.org/mime;1",
+                                    "nsIMIMEService");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
+-                                  "resource:///modules/NetworkHelper.jsm");
++                                  "resource://gre/modules/devtools/NetworkHelper.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+                                   "resource://gre/modules/NetUtil.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+                                   "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js b/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js
+@@ -24,25 +24,30 @@ function performTest(lastFinishedRequest
+   HUDService.lastFinishedRequestCallback = null;
+   executeSoon(finishTest);
+ }
+ 
+ function test()
+ {
+   addTab("data:text/html;charset=utf-8,Web Console - bug 600183 test");
+ 
+-  let initialLoad = true;
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
+ 
+-  browser.addEventListener("load", function onLoad() {
+-    if (initialLoad) {
+-      openConsole(null, function(hud) {
++    openConsole(null, function(hud) {
++      hud.ui.saveRequestAndResponseBodies = true;
+ 
+-        hud.ui.saveRequestAndResponseBodies = true;
+-        HUDService.lastFinishedRequestCallback = performTest;
+-
+-        content.location = TEST_URI;
++      waitForSuccess({
++        name: "saveRequestAndResponseBodies update",
++        validatorFn: function()
++        {
++          return hud.ui.saveRequestAndResponseBodies;
++        },
++        successFn: function()
++        {
++          HUDService.lastFinishedRequestCallback = performTest;
++          content.location = TEST_URI;
++        },
++        failureFn: finishTest,
+       });
+-      initialLoad = false;
+-    } else {
+-      browser.removeEventListener("load", onLoad, true);
+-    }
++    });
+   }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
+@@ -76,18 +76,27 @@ function onpopupshown2(aEvent)
+ 
+     // Reopen the context menu.
+     menupopups[1].addEventListener("popupshown", onpopupshown2b, false);
+     executeSoon(function() {
+       menupopups[1].openPopup();
+     });
+   }, false);
+ 
+-  executeSoon(function() {
+-    menupopups[1].hidePopup();
++  waitForSuccess({
++    name: "saveRequestAndResponseBodies update",
++    validatorFn: function()
++    {
++      return huds[1].ui.saveRequestAndResponseBodies;
++    },
++    successFn: function()
++    {
++      menupopups[1].hidePopup();
++    },
++    failureFn: finishTest,
+   });
+ }
+ 
+ function onpopupshown2b(aEvent)
+ {
+   menupopups[1].removeEventListener(aEvent.type, onpopupshown2b, false);
+   is(menuitems[1].getAttribute("checked"), "true", "menuitems[1] is checked");
+ 
+@@ -137,18 +146,27 @@ function onpopupshown1(aEvent)
+     gBrowser.selectedTab = tabs[1];
+     waitForFocus(function() {
+       // Reopen the context menu from tab 2.
+       menupopups[1].addEventListener("popupshown", onpopupshown2c, false);
+       menupopups[1].openPopup();
+     }, tabs[1].linkedBrowser.contentWindow);
+   }, false);
+ 
+-  executeSoon(function() {
+-    menupopups[0].hidePopup();
++  waitForSuccess({
++    name: "saveRequestAndResponseBodies update",
++    validatorFn: function()
++    {
++      return huds[0].ui.saveRequestAndResponseBodies;
++    },
++    successFn: function()
++    {
++      menupopups[0].hidePopup();
++    },
++    failureFn: finishTest,
+   });
+ }
+ 
+ function onpopupshown2c(aEvent)
+ {
+   menupopups[1].removeEventListener(aEvent.type, onpopupshown2c, false);
+ 
+   is(menuitems[1].getAttribute("checked"), "true", "menuitems[1] is checked");
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
+@@ -12,17 +12,48 @@ const TEST_URI = "http://example.com/bro
+ let lastFinishedRequests = {};
+ 
+ function requestDoneCallback(aHttpRequest)
+ {
+   let status = aHttpRequest.log.entries[0].response.status;
+   lastFinishedRequests[status] = aHttpRequest;
+ }
+ 
+-function performTest(aEvent)
++function consoleOpened(hud)
++{
++  hud.ui.saveRequestAndResponseBodies = true;
++
++  waitForSuccess({
++    name: "saveRequestAndResponseBodies update",
++    validatorFn: function()
++    {
++      return hud.ui.saveRequestAndResponseBodies;
++    },
++    successFn: function()
++    {
++      HUDService.lastFinishedRequestCallback = requestDoneCallback;
++      waitForSuccess(waitForResponses);
++      content.location = TEST_URI;
++    },
++    failureFn: finishTest,
++  });
++
++  let waitForResponses = {
++    name: "301 and 404 responses",
++    validatorFn: function()
++    {
++      return "301" in lastFinishedRequests &&
++             "404" in lastFinishedRequests;
++    },
++    successFn: performTest,
++    failureFn: finishTest,
++  };
++}
++
++function performTest()
+ {
+   HUDService.lastFinishedRequestCallback = null;
+ 
+   ok("301" in lastFinishedRequests, "request 1: 301 Moved Permanently");
+   ok("404" in lastFinishedRequests, "request 2: 404 Not found");
+ 
+   function readHeader(aName)
+   {
+@@ -56,24 +87,13 @@ function performTest(aEvent)
+   lastFinishedRequests = null;
+   executeSoon(finishTest);
+ }
+ 
+ function test()
+ {
+   addTab("data:text/html;charset=utf-8,<p>Web Console test for bug 630733");
+ 
+-  browser.addEventListener("load", function onLoad1(aEvent) {
+-    browser.removeEventListener(aEvent.type, onLoad1, true);
+-
+-    openConsole(null, function(hud) {
+-      hud.ui.saveRequestAndResponseBodies = true;
+-      HUDService.lastFinishedRequestCallback = requestDoneCallback;
+-
+-      browser.addEventListener("load", function onLoad2(aEvent) {
+-        browser.removeEventListener(aEvent.type, onLoad2, true);
+-        executeSoon(performTest);
+-      }, true);
+-
+-      content.location = TEST_URI;
+-    });
++  browser.addEventListener("load", function onLoad(aEvent) {
++    browser.removeEventListener(aEvent.type, onLoad, true);
++    openConsole(null, consoleOpened);
+   }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js b/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
+@@ -63,21 +63,35 @@ function testPageLoad()
+     executeSoon(testPageLoadBody);
+   };
+ 
+   content.location = TEST_NETWORK_REQUEST_URI;
+ }
+ 
+ function testPageLoadBody()
+ {
++  // Turn on logging of request bodies and check again.
++  hud.ui.saveRequestAndResponseBodies = true;
++
++  waitForSuccess({
++    name: "saveRequestAndResponseBodies update",
++    validatorFn: function()
++    {
++      return hud.ui.saveRequestAndResponseBodies;
++    },
++    successFn: testPageLoadBodyAfterSettingUpdate,
++    failureFn: finishTest,
++  });
++}
++
++function testPageLoadBodyAfterSettingUpdate()
++{
+   let loaded = false;
+   let requestCallbackInvoked = false;
+ 
+-  // Turn on logging of request bodies and check again.
+-  hud.ui.saveRequestAndResponseBodies = true;
+   requestCallback = function() {
+     ok(lastRequest, "Page load was logged again");
+     is(lastRequest.response.content.text.indexOf("<!DOCTYPE HTML>"), 0,
+       "Response body's beginning is okay");
+ 
+     lastRequest = null;
+     requestCallback = null;
+     requestCallbackInvoked = true;
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -3735,17 +3735,18 @@ WebConsoleConnectionProxy.prototype = {
+@@ -335,37 +335,38 @@ WebConsoleFrame.prototype = {
+ 
+   /**
+    * Setter for saving of network request and response bodies.
+    *
+    * @param boolean aValue
+    *        The new value you want to set.
+    */
+   set saveRequestAndResponseBodies(aValue) {
+-    this._saveRequestAndResponseBodies = aValue;
+-
+-    let message = {
+-      preferences: {
+-        "NetworkMonitor.saveRequestAndResponseBodies":
+-          this._saveRequestAndResponseBodies,
+-      },
++    let newValue = !!aValue;
++    let preferences = {
++      "NetworkMonitor.saveRequestAndResponseBodies": newValue,
+     };
+ 
+-    this.owner.sendMessageToContent("WebConsole:SetPreferences", message);
++    this.webConsoleClient.setPreferences(preferences, function(aResponse) {
++      if (!aResponse.error) {
++        this._saveRequestAndResponseBodies = newValue;
++      }
++    }.bind(this));
+   },
+ 
+   /**
+    * Connect to the server using the remote debugging protocol.
+    * @private
+    */
+   _initConnection: function WCF__initConnection()
+   {
+     this.proxy = new WebConsoleConnectionProxy(this);
+     this.proxy.initServer();
+     this.proxy.connect(function() {
++      this.saveRequestAndResponseBodies = this._saveRequestAndResponseBodies;
+       if (this._messageManagerInitComplete) {
+         this._onInitComplete();
+       }
+     }.bind(this));
+   },
+ 
+   /**
+    * Find the Web Console UI elements and setup event listeners as needed.
+@@ -655,19 +656,16 @@ WebConsoleFrame.prototype = {
+     if (!aMessage.json || aMessage.json.hudId != this.hudId) {
+       return;
+     }
+ 
+     switch (aMessage.name) {
+       case "WebConsole:Initialized":
+         this._onMessageManagerInitComplete();
+         break;
+-      case "WebConsole:NetworkActivity":
+-        this.handleNetworkActivity(aMessage.json);
+-        break;
+       case "WebConsole:FileActivity":
+         this.outputMessage(CATEGORY_NETWORK, this.logFileActivity,
+                            [aMessage.json.uri]);
+         break;
+       case "WebConsole:LocationChange":
+         this.owner.onLocationChange(aMessage.json);
+         break;
+     }
+@@ -1431,62 +1429,65 @@ WebConsoleFrame.prototype = {
+   logWarningAboutReplacedAPI: function WCF_logWarningAboutReplacedAPI()
+   {
+     let node = this.createMessageNode(CATEGORY_JS, SEVERITY_WARNING,
+                                       l10n.getStr("ConsoleAPIDisabled"));
+     this.outputMessage(CATEGORY_JS, node);
+   },
+ 
+   /**
+-   * Handle the "WebConsole:NetworkActivity" message coming from the remote Web
++   * Handle the network activity messages coming from the remote Web
+    * Console.
+    *
+-   * @param object aMessage
+-   *        The HTTP activity object. This object needs to hold two properties:
+-   *        - meta - some metadata about the request log:
++   * @param object aLog
++   *        The request and response information. This is a HAR-like
++   *        object. See NetworkMonitor.createActivityObject().
++   * @param object aMeta
++   *        Additional data about the request log:
+    *          - stages - the stages the network request went through.
+    *          - discardRequestBody and discardResponseBody - booleans that tell
+    *          if the network request/response body was discarded or not.
+-   *        - log - the request and response information. This is a HAR-like
+-   *        object. See HUDService-content.js
+-   *        NetworkMonitor.createActivityObject().
+    */
+-  handleNetworkActivity: function WCF_handleNetworkActivity(aMessage)
++  handleNetworkActivity: function WCF_handleNetworkActivity(aLog, aMeta)
+   {
+-    let stage = aMessage.meta.stages[aMessage.meta.stages.length - 1];
+-    let entry = aMessage.log.entries[0];
++    let stage = aMeta.stages[aMeta.stages.length - 1];
++    let entry = aLog.entries[0];
+ 
+     if (stage == "REQUEST_HEADER") {
+       let networkInfo = {
+         node: null,
+-        httpActivity: aMessage,
++        httpActivity: {
++          log: aLog,
++          meta: aMeta,
++        },
+       };
+ 
+       this._networkRequests[entry.connection] = networkInfo;
+       this.outputMessage(CATEGORY_NETWORK, this.logNetActivity,
+                          [entry.connection]);
+       return;
+     }
+     else if (!(entry.connection in this._networkRequests)) {
+       return;
+     }
+ 
+     let networkInfo = this._networkRequests[entry.connection];
+-    networkInfo.httpActivity = aMessage;
++    networkInfo.httpActivity.meta = aMeta;
++    networkInfo.httpActivity.log = aLog;
+ 
+     if (networkInfo.node) {
+       this._updateNetMessage(entry.connection);
+     }
+ 
+     // For unit tests we pass the HTTP activity object to the test callback,
+     // once requests complete.
+     if (this.owner.lastFinishedRequestCallback &&
+-        aMessage.meta.stages.indexOf("REQUEST_STOP") > -1 &&
+-        aMessage.meta.stages.indexOf("TRANSACTION_CLOSE") > -1) {
+-      this.owner.lastFinishedRequestCallback(aMessage);
++        aMeta.stages.indexOf("REQUEST_STOP") > -1 &&
++        aMeta.stages.indexOf("TRANSACTION_CLOSE") > -1) {
++      this.owner.lastFinishedRequestCallback(networkInfo.httpActivity);
+     }
+   },
+ 
+   /**
+    * Update an output message to reflect the latest state of a network request,
+    * given a network connection ID.
+    *
+    * @private
+@@ -1552,17 +1553,17 @@ WebConsoleFrame.prototype = {
+   {
+     let netPanel = new NetworkPanel(this.popupset, aHttpActivity);
+     netPanel.linkNode = aNode;
+     aNode._netPanel = netPanel;
+ 
+     let panel = netPanel.panel;
+     panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
+     panel.sizeTo(450, 500);
+-    panel.setAttribute("hudId", aHttpActivity.hudId);
++    panel.setAttribute("hudId", this.hudId);
+ 
+     panel.addEventListener("popuphiding", function WCF_netPanel_onHide() {
+       panel.removeEventListener("popuphiding", WCF_netPanel_onHide);
+ 
+       aNode._panelOpen = false;
+       aNode._netPanel = null;
+     });
+ 
+@@ -3675,16 +3676,17 @@ CommandController.prototype = {
+  *        The Web Console instance that owns this connection proxy.
+  */
+ function WebConsoleConnectionProxy(aWebConsole)
+ {
+   this.owner = aWebConsole;
+ 
+   this._onPageError = this._onPageError.bind(this);
+   this._onConsoleAPICall = this._onConsoleAPICall.bind(this);
++  this._onNetworkActivity = this._onNetworkActivity.bind(this);
+ }
+ 
+ WebConsoleConnectionProxy.prototype = {
+   /**
+    * The owning Web Console instance.
+    *
+    * @see WebConsoleFrame
+    * @type object
+@@ -3733,19 +3735,21 @@ WebConsoleConnectionProxy.prototype = {
+    */
+   connect: function WCCP_connect(aCallback)
    {
      let transport = DebuggerServer.connectPipe();
      let client = this.client = new DebuggerClient(transport);
  
      client.addListener("pageError", this._onPageError);
      client.addListener("consoleAPICall", this._onConsoleAPICall);
++    client.addListener("networkActivity", this._onNetworkActivity);
  
      let listeners = [WebConsoleClient.prototype.LISTENERS.PageError,
 -                     WebConsoleClient.prototype.LISTENERS.ConsoleAPI];
@@ -49,10 +532,78 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                               this._onAttachConsole.bind(this, aCallback));
        }.bind(this));
      }.bind(this));
+@@ -3835,16 +3839,31 @@ WebConsoleConnectionProxy.prototype = {
+    *        The message received from the server.
+    */
+   _onConsoleAPICall: function WCCP__onConsoleAPICall(aType, aPacket)
+   {
+     this.owner.handleConsoleAPICall(aPacket.message);
+   },
+ 
+   /**
++   * The "networkActivity" message type handler. We redirect any message to
++   * the UI for displaying.
++   *
++   * @private
++   * @param string aType
++   *        Message type.
++   * @param object aPacket
++   *        The message received from the server.
++   */
++  _onNetworkActivity: function WCCP__onNetworkActivity(aType, aPacket)
++  {
++    this.owner.handleNetworkActivity(aPacket.log, aPacket.meta);
++  },
++
++  /**
+    * Release an object actor.
+    *
+    * @param string aActor
+    *        The actor ID to send the request to.
+    */
+   releaseActor: function WCCP_releaseActor(aActor)
+   {
+     if (this.client) {
+@@ -3858,16 +3877,17 @@ WebConsoleConnectionProxy.prototype = {
+   disconnect: function WCCP_disconnect()
+   {
+     if (!this.client) {
+       return;
+     }
+ 
+     this.client.removeListener("pageError", this._onPageError);
+     this.client.removeListener("consoleAPICall", this._onConsoleAPICall);
++    this.client.removeListener("networkActivity", this._onNetworkActivity);
+     this.client.close();
+ 
+     this.client = null;
+     this.webConsoleClient = null;
+     this.connected = false;
+   },
+ };
+ 
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
-@@ -552,16 +552,17 @@ function WebConsoleClient(aDebuggerClien
+@@ -161,16 +161,17 @@ const ThreadStateTypes = {
+ };
+ 
+ /**
+  * Set of protocol messages that are sent by the server without a prior request
+  * by the client.
+  */
+ const UnsolicitedNotifications = {
+   "consoleAPICall": "consoleAPICall",
++  "networkActivity": "networkActivity",
+   "newScript": "newScript",
+   "pageError": "pageError",
+   "tabDetached": "tabDetached",
+   "tabNavigated": "tabNavigated"
+ };
+ 
+ /**
+  * Set of pause types that are sent by the server and not as an immediate
+@@ -552,16 +553,17 @@ function WebConsoleClient(aDebuggerClien
    this._actor = aActor;
    this._client = aDebuggerClient;
  }
@@ -70,6 +621,57 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
    },
  
    /**
+@@ -652,16 +654,50 @@ WebConsoleClient.prototype = {
+     let packet = {
+       to: this._actor,
+       type: "clearMessagesCache",
+     };
+     this._client.request(packet);
+   },
+ 
+   /**
++   * Set Web Console-related preferences on the server.
++   *
++   * @param object aPreferences
++   *        An object with the preferences you want to change.
++   * @param function [aOnResponse]
++   *        Optional function to invoke when the response is received.
++   */
++  setPreferences: function WCC_setPreferences(aPreferences, aOnResponse) {
++    let packet = {
++      to: this._actor,
++      type: "setPreferences",
++      preferences: aPreferences,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Get Web Console-related preferences from the server.
++   *
++   * @param array aPreferences
++   *        An array with the preferences you want to retrieve.
++   * @param function aOnResponse
++   *        Function to invoke when the response is received.
++   */
++  getPreferences: function WCC_getPreferences(aPreferences, aOnResponse) {
++    let packet = {
++      to: this._actor,
++      type: "getPreferences",
++      preferences: aPreferences,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
+    * Start the given Web Console listeners.
+    *
+    * @see this.LISTENERS
+    * @param array aListeners
+    *        Array of listeners you want to start. See this.LISTENERS for
+    *        known listeners.
+    * @param function aOnResponse
+    *        Function to invoke when the server response is received.
 diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
@@ -100,7 +702,78 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  };
  
  /**
-@@ -145,16 +149,20 @@ WebConsoleActor.prototype =
+@@ -57,16 +61,17 @@ function WebConsoleActor(aConnection, aB
+ {
+   this.conn = aConnection;
+   this._browser = aBrowser;
+ 
+   this._objectActorsPool = new ActorPool(this.conn);
+   this.conn.addActorPool(this._objectActorsPool);
+ 
+   this._objectActors = new Map();
++  this._prefs = {};
+ }
+ 
+ WebConsoleActor.prototype =
+ {
+   /**
+    * The xul:browser we work with.
+    * @private
+    * @type nsIDOMElement
+@@ -85,16 +90,23 @@ WebConsoleActor.prototype =
+   /**
+    * Map between objects and their WebConsoleObjectActor wrappers.
+    * @private
+    * @type Map
+    */
+   _objectActors: null,
+ 
+   /**
++   * Web Console-related preferences.
++   * @private
++   * @type object
++   */
++  _prefs: null,
++
++  /**
+    * The debugger server connection instance.
+    * @type object
+    */
+   conn: null,
+ 
+   /**
+    * The content window we work with.
+    * @type nsIDOMWindow
+@@ -107,16 +119,28 @@ WebConsoleActor.prototype =
+    */
+   pageErrorListener: null,
+ 
+   /**
+    * The ConsoleAPIListener instance.
+    */
+   consoleAPIListener: null,
+ 
++  /**
++   * The NetworkMonitor instance.
++   */
++  networkMonitor: null,
++
++  /**
++   * Getter for the NetworkMonitor.saveRequestAndResponseBodies preference.
++   * @type boolean
++   */
++  get saveRequestAndResponseBodies()
++    this._prefs["NetworkMonitor.saveRequestAndResponseBodies"],
++
+   actorPrefix: "console",
+ 
+   grip: function WCA_grip()
+   {
+     return { actor: this.actorID };
+   },
+ 
+   /**
+@@ -145,16 +169,20 @@ WebConsoleActor.prototype =
      if (this.pageErrorListener) {
        this.pageErrorListener.destroy();
        this.pageErrorListener = null;
@@ -121,7 +794,28 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    /**
     * Create a grip for the given value. If the value is an object,
-@@ -241,16 +249,24 @@ WebConsoleActor.prototype =
+@@ -210,16 +238,20 @@ WebConsoleActor.prototype =
+    *        The WebConsoleObjectActor instance you want to release.
+    */
+   releaseObject: function WCA_releaseObject(aActor)
+   {
+     this._objectActors.delete(aActor.obj);
+     this._objectActorsPool.removeActor(aActor.actorID);
+   },
+ 
++  //////////////////
++  // Request handlers for known packet types.
++  //////////////////
++
+   /**
+    * Handler for the "startListeners" request.
+    *
+    * @param object aRequest
+    *        The JSON request object received from the Web Console client.
+    * @return object
+    *         The response object which holds the startedListeners array.
+    */
+@@ -241,16 +273,24 @@ WebConsoleActor.prototype =
          case LISTENERS.ConsoleAPI:
            if (!this.consoleAPIListener) {
              this.consoleAPIListener =
@@ -146,7 +840,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      };
    },
  
-@@ -287,16 +303,23 @@ WebConsoleActor.prototype =
+@@ -287,16 +327,23 @@ WebConsoleActor.prototype =
            break;
          case LISTENERS.ConsoleAPI:
            if (this.consoleAPIListener) {
@@ -170,6 +864,165 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    /**
     * Handler for the "getCachedMessages" request. This method sends the cached
+@@ -420,16 +467,55 @@ WebConsoleActor.prototype =
+   {
+     // TODO: Bug 717611 - Web Console clear button does not clear cached errors
+     let windowId = WebConsoleUtils.getInnerWindowId(this.window);
+     ConsoleAPIStorage.clearEvents(windowId);
+     return {};
+   },
+ 
+   /**
++   * The "getPreferences" request handler.
++   *
++   * @param object aRequest
++   *        The request message - which preferences to send back to the client.
++   * @return object
++   *         The response message - preferences and their values.
++   */
++  onGetPreferences: function WCA_onGetPreferences(aRequest)
++  {
++    let prefs = {};
++    aRequest.preferences.forEach(function(aName) {
++      prefs[aName] = this._prefs[aName];
++    }, this);
++
++    return {
++      from: this.actorID,
++      preferences: prefs,
++    };
++  },
++
++  /**
++   * The "setPreferences" request handler.
++   *
++   * @param object aRequest
++   *        The request message - which preferences need to be updated.
++   */
++  onSetPreferences: function WCA_onSetPreferences(aRequest)
++  {
++    for (let key in aRequest.preferences) {
++      this._prefs[key] = aRequest.preferences[key];
++    }
++    return {};
++  },
++
++  //////////////////
++  // End of request handlers.
++  //////////////////
++
++  /**
+    * Create the JavaScript sandbox where user input is evaluated.
+    * @private
+    */
+   _createSandbox: function WCA__createSandbox()
+   {
+     this._sandboxLocation = this.window.location;
+     this.sandbox = new Cu.Sandbox(this.window, {
+       sandboxPrototype: this.window,
+@@ -484,20 +570,25 @@ WebConsoleActor.prototype =
+     }
+     if ($$) {
+       this.sandbox.$$ = $$;
+     }
+ 
+     return result;
+   },
+ 
++  //////////////////
++  // Event handlers for various listeners.
++  //////////////////
++
+   /**
+    * Handler for page errors received from the PageErrorListener. This method
+    * sends the nsIScriptError to the remote Web Console client.
+    *
++   * @see PageErrorListener
+    * @param nsIScriptError aPageError
+    *        The page error we need to send to the remote client.
+    */
+   onPageError: function WCA_onPageError(aPageError)
+   {
+     let packet = {
+       from: this.actorID,
+       type: "pageError",
+@@ -505,30 +596,57 @@ WebConsoleActor.prototype =
+     };
+     this.conn.send(packet);
+   },
+ 
+   /**
+    * Handler for window.console API calls received from the ConsoleAPIListener.
+    * This method sends the object to the remote Web Console client.
+    *
++   * @see ConsoleAPIListener
+    * @param object aMessage
+    *        The console API call we need to send to the remote client.
+    */
+   onConsoleAPICall: function WCA_onConsoleAPICall(aMessage)
+   {
+     let packet = {
+       from: this.actorID,
+       type: "consoleAPICall",
+       message: this.prepareConsoleMessageForRemote(aMessage),
+     };
+     this.conn.send(packet);
+   },
+ 
+   /**
++   * Handler for network activity. This method sends the object to the remote
++   * Web Console client.
++   *
++   * @see NetworkMonitor
++   * @param object aLog
++   *        The network request and response object, in a similar format to that
++   *        of a HAR log.
++   * @param object aMeta
++   *        The network request information.
++   */
++  onNetworkActivity: function WCA_onNetworkActivity(aLog, aMeta)
++  {
++    let packet = {
++      from: this.actorID,
++      type: "networkActivity",
++      meta: aMeta,
++      log: aLog,
++    };
++    this.conn.send(packet);
++  },
++
++  //////////////////
++  // End of event handlers for various listeners.
++  //////////////////
++
++  /**
+    * Prepare a message from the console API to be sent to the remote Web Console
+    * instance.
+    *
+    * @param object aMessage
+    *        The original message received from console-api-log-event.
+    * @return object
+    *         The object that can be sent to the remote client.
+    */
+@@ -592,16 +710,18 @@ WebConsoleActor.prototype =
+ WebConsoleActor.prototype.requestTypes =
+ {
+   getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
+   startListeners: WebConsoleActor.prototype.onStartListeners,
+   stopListeners: WebConsoleActor.prototype.onStopListeners,
+   evaluateJS: WebConsoleActor.prototype.onEvaluateJS,
+   autocomplete: WebConsoleActor.prototype.onAutocomplete,
+   clearMessagesCache: WebConsoleActor.prototype.onClearMessagesCache,
++  setPreferences: WebConsoleActor.prototype.onSetPreferences,
++  getPreferences: WebConsoleActor.prototype.onGetPreferences,
+ };
+ 
+ /**
+  * Creates an actor for the specified object.
+  *
+  * @constructor
+  * @param object aObj
+  *        The object you want.
 diff --git a/browser/devtools/webconsole/NetworkHelper.jsm b/toolkit/devtools/webconsole/NetworkHelper.jsm
 rename from browser/devtools/webconsole/NetworkHelper.jsm
 rename to toolkit/devtools/webconsole/NetworkHelper.jsm
@@ -207,7 +1060,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  // function foobar2(a) { ...
  // function() { ...
  const REGEX_MATCH_FUNCTION_NAME = /^\(?function\s+([^(\s]+)\s*\(/;
-@@ -1854,8 +1865,967 @@ function JSTermHelpers(aOwner)
+@@ -1854,8 +1865,975 @@ function JSTermHelpers(aOwner)
     * @return void
     */
    aOwner.sandbox.print = function JSTH_print(aString)
@@ -381,7 +1234,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +
 +  /**
 +   * Find the open response object associated to the current request. The
-+   * NetworkMonitor.httpResponseExaminer() method saves the response headers in
++   * NetworkMonitor._httpResponseExaminer() method saves the response headers in
 +   * NetworkMonitor.openResponses. This method takes the data from the open
 +   * response object and puts it into the HTTP activity object, then sends it to
 +   * the remote Web Console instance.
@@ -479,6 +1332,8 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +      response.bodySize = -1;
 +    }
 +
++    // TODO: Bug 787981 - use LongStringActor for strings that are too long.
++
 +    try {
 +      response.content = { mimeType: this.request.contentType };
 +    }
@@ -554,11 +1409,13 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 + * @param nsIDOMWindow aWindow
 + *        The window that we monitor network requests for.
 + * @param object aOwner
-+ *        The network monitor owner. This object needs to hold the
-+ *        |onNetworkActivity| method. The function is invoked for every stage of
++ *        The network monitor owner. This object needs to hold:
++ *        - onNetworkActivity(). This method is invoked for every stage of
 + *        every network request and it is given two arguments: the network
 + *        activity object of the request (which is very similar to a HAR object)
 + *        and associated metadata/information for the request.
++ *        - saveRequestAndResponseBodies property which tells if you want to log
++ *        request and response bodies.
 + */
 +function NetworkMonitor(aWindow, aOwner)
 +{
@@ -566,6 +1423,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +  this.owner = aOwner;
 +  this.openRequests = {};
 +  this.openResponses = {};
++  this._httpResponseExaminer = this._httpResponseExaminer.bind(this);
 +}
 +
 +NetworkMonitor.prototype = {
@@ -601,7 +1459,8 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   * Whether to save the bodies of network requests and responses. Disabled by
 +   * default to save memory.
 +   */
-+  saveRequestAndResponseBodies: false,
++  get saveRequestAndResponseBodies()
++    this.owner && this.owner.saveRequestAndResponseBodies,
 +
 +  /**
 +   * Object that holds the HTTP activity objects for ongoing requests.
@@ -609,7 +1468,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +  openRequests: null,
 +
 +  /**
-+   * Object that holds response headers coming from this.httpResponseExaminer.
++   * Object that holds response headers coming from this._httpResponseExaminer.
 +   */
 +  openResponses: null,
 +
@@ -623,7 +1482,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +
 +    gActivityDistributor.addObserver(this);
 +
-+    Services.obs.addObserver(this.httpResponseExaminer,
++    Services.obs.addObserver(this._httpResponseExaminer,
 +                             "http-on-examine-response", false);
 +  },
 +
@@ -631,11 +1490,12 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   * Observe notifications for the http-on-examine-response topic, coming from
 +   * the nsIObserverService.
 +   *
++   * @private
 +   * @param nsIHttpChannel aSubject
 +   * @param string aTopic
 +   * @returns void
 +   */
-+  httpResponseExaminer: function NM_httpResponseExaminer(aSubject, aTopic)
++  _httpResponseExaminer: function NM__httpResponseExaminer(aSubject, aTopic)
 +  {
 +    // The httpResponseExaminer is used to retrieve the uncached response
 +    // headers. The data retrieved is stored in openResponses. The
@@ -1030,7 +1890,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +    //
 +    // We could parse aExtraStringData to get the headers and their values, but
 +    // that is not trivial to do in an accurate manner. Hence, we save the
-+    // response headers in this.httpResponseExaminer().
++    // response headers in this._httpResponseExaminer().
 +
 +    let response = aHttpActivity.log.entries[0].response;
 +
@@ -1152,7 +2012,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   */
 +  destroy: function NM_destroy()
 +  {
-+    Services.obs.removeObserver(this.httpResponseExaminer,
++    Services.obs.removeObserver(this._httpResponseExaminer,
 +                                "http-on-examine-response");
 +
 +    gActivityDistributor.removeObserver(this);
@@ -1163,6 +2023,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +
 +    this.openRequests = {};
 +    this.openResponses = {};
++    this.owner = null;
 +  },
 +};
 +
