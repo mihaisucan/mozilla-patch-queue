@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 5311ecc66ae34b6681a8f480175b2c4bd5bdede7
+# Parent 9dddae4f717c043d84bc55102b45085420e1756d
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1346788524 -10800
+# Date 1346876757 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 3: network logging
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
@@ -29,25 +29,140 @@ diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtool
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -531,17 +531,17 @@ WebConsole.prototype = {
- 
-   /**
-    * Message names that the HUD listens for. These messages come from the remote
-    * Web Console content script.
+@@ -525,38 +525,22 @@ WebConsole.prototype = {
+    * the content process.
     *
     * @private
-    * @type array
+    * @type object
     */
--  _messageListeners: ["WebConsole:Initialized", "WebConsole:NetworkActivity",
-+  _messageListeners: ["WebConsole:Initialized",
-     "WebConsole:FileActivity", "WebConsole:LocationChange"],
+   _asyncRequests: null,
  
    /**
+-   * Message names that the HUD listens for. These messages come from the remote
+-   * Web Console content script.
+-   *
+-   * @private
+-   * @type array
+-   */
+-  _messageListeners: ["WebConsole:Initialized", "WebConsole:NetworkActivity",
+-    "WebConsole:FileActivity", "WebConsole:LocationChange"],
+-
+-  /**
     * The xul:panel that holds the Web Console when it is positioned as a window.
     * @type nsIDOMElement
     */
    consolePanel: null,
  
+   /**
+-   * The current tab location.
+-   * @type string
+-   */
+-  contentLocation: "",
+-
+-  /**
+    * Getter for the xul:popupset that holds any popups we open.
+    * @type nsIDOMElement
+    */
+   get mainPopupSet()
+   {
+     return this.chromeDocument.getElementById("mainPopupSet");
+   },
+ 
+@@ -616,17 +600,16 @@ WebConsole.prototype = {
+   _onIframeLoad: function WC__onIframeLoad()
+   {
+     this.iframe.removeEventListener("load", this._onIframeLoad, true);
+ 
+     let position = Services.prefs.getCharPref("devtools.webconsole.position");
+ 
+     this.iframeWindow = this.iframe.contentWindow.wrappedJSObject;
+     this.ui = new this.iframeWindow.WebConsoleFrame(this, position);
+-    this._setupMessageManager();
+   },
+ 
+   /**
+    * Create a panel to open the web console if it should float above
+    * the content in its own window.
+    * @private
+    */
+   _createOwnWindowPanel: function WC__createOwnWindowPanel()
+@@ -761,18 +744,18 @@ WebConsole.prototype = {
+   /**
+    * Retrieve the Web Console panel title.
+    *
+    * @return string
+    *         The Web Console panel title.
+    */
+   getPanelTitle: function WC_getPanelTitle()
+   {
+-    return l10n.getFormatStr("webConsoleWindowTitleAndURL",
+-                             [this.contentLocation]);
++    let url = this.ui ? this.ui.contentLocation : "";
++    return l10n.getFormatStr("webConsoleWindowTitleAndURL", [url]);
+   },
+ 
+   positions: {
+     above: 0, // the childNode index
+     below: 2,
+     window: null
+   },
+ 
+@@ -987,26 +970,26 @@ WebConsole.prototype = {
+         message: aMessage,
+         callback: aCallback,
+       };
+     }
+     this.messageManager.sendAsyncMessage(aName, aMessage);
+   },
+ 
+   /**
+-   * Handler for the "WebConsole:LocationChange" message. If the Web Console is
++   * Handler for page location changes. If the Web Console is
+    * opened in a panel the panel title is updated.
+    *
+-   * @param object aMessage
+-   *        The message received from the content script. It needs to hold two
+-   *        properties: location and title.
++   * @param string aURI
++   *        New page location.
++   * @param string aTitle
++   *        New page title.
+    */
+-  onLocationChange: function WC_onLocationChange(aMessage)
++  onLocationChange: function WC_onLocationChange(aURI, aTitle)
+   {
+-    this.contentLocation = aMessage.location;
+     if (this.consolePanel) {
+       this.consolePanel.label = this.getPanelTitle();
+     }
+   },
+ 
+   /**
+    * Alias for the WebConsoleFrame.setFilterState() method.
+    * @see webconsole.js::WebConsoleFrame.setFilterState()
+@@ -1028,22 +1011,16 @@ WebConsole.prototype = {
+   },
+ 
+   /**
+    * Destroy the object. Call this method to avoid memory leaks when the Web
+    * Console is closed.
+    */
+   destroy: function WC_destroy()
+   {
+-    this.sendMessageToContent("WebConsole:Destroy", {});
+-
+-    this._messageListeners.forEach(function(aName) {
+-      this.messageManager.removeMessageListener(aName, this.ui);
+-    }, this);
+-
+     // Make sure that the console panel does not try to call
+     // deactivateHUDForContext() again.
+     this.consoleWindowUnregisterOnHide = false;
+ 
+     let popupset = this.mainPopupSet;
+     let panels = popupset.querySelectorAll("panel[hudId=" + this.hudId + "]");
+     for (let panel of panels) {
+       if (panel != this.consolePanel) {
 diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
 --- a/browser/devtools/webconsole/Makefile.in
 +++ b/browser/devtools/webconsole/Makefile.in
@@ -324,7 +439,54 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js b
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -335,37 +335,38 @@ WebConsoleFrame.prototype = {
+@@ -214,23 +214,16 @@ WebConsoleFrame.prototype = {
+    * the remote server, using the remote debugging protocol.
+    *
+    * @see WebConsoleConnectionProxy
+    * @type object
+    */
+   proxy: null,
+ 
+   /**
+-   * Tells if the Web Console initialization via message manager completed.
+-   * @private
+-   * @type boolean
+-   */
+-  _messageManagerInitComplete: false,
+-
+-  /**
+    * Getter for the xul:popupset that holds any popups we open.
+    * @type nsIDOMElement
+    */
+   get popupset() this.owner.mainPopupSet,
+ 
+   /**
+    * Holds the network requests currently displayed by the Web Console. Each key
+    * represents the connection ID and the value is network request information.
+@@ -288,16 +281,22 @@ WebConsoleFrame.prototype = {
+   filterPrefs: null,
+ 
+   /**
+    * The nesting depth of the currently active console group.
+    */
+   groupDepth: 0,
+ 
+   /**
++   * The current tab location.
++   * @type string
++   */
++  contentLocation: "",
++
++  /**
+    * The JSTerm object that manage the console's input.
+    * @see JSTerm
+    * @type object
+    */
+   jsterm: null,
+ 
+   /**
+    * The element that holds all of the messages we display.
+@@ -335,40 +334,39 @@ WebConsoleFrame.prototype = {
  
    /**
     * Setter for saving of network request and response bodies.
@@ -362,36 +524,122 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.proxy = new WebConsoleConnectionProxy(this);
      this.proxy.initServer();
      this.proxy.connect(function() {
+-      if (this._messageManagerInitComplete) {
+-        this._onInitComplete();
+-      }
 +      this.saveRequestAndResponseBodies = this._saveRequestAndResponseBodies;
-       if (this._messageManagerInitComplete) {
-         this._onInitComplete();
-       }
++      this._onInitComplete();
      }.bind(this));
    },
  
    /**
     * Find the Web Console UI elements and setup event listeners as needed.
-@@ -655,19 +656,16 @@ WebConsoleFrame.prototype = {
-     if (!aMessage.json || aMessage.json.hudId != this.hudId) {
-       return;
+    * @private
+    */
+   _initUI: function WCF__initUI()
+@@ -639,60 +637,16 @@ WebConsoleFrame.prototype = {
+       this.completeNode.style.fontSize = "";
+       this.inputNode.style.fontSize = "";
+       this.outputNode.style.fontSize = "";
+       Services.prefs.clearUserPref("devtools.webconsole.fontSize");
      }
+   },
  
-     switch (aMessage.name) {
-       case "WebConsole:Initialized":
-         this._onMessageManagerInitComplete();
-         break;
+   /**
+-   * Handler for all of the messages coming from the Web Console content script.
+-   *
+-   * @private
+-   * @param object aMessage
+-   *        A MessageManager object that holds the remote message.
+-   */
+-  receiveMessage: function WCF_receiveMessage(aMessage)
+-  {
+-    if (!aMessage.json || aMessage.json.hudId != this.hudId) {
+-      return;
+-    }
+-
+-    switch (aMessage.name) {
+-      case "WebConsole:Initialized":
+-        this._onMessageManagerInitComplete();
+-        break;
 -      case "WebConsole:NetworkActivity":
 -        this.handleNetworkActivity(aMessage.json);
 -        break;
-       case "WebConsole:FileActivity":
-         this.outputMessage(CATEGORY_NETWORK, this.logFileActivity,
-                            [aMessage.json.uri]);
-         break;
-       case "WebConsole:LocationChange":
-         this.owner.onLocationChange(aMessage.json);
-         break;
+-      case "WebConsole:FileActivity":
+-        this.outputMessage(CATEGORY_NETWORK, this.logFileActivity,
+-                           [aMessage.json.uri]);
+-        break;
+-      case "WebConsole:LocationChange":
+-        this.owner.onLocationChange(aMessage.json);
+-        break;
+-    }
+-  },
+-
+-  /**
+-   * Callback method used to track the Web Console initialization via message
+-   * manager.
+-   *
+-   * @private
+-   */
+-  _onMessageManagerInitComplete: function WCF__onMessageManagerInitComplete()
+-  {
+-    this._messageManagerInitComplete = true;
+-    if (this.proxy.connected) {
+-      this._onInitComplete();
+-    }
+-  },
+-
+-  /**
+    * The event handler that is called whenever a user switches a filter on or
+    * off.
+    *
+    * @private
+    * @param nsIDOMEvent aEvent
+    *        The event that triggered the filter change.
+    */
+   _toggleFilter: function WCF__toggleFilter(aEvent)
+@@ -1327,17 +1281,17 @@ WebConsoleFrame.prototype = {
+     urlNode.classList.add("hud-clickable");
+     urlNode.classList.add("webconsole-msg-body-piece");
+     urlNode.classList.add("webconsole-msg-url");
+     linkNode.appendChild(urlNode);
+ 
+     let severity = SEVERITY_LOG;
+     let mixedRequest =
+       WebConsoleUtils.isMixedHTTPSRequest(request.url,
+-                                          this.owner.contentLocation);
++                                          this.contentLocation);
+     if (mixedRequest) {
+       urlNode.classList.add("webconsole-mixed-content");
+       this.makeMixedContentNode(linkNode);
+       // If we define a SEVERITY_SECURITY in the future, switch this to
+       // SEVERITY_SECURITY.
+       severity = SEVERITY_WARNING;
      }
-@@ -1431,62 +1429,65 @@ WebConsoleFrame.prototype = {
+ 
+@@ -1420,73 +1374,87 @@ WebConsoleFrame.prototype = {
+       let viewSourceUtils = this.owner.gViewSourceUtils;
+       viewSourceUtils.viewSource(aFileURI, null, this.document);
+     }.bind(this));
+ 
+     return outputNode;
+   },
+ 
+   /**
++   * Handle the file activity messages coming from the remote Web Console.
++   *
++   * @param string aFileURI
++   *        The file URI that was requested.
++   */
++  handleFileActivity: function WCF_handleFileActivity(aFileURI)
++  {
++    this.outputMessage(CATEGORY_NETWORK, this.logFileActivity, [aFileURI]);
++  },
++
++  /**
+    * Inform user that the Web Console API has been replaced by a script
+    * in a content page.
+    */
    logWarningAboutReplacedAPI: function WCF_logWarningAboutReplacedAPI()
    {
      let node = this.createMessageNode(CATEGORY_JS, SEVERITY_WARNING,
@@ -472,7 +720,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * given a network connection ID.
     *
     * @private
-@@ -1552,17 +1553,17 @@ WebConsoleFrame.prototype = {
+@@ -1552,31 +1520,45 @@ WebConsoleFrame.prototype = {
    {
      let netPanel = new NetworkPanel(this.popupset, aHttpActivity);
      netPanel.linkNode = aNode;
@@ -491,7 +739,35 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        aNode._netPanel = null;
      });
  
-@@ -3675,16 +3676,17 @@ CommandController.prototype = {
+     aNode._panelOpen = true;
+ 
+     return netPanel;
+   },
+ 
+   /**
++   * Handler for page location changes.
++   *
++   * @param string aURI
++   *        New page location.
++   * @param string aTitle
++   *        New page title.
++   */
++  onLocationChange: function WCF_onLocationChange(aURI, aTitle)
++  {
++    this.contentLocation = aURI;
++    this.owner.onLocationChange(aURI, aTitle);
++  },
++
++  /**
+    * Output a message node. This filters a node appropriately, then sends it to
+    * the output, regrouping and pruning output as necessary.
+    *
+    * Note: this call is async - the given message node may not be displayed when
+    * you call this method.
+    *
+    * @param integer aCategory
+    *        The category of the message you want to output. See the CATEGORY_*
+@@ -3675,16 +3657,19 @@ CommandController.prototype = {
   *        The Web Console instance that owns this connection proxy.
   */
  function WebConsoleConnectionProxy(aWebConsole)
@@ -501,6 +777,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    this._onPageError = this._onPageError.bind(this);
    this._onConsoleAPICall = this._onConsoleAPICall.bind(this);
 +  this._onNetworkActivity = this._onNetworkActivity.bind(this);
++  this._onFileActivity = this._onFileActivity.bind(this);
++  this._onLocationChange = this._onLocationChange.bind(this);
  }
  
  WebConsoleConnectionProxy.prototype = {
@@ -509,7 +787,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @see WebConsoleFrame
     * @type object
-@@ -3733,19 +3735,21 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3733,23 +3718,29 @@ WebConsoleConnectionProxy.prototype = {
     */
    connect: function WCCP_connect(aCallback)
    {
@@ -519,20 +797,28 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      client.addListener("pageError", this._onPageError);
      client.addListener("consoleAPICall", this._onConsoleAPICall);
 +    client.addListener("networkActivity", this._onNetworkActivity);
++    client.addListener("fileActivity", this._onFileActivity);
++    client.addListener("locationChange", this._onLocationChange);
  
      let listeners = [WebConsoleClient.prototype.LISTENERS.PageError,
 -                     WebConsoleClient.prototype.LISTENERS.ConsoleAPI];
 +                     WebConsoleClient.prototype.LISTENERS.ConsoleAPI,
-+                     WebConsoleClient.prototype.LISTENERS.NetworkActivity];
++                     WebConsoleClient.prototype.LISTENERS.NetworkActivity,
++                     WebConsoleClient.prototype.LISTENERS.FileActivity];
  
      client.connect(function(aType, aTraits) {
        client.listTabs(function(aResponse) {
          let tab = aResponse.tabs[aResponse.selected];
++        this.owner.onLocationChange(tab.url, tab.title);
          client.attachConsole(tab.consoleActor, listeners,
                               this._onAttachConsole.bind(this, aCallback));
        }.bind(this));
      }.bind(this));
-@@ -3835,16 +3839,31 @@ WebConsoleConnectionProxy.prototype = {
+   },
+ 
+   /**
+    * The "attachConsole" response handler.
+@@ -3835,16 +3826,61 @@ WebConsoleConnectionProxy.prototype = {
     *        The message received from the server.
     */
    _onConsoleAPICall: function WCCP__onConsoleAPICall(aType, aPacket)
@@ -556,6 +842,36 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  },
 +
 +  /**
++   * The "fileActivity" message type handler. We redirect any message to
++   * the UI for displaying.
++   *
++   * @private
++   * @param string aType
++   *        Message type.
++   * @param object aPacket
++   *        The message received from the server.
++   */
++  _onFileActivity: function WCCP__onFileActivity(aType, aPacket)
++  {
++    this.owner.handleFileActivity(aPacket.uri);
++  },
++
++  /**
++   * The "locationChange" message type handler. We redirect any message to
++   * the UI for displaying.
++   *
++   * @private
++   * @param string aType
++   *        Message type.
++   * @param object aPacket
++   *        The message received from the server.
++   */
++  _onLocationChange: function WCCP__onLocationChange(aType, aPacket)
++  {
++    this.owner.onLocationChange(aPacket.uri, aPacket.title);
++  },
++
++  /**
     * Release an object actor.
     *
     * @param string aActor
@@ -564,7 +880,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    releaseActor: function WCCP_releaseActor(aActor)
    {
      if (this.client) {
-@@ -3858,16 +3877,17 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3858,16 +3894,19 @@ WebConsoleConnectionProxy.prototype = {
    disconnect: function WCCP_disconnect()
    {
      if (!this.client) {
@@ -574,6 +890,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.client.removeListener("pageError", this._onPageError);
      this.client.removeListener("consoleAPICall", this._onConsoleAPICall);
 +    this.client.removeListener("networkActivity", this._onNetworkActivity);
++    this.client.removeListener("fileActivity", this._onFileActivity);
++    this.client.removeListener("locationChange", this._onLocationChange);
      this.client.close();
  
      this.client = null;
@@ -585,7 +903,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
-@@ -161,16 +161,17 @@ const ThreadStateTypes = {
+@@ -161,16 +161,19 @@ const ThreadStateTypes = {
  };
  
  /**
@@ -594,6 +912,8 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   */
  const UnsolicitedNotifications = {
    "consoleAPICall": "consoleAPICall",
++  "fileActivity": "fileActivity",
++  "locationChange": "locationChange",
 +  "networkActivity": "networkActivity",
    "newScript": "newScript",
    "pageError": "pageError",
@@ -603,7 +923,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  
  /**
   * Set of pause types that are sent by the server and not as an immediate
-@@ -552,16 +553,17 @@ function WebConsoleClient(aDebuggerClien
+@@ -552,16 +555,18 @@ function WebConsoleClient(aDebuggerClien
    this._actor = aActor;
    this._client = aDebuggerClient;
  }
@@ -613,6 +933,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
      PageError: "PageError",
      ConsoleAPI: "ConsoleAPI",
 +    NetworkActivity: "NetworkActivity",
++    FileActivity: "FileActivity",
    },
  
    CACHED_MESSAGES: {
@@ -621,7 +942,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
    },
  
    /**
-@@ -652,16 +654,50 @@ WebConsoleClient.prototype = {
+@@ -652,16 +657,50 @@ WebConsoleClient.prototype = {
      let packet = {
        to: this._actor,
        type: "clearMessagesCache",
@@ -675,9 +996,18 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
-@@ -25,22 +25,26 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+@@ -19,28 +19,36 @@ XPCOMUtils.defineLazyModuleGetter(this, 
                                    "resource://gre/modules/devtools/WebConsoleUtils.jsm");
  
+ XPCOMUtils.defineLazyModuleGetter(this, "PageErrorListener",
+                                   "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "ConsoleAPIListener",
+                                   "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "ConsoleProgressListener",
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
++
  XPCOMUtils.defineLazyModuleGetter(this, "JSTermHelpers",
                                    "resource://gre/modules/devtools/WebConsoleUtils.jsm");
  
@@ -694,6 +1024,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    PageError: "PageError",
    ConsoleAPI: "ConsoleAPI",
 +  NetworkActivity: "NetworkActivity",
++  FileActivity: "FileActivity",
  };
  
  const CACHED_MESSAGES = {
@@ -702,7 +1033,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  };
  
  /**
-@@ -57,16 +61,17 @@ function WebConsoleActor(aConnection, aB
+@@ -57,16 +65,21 @@ function WebConsoleActor(aConnection, aB
  {
    this.conn = aConnection;
    this._browser = aBrowser;
@@ -712,6 +1043,10 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    this._objectActors = new Map();
 +  this._prefs = {};
++
++  this.consoleProgressListener = new ConsoleProgressListener(this._browser, this);
++  this.consoleProgressListener.startMonitor(this.consoleProgressListener.
++                                            MONITOR_LOCATION_CHANGE);
  }
  
  WebConsoleActor.prototype =
@@ -720,7 +1055,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     * The xul:browser we work with.
     * @private
     * @type nsIDOMElement
-@@ -85,16 +90,23 @@ WebConsoleActor.prototype =
+@@ -85,16 +98,23 @@ WebConsoleActor.prototype =
    /**
     * Map between objects and their WebConsoleObjectActor wrappers.
     * @private
@@ -744,7 +1079,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    /**
     * The content window we work with.
     * @type nsIDOMWindow
-@@ -107,16 +119,28 @@ WebConsoleActor.prototype =
+@@ -107,16 +127,33 @@ WebConsoleActor.prototype =
     */
    pageErrorListener: null,
  
@@ -757,6 +1092,11 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   * The NetworkMonitor instance.
 +   */
 +  networkMonitor: null,
++
++  /**
++   * The ConsoleProgressListener instance.
++   */
++  consoleProgressListener: null,
 +
 +  /**
 +   * Getter for the NetworkMonitor.saveRequestAndResponseBodies preference.
@@ -773,7 +1113,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    },
  
    /**
-@@ -145,16 +169,20 @@ WebConsoleActor.prototype =
+@@ -145,16 +182,24 @@ WebConsoleActor.prototype =
      if (this.pageErrorListener) {
        this.pageErrorListener.destroy();
        this.pageErrorListener = null;
@@ -786,6 +1126,10 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      this.networkMonitor.destroy();
 +      this.networkMonitor = null;
 +    }
++    if (this.consoleProgressListener) {
++      this.consoleProgressListener.destroy();
++      this.consoleProgressListener = null;
++    }
      this.conn.removeActorPool(this._objectActorsPool);
      this._objectActorsPool = null;
      this._objectActors = null;
@@ -794,7 +1138,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    /**
     * Create a grip for the given value. If the value is an object,
-@@ -210,16 +238,20 @@ WebConsoleActor.prototype =
+@@ -210,16 +255,20 @@ WebConsoleActor.prototype =
     *        The WebConsoleObjectActor instance you want to release.
     */
    releaseObject: function WCA_releaseObject(aActor)
@@ -815,7 +1159,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     * @return object
     *         The response object which holds the startedListeners array.
     */
-@@ -241,16 +273,24 @@ WebConsoleActor.prototype =
+@@ -241,16 +290,29 @@ WebConsoleActor.prototype =
          case LISTENERS.ConsoleAPI:
            if (!this.consoleAPIListener) {
              this.consoleAPIListener =
@@ -832,6 +1176,11 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +          }
 +          startedListeners.push(listener);
 +          break;
++        case LISTENERS.FileActivity:
++          this.consoleProgressListener.startMonitor(this.consoleProgressListener.
++                                                    MONITOR_FILE_ACTIVITY);
++          startedListeners.push(listener);
++          break;
        }
      }
      return {
@@ -840,7 +1189,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      };
    },
  
-@@ -287,16 +327,23 @@ WebConsoleActor.prototype =
+@@ -287,16 +349,28 @@ WebConsoleActor.prototype =
            break;
          case LISTENERS.ConsoleAPI:
            if (this.consoleAPIListener) {
@@ -856,6 +1205,11 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +          }
 +          stoppedListeners.push(listener);
 +          break;
++        case LISTENERS.FileActivity:
++          this.consoleProgressListener.stopMonitor(this.consoleProgressListener.
++                                                   MONITOR_FILE_ACTIVITY);
++          stoppedListeners.push(listener);
++          break;
        }
      }
  
@@ -864,7 +1218,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    /**
     * Handler for the "getCachedMessages" request. This method sends the cached
-@@ -420,16 +467,55 @@ WebConsoleActor.prototype =
+@@ -420,16 +494,55 @@ WebConsoleActor.prototype =
    {
      // TODO: Bug 717611 - Web Console clear button does not clear cached errors
      let windowId = WebConsoleUtils.getInnerWindowId(this.window);
@@ -920,7 +1274,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      this._sandboxLocation = this.window.location;
      this.sandbox = new Cu.Sandbox(this.window, {
        sandboxPrototype: this.window,
-@@ -484,20 +570,25 @@ WebConsoleActor.prototype =
+@@ -484,20 +597,25 @@ WebConsoleActor.prototype =
      }
      if ($$) {
        this.sandbox.$$ = $$;
@@ -946,7 +1300,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      let packet = {
        from: this.actorID,
        type: "pageError",
-@@ -505,30 +596,57 @@ WebConsoleActor.prototype =
+@@ -505,30 +623,97 @@ WebConsoleActor.prototype =
      };
      this.conn.send(packet);
    },
@@ -970,15 +1324,16 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    },
  
    /**
-+   * Handler for network activity. This method sends the object to the remote
-+   * Web Console client.
++   * Handler for network activity. This method sends the network request and
++   * response information to the remote Web Console client.
 +   *
 +   * @see NetworkMonitor
 +   * @param object aLog
 +   *        The network request and response object, in a similar format to that
 +   *        of a HAR log.
 +   * @param object aMeta
-+   *        The network request information.
++   *        The metadata about network logging - was the request/response body
++   *        discarded? and other information.
 +   */
 +  onNetworkActivity: function WCA_onNetworkActivity(aLog, aMeta)
 +  {
@@ -987,6 +1342,45 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      type: "networkActivity",
 +      meta: aMeta,
 +      log: aLog,
++    };
++    this.conn.send(packet);
++  },
++
++  /**
++   * Handler for file activity. This method sends the file request information
++   * to the remote Web Console client.
++   *
++   * @see ConsoleProgressListener
++   * @param string aFileURI
++   *        The requested file URI.
++   */
++  onFileActivity: function WCA_onFileActivity(aFileURI)
++  {
++    let packet = {
++      from: this.actorID,
++      type: "fileActivity",
++      uri: aFileURI,
++    };
++    this.conn.send(packet);
++  },
++
++  /**
++   * Handler for location changes. This method sends the new browser location
++   * to the remote Web Console client.
++   *
++   * @see ConsoleProgressListener
++   * @param string aURI
++   *        The new browser URI.
++   * @param string aTitle
++   *        The new page title URI.
++   */
++  onLocationChange: function WCA_onLocationChange(aURI, aTitle)
++  {
++    let packet = {
++      from: this.actorID,
++      type: "locationChange",
++      uri: aURI,
++      title: aTitle,
 +    };
 +    this.conn.send(packet);
 +  },
@@ -1004,7 +1398,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     * @return object
     *         The object that can be sent to the remote client.
     */
-@@ -592,16 +710,18 @@ WebConsoleActor.prototype =
+@@ -592,16 +777,18 @@ WebConsoleActor.prototype =
  WebConsoleActor.prototype.requestTypes =
  {
    getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
@@ -1029,7 +1423,7 @@ rename to toolkit/devtools/webconsole/NetworkHelper.jsm
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -13,18 +13,29 @@ const Cu = Components.utils;
+@@ -13,18 +13,30 @@ const Cu = Components.utils;
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "Services",
@@ -1051,7 +1445,8 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  var EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider", "JSTermHelpers",
 -                        "PageErrorListener", "ConsoleAPIListener"];
 +                        "PageErrorListener", "ConsoleAPIListener",
-+                        "NetworkResponseListener", "NetworkMonitor"];
++                        "NetworkResponseListener", "NetworkMonitor",
++                        "ConsoleProgressListener"];
  
  // Match the function name from the result of toString() or toSource().
  //
@@ -1060,7 +1455,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  // function foobar2(a) { ...
  // function() { ...
  const REGEX_MATCH_FUNCTION_NAME = /^\(?function\s+([^(\s]+)\s*\(/;
-@@ -1854,8 +1865,975 @@ function JSTermHelpers(aOwner)
+@@ -1854,8 +1866,1202 @@ function JSTermHelpers(aOwner)
     * @return void
     */
    aOwner.sandbox.print = function JSTH_print(aString)
@@ -2030,6 +2425,233 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +_global.NetworkMonitor = NetworkMonitor;
 +_global.NetworkResponseListener = NetworkResponseListener;
 +})(this, WebConsoleUtils);
++
++
++/**
++ * A WebProgressListener that listens for location changes.
++ *
++ * This progress listener is used to track file loads and other kinds of
++ * location changes.
++ *
++ * @constructor
++ * @param object aBrowser
++ *        The xul:browser for which we need to track location changes.
++ * @param object aOwner
++ *        The listener owner which needs to implement two methods:
++ *        - onFileActivity(aFileURI)
++ *        - onLocationChange(aTabURI, aPageTitle)
++ */
++function ConsoleProgressListener(aBrowser, aOwner)
++{
++  this.browser = aBrowser;
++  this.owner = aOwner;
++}
++
++ConsoleProgressListener.prototype = {
++  /**
++   * Constant used for startMonitor()/stopMonitor() that tells you want to
++   * monitor file loads.
++   */
++  MONITOR_FILE_ACTIVITY: 1,
++
++  /**
++   * Constant used for startMonitor()/stopMonitor() that tells you want to
++   * monitor page location changes.
++   */
++  MONITOR_LOCATION_CHANGE: 2,
++
++  /**
++   * Tells if you want to monitor file activity.
++   * @private
++   * @type boolean
++   */
++  _fileActivity: false,
++
++  /**
++   * Tells if you want to monitor location changes.
++   * @private
++   * @type boolean
++   */
++  _locationChange: false,
++
++  /**
++   * Tells if the console progress listener is initialized or not.
++   * @private
++   * @type boolean
++   */
++  _initialized: false,
++
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
++                                         Ci.nsISupportsWeakReference]),
++
++  /**
++   * Initialize the ConsoleProgressListener.
++   * @private
++   */
++  _init: function CPL__init()
++  {
++    if (this._initialized) {
++      return;
++    }
++
++    this._initialized = true;
++    let webProgress = this.browser.docShell.QueryInterface(Ci.nsIWebProgress);
++    webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_ALL);
++  },
++
++  /**
++   * Start a monitor/tracker related to the current nsIWebProgressListener
++   * instance.
++   *
++   * @param number aMonitor
++   *        Tells what you want to track. Available constants:
++   *        - this.MONITOR_FILE_ACTIVITY
++   *          Track file loads.
++   *        - this.MONITOR_LOCATION_CHANGE
++   *          Track location changes for the top window.
++   */
++  startMonitor: function CPL_startMonitor(aMonitor)
++  {
++    switch (aMonitor) {
++      case this.MONITOR_FILE_ACTIVITY:
++        this._fileActivity = true;
++        break;
++      case this.MONITOR_LOCATION_CHANGE:
++        this._locationChange = true;
++        break;
++      default:
++        throw new Error("ConsoleProgressListener: unknown monitor type " +
++                        aMonitor + "!");
++    }
++    this._init();
++  },
++
++  /**
++   * Stop a monitor.
++   *
++   * @param number aMonitor
++   *        Tells what you want to stop tracking. See this.startMonitor() for
++   *        the list of constants.
++   */
++  stopMonitor: function CPL_stopMonitor(aMonitor)
++  {
++    switch (aMonitor) {
++      case this.MONITOR_FILE_ACTIVITY:
++        this._fileActivity = false;
++        break;
++      case this.MONITOR_LOCATION_CHANGE:
++        this._locationChange = false;
++        break;
++      default:
++        throw new Error("ConsoleProgressListener: unknown monitor type " +
++                        aMonitor + "!");
++    }
++
++    if (!this._fileActivity && !this._locationChange) {
++      this.destroy();
++    }
++  },
++
++  onStateChange:
++  function CPL_onStateChange(aProgress, aRequest, aState, aStatus)
++  {
++    if (!this.owner) {
++      return;
++    }
++
++    if (this._fileActivity) {
++      this._checkFileActivity(aProgress, aRequest, aState, aStatus);
++    }
++
++    if (this._locationChange) {
++      this._checkLocationChange(aProgress, aRequest, aState, aStatus);
++    }
++  },
++
++  /**
++   * Check if there is any file load, given the arguments of
++   * nsIWebProgressListener.onStateChange. If the state change tells that a file
++   * URI has been loaded, then the remote Web Console instance is notified.
++   * @private
++   */
++  _checkFileActivity:
++  function CPL__checkFileActivity(aProgress, aRequest, aState, aStatus)
++  {
++    if (!(aState & Ci.nsIWebProgressListener.STATE_START)) {
++      return;
++    }
++
++    let uri = null;
++    if (aRequest instanceof Ci.imgIRequest) {
++      let imgIRequest = aRequest.QueryInterface(Ci.imgIRequest);
++      uri = imgIRequest.URI;
++    }
++    else if (aRequest instanceof Ci.nsIChannel) {
++      let nsIChannel = aRequest.QueryInterface(Ci.nsIChannel);
++      uri = nsIChannel.URI;
++    }
++
++    if (!uri || !uri.schemeIs("file") && !uri.schemeIs("ftp")) {
++      return;
++    }
++
++    this.owner.onFileActivity(uri.spec);
++  },
++
++  /**
++   * Check if the current window.top location is changing, given the arguments
++   * of nsIWebProgressListener.onStateChange. If that is the case, the remote
++   * Web Console instance is notified.
++   * @private
++   */
++  _checkLocationChange:
++  function CPL__checkLocationChange(aProgress, aRequest, aState, aStatus)
++  {
++    let isStart = aState & Ci.nsIWebProgressListener.STATE_START;
++    let isStop = aState & Ci.nsIWebProgressListener.STATE_STOP;
++    let isNetwork = aState & Ci.nsIWebProgressListener.STATE_IS_NETWORK;
++    let isWindow = aState & Ci.nsIWebProgressListener.STATE_IS_WINDOW;
++
++    // Skip non-interesting states.
++    if (!isNetwork || !isWindow ||
++        aProgress.DOMWindow != this.browser.contentWindow) {
++      return;
++    }
++
++    if (isStart && aRequest instanceof Ci.nsIChannel) {
++      this.owner.onLocationChange(aRequest.URI.spec, "");
++    }
++    else if (isStop) {
++      this.owner.onLocationChange(this.browser.contentWindow.location.href,
++                                  this.browser.contentWindow.document.title);
++    }
++  },
++
++  onLocationChange: function() {},
++  onStatusChange: function() {},
++  onProgressChange: function() {},
++  onSecurityChange: function() {},
++
++  /**
++   * Destroy the ConsoleProgressListener.
++   */
++  destroy: function CPL_destroy()
++  {
++    if (!this._initialized) {
++      return;
++    }
++
++    this._initialized = false;
++    this._fileActivity = false;
++    this._locationChange = false;
++
++    let webProgress = this.browser.docShell.QueryInterface(Ci.nsIWebProgress);
++    webProgress.removeProgressListener(this);
++
++    this.browser = null;
++    this.owner = null;
++  },
++};
 +
 +function gSequenceId()
 +{
