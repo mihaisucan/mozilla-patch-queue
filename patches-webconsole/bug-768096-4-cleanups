@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent a6bee4032cd9753f65bb4bcd5853efb3138165cf
+# Parent de8dbbbcb4ff2510d781f1369c1fa4ae85839041
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1346965497 -10800
+# Date 1347043808 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 4: cleanups
 
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
@@ -64,7 +64,27 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
   * to using panels.
   */
  XPCOMUtils.defineLazyGetter(this, "isLinux", function () {
-@@ -81,19 +81,16 @@ const NOTIFICATIONS = {
+@@ -49,17 +49,18 @@ function DeveloperToolbar(aChromeWindow,
+ 
+   this._element = aToolbarElement;
+   this._element.hidden = true;
+   this._doc = this._element.ownerDocument;
+ 
+   this._lastState = NOTIFICATIONS.HIDE;
+   this._pendingShowCallback = undefined;
+   this._pendingHide = false;
+-  this._errorsCount = {};
++  this._errorsCount = Object.create(null);
++  this._errorListeners = Object.create(null);
+   this._webConsoleButton = this._doc
+                            .getElementById("developer-toolbar-webconsole");
+ 
+   try {
+     CmdCommands.refreshAutoCommands(aChromeWindow);
+   }
+   catch (ex) {
+     console.error(ex);
+@@ -81,19 +82,16 @@ const NOTIFICATIONS = {
  };
  
  /**
@@ -84,39 +104,9 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
      return !this._element.hidden;
    },
    enumerable: true
-@@ -212,16 +209,21 @@ DeveloperToolbar.prototype._onload = fun
-   this.display.onVisibilityChange.add(this.tooltipPanel._visibilityChanged, this.tooltipPanel);
-   this.display.onOutput.add(this.outputPanel._outputChanged, this.outputPanel);
- 
-   this._chromeWindow.getBrowser().tabContainer.addEventListener("TabSelect", this, false);
-   this._chromeWindow.getBrowser().tabContainer.addEventListener("TabClose", this, false);
-   this._chromeWindow.getBrowser().addEventListener("load", this, true);
-   this._chromeWindow.getBrowser().addEventListener("beforeunload", this, true);
- 
-+  this._pageErrorListener = new PageErrorListener(contentDocument.defaultView, {
-+    onPageError: this._onPageError.bind(this),
-+  });
-+  this._pageErrorListener.init();
-+
-   this._initErrorsCount(this._chromeWindow.getBrowser().selectedTab);
- 
-   this._element.hidden = false;
- 
-   if (aFocus) {
-     this._input.focus();
-   }
- 
-@@ -250,37 +252,28 @@ DeveloperToolbar.prototype._onload = fun
-  * tab.
-  *
-  * @private
-  * @param nsIDOMNode aTab the xul:tab for which you want to track the number of
-  * errors.
-  */
+@@ -256,31 +254,28 @@ DeveloperToolbar.prototype._onload = fun
  DeveloperToolbar.prototype._initErrorsCount = function DT__initErrorsCount(aTab)
  {
-+  this._pageErrorListener.window = aTab.linkedBrowser.contentWindow;
-+
    let tabId = aTab.linkedPanel;
    if (tabId in this._errorsCount) {
      this._updateErrorsCount();
@@ -125,15 +115,21 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
  
 -  let messageManager = aTab.linkedBrowser.messageManager;
 -  messageManager.loadFrameScript(WEBCONSOLE_CONTENT_SCRIPT_URL, true);
-+  let messages = this._pageErrorListener.getCachedMessages();
-+  messages.forEach(this._onPageError, this);
++  let window = aTab.linkedBrowser.contentWindow;
++  let listener = new PageErrorListener(window, {
++    onPageError: this._onPageError.bind(this, tabId),
++  });
++  listener.init();
  
++  this._errorListeners[tabId] = listener;
    this._errorsCount[tabId] = 0;
--
+ 
 -  this._contentMessageListeners.forEach(function(aName) {
 -    messageManager.addMessageListener(aName, this);
 -  }, this);
--
++  let messages = listener.getCachedMessages();
++  messages.forEach(this._onPageError.bind(this, tabId));
+ 
 -  let message = {
 -    features: ["PageError"],
 -    cachedMessages: ["PageError"],
@@ -148,7 +144,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
   * tab.
   *
   * @private
-@@ -290,23 +283,16 @@ DeveloperToolbar.prototype._initErrorsCo
+@@ -290,24 +285,20 @@ DeveloperToolbar.prototype._initErrorsCo
  DeveloperToolbar.prototype._stopErrorsCount = function DT__stopErrorsCount(aTab)
  {
    let tabId = aTab.linkedPanel;
@@ -158,13 +154,16 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
    }
  
 -  this.sendMessageToTab(aTab, "WebConsole:Destroy", {});
--
++  this._errorListeners[tabId].destroy();
++  delete this._errorListeners[tabId];
++  delete this._errorsCount[tabId];
+ 
 -  let messageManager = aTab.linkedBrowser.messageManager;
 -  this._contentMessageListeners.forEach(function(aName) {
 -    messageManager.removeMessageListener(aName, this);
 -  }, this);
 -
-   delete this._errorsCount[tabId];
+-  delete this._errorsCount[tabId];
    this._updateErrorsCount();
  };
  
@@ -172,27 +171,8 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
   * Hide the developer toolbar.
   */
  DeveloperToolbar.prototype.hide = function DT_hide()
-@@ -337,16 +323,19 @@ DeveloperToolbar.prototype.destroy = fun
  {
-   this._chromeWindow.getBrowser().tabContainer.removeEventListener("TabSelect", this, false);
-   this._chromeWindow.getBrowser().removeEventListener("load", this, true); 
-   this._chromeWindow.getBrowser().removeEventListener("beforeunload", this, true);
- 
-   let tabs = this._chromeWindow.getBrowser().tabs;
-   Array.prototype.forEach.call(tabs, this._stopErrorsCount, this);
- 
-+  this._pageErrorListener.destroy();
-+  this._pageErrorListener = null;
-+
-   this.display.focusManager.removeMonitoredElement(this.outputPanel._frame);
-   this.display.focusManager.removeMonitoredElement(this._element);
- 
-   this.display.onVisibilityChange.remove(this.outputPanel._visibilityChanged, this.outputPanel);
-   this.display.onVisibilityChange.remove(this.tooltipPanel._visibilityChanged, this.tooltipPanel);
-   this.display.onOutput.remove(this.outputPanel._outputChanged, this.outputPanel);
-   this.display.destroy();
-   this.outputPanel.destroy();
-@@ -405,83 +394,37 @@ DeveloperToolbar.prototype.handleEvent =
+@@ -405,83 +396,36 @@ DeveloperToolbar.prototype.handleEvent =
      this._stopErrorsCount(aEvent.target);
    }
    else if (aEvent.type == "beforeunload") {
@@ -255,15 +235,14 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
 + * method counts the JavaScript exceptions received and CSS errors/warnings.
   *
   * @private
-- * @param string aTabId the ID of the tab from where the page error comes.
+  * @param string aTabId the ID of the tab from where the page error comes.
 - * @param object aPageError the page error object received from the content
 - * process.
 + * @param object aPageError the page error object received from the
 + * PageErrorListener.
   */
  DeveloperToolbar.prototype._onPageError =
--function DT__onPageError(aTabId, aPageError)
-+function DT__onPageError(aPageError)
+ function DT__onPageError(aTabId, aPageError)
  {
    if (aPageError.category == "CSS Parser" ||
        aPageError.category == "CSS Loader" ||
@@ -272,11 +251,8 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
      return; // just a CSS or JS warning
    }
  
--  this._errorsCount[aTabId]++;
-+  let tabId = this._chromeWindow.getBrowser().selectedTab.linkedPanel;
-+  this._errorsCount[tabId]++;
-+
-+  this._updateErrorsCount(tabId);
+   this._errorsCount[aTabId]++;
++  this._updateErrorsCount(aTabId);
  };
  
  /**
@@ -285,6 +261,33 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
   *
   * @private
   * @param nsIDOMEvent aEvent the beforeunload DOM event.
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+--- a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+@@ -42,18 +42,21 @@ function test() {
+       value: 3,
+       success: addErrors,
+       failure: finish,
+     });
+   }
+ 
+   function addErrors() {
+     expectUncaughtException();
+-    let button = content.document.querySelector("button");
+-    EventUtils.synthesizeMouse(button, 2, 2, {}, content);
++
++    waitForFocus(function() {
++      let button = content.document.querySelector("button");
++      EventUtils.synthesizeMouse(button, 2, 2, {}, content);
++    }, content);
+ 
+     waitForValue({
+       name: "button shows one more error after click in page",
+       validator: getErrorsCount,
+       value: 4,
+       success: function() {
+         ignoreAllUncaughtExceptions();
+         addTab(TEST_URI, onOpenSecondTab);
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 deleted file mode 100644
 --- a/browser/devtools/webconsole/HUDService-content.js
@@ -3086,6 +3089,54 @@ diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_ob
  }
  
  function performTest(hud)
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js b/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js
+@@ -32,19 +32,19 @@ function test() {
+   let jar = getJar(getRootDirectory(gTestPath));
+   let dir = jar ?
+             extractJarToTmp(jar) :
+             getChromeDir(getResolvedURI(gTestPath));
+   dir.append(TEST_FILE);
+ 
+   let uri = Services.io.newFileURI(dir);
+ 
+-  addTab(uri.spec);
++  addTab("data:text/html;charset=utf8,<p>test file URI");
+   browser.addEventListener("load", function tabLoad() {
+     browser.removeEventListener("load", tabLoad, true);
+     openConsole(null, function(aHud) {
+       hud = aHud;
+       hud.jsterm.clearOutput();
+       browser.addEventListener("load", tabReload, true);
+-      content.location.reload();
++      content.location = uri.spec;
+     });
+   }, true);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+@@ -33,17 +33,18 @@ function consoleOpened(aHud) {
+     popup._panel.removeEventListener("popupshown", onShown, false);
+ 
+     ok(popup.isOpen, "popup is open");
+ 
+     // |props| values, and the following properties:
+     // __defineGetter__  __defineSetter__ __lookupGetter__ __lookupSetter__
+     // constructor hasOwnProperty isPrototypeOf propertyIsEnumerable
+     // toLocaleString toSource toString unwatch valueOf watch.
+-    let props = WCU.namesAndValuesOf(content.wrappedJSObject.document.body);
++    let props = WCU.inspectObject(content.wrappedJSObject.document.body,
++                                  function() { });
+     is(popup.itemCount, 14 + props.length, "popup.itemCount is correct");
+ 
+     popup._panel.addEventListener("popuphidden", autocompletePopupHidden, false);
+ 
+     EventUtils.synthesizeKey("VK_ESCAPE", {});
+   }, false);
+ 
+   jsterm.setInputValue("document.body");
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_737873_mixedcontent.js b/browser/devtools/webconsole/test/browser_webconsole_bug_737873_mixedcontent.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_737873_mixedcontent.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_737873_mixedcontent.js
@@ -3148,12 +3199,12 @@ diff --git a/browser/devtools/webconsole/test/test-bug-737873-mixedcontent.html 
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -184,16 +184,20 @@ function WebConsoleFrame(aWebConsoleOwne
+@@ -183,24 +183,27 @@ function WebConsoleFrame(aWebConsoleOwne
+ 
    this._cssNodes = {};
    this._outputQueue = [];
    this._pruneCategoriesQueue = {};
    this._networkRequests = {};
-   this._objectActors = {};
  
    this._toggleFilter = this._toggleFilter.bind(this);
    this._onPositionConsoleCommand = this._onPositionConsoleCommand.bind(this);
@@ -3168,8 +3219,16 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    this.jsterm = new JSTerm(this);
    this.jsterm.inputNode.focus();
+-
+   this._initConnection();
+ }
  
-@@ -262,16 +266,25 @@ WebConsoleFrame.prototype = {
+ WebConsoleFrame.prototype = {
+   /**
+    * The WebConsole instance that owns this frame.
+    * @see HUDService.jsm::WebConsole
+    * @type object
+@@ -261,16 +264,25 @@ WebConsoleFrame.prototype = {
     * tests.
     *
     * @private
@@ -3195,7 +3254,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Preferences for filtering messages by type.
-@@ -1576,58 +1589,54 @@ WebConsoleFrame.prototype = {
+@@ -1566,58 +1578,58 @@ WebConsoleFrame.prototype = {
      if (!this._outputQueue.length) {
        // If the queue is empty we consider that now was the last output flush.
        // This avoid an immediate output flush when the timer executes.
@@ -3222,6 +3281,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    _flushMessageQueue: function WCF__flushMessageQueue()
    {
++    if (!this._outputTimer) {
++      return;
++    }
++
      let timeSinceFlush = Date.now() - this._lastOutputFlush;
      if (this._outputQueue.length > MESSAGES_IN_INTERVAL &&
          timeSinceFlush < THROTTLE_UPDATES) {
@@ -3259,7 +3322,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      let scrolledToBottom = Utils.isOutputScrolledToBottom(outputNode);
      let scrollBox = outputNode.scrollBoxObject.element;
  
-@@ -1675,29 +1684,39 @@ WebConsoleFrame.prototype = {
+@@ -1665,29 +1677,43 @@ WebConsoleFrame.prototype = {
               oldScrollHeight != scrollBox.scrollHeight) {
        // If there were pruned messages and if scroll is not at the bottom, then
        // we need to adjust the scroll location.
@@ -3288,6 +3351,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   */
 +  _initOutputTimer: function WCF__initOutputTimer()
 +  {
++    if (!this._outputTimer) {
++      return;
++    }
++
 +    this._outputTimerInitialized = true;
 +    this._outputTimer.initWithCallback(this._flushMessageQueue,
 +                                       OUTPUT_INTERVAL,
@@ -3303,96 +3370,565 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param array aItem
     *        An item from the output queue - this item represents a message.
     * @return nsIDOMElement|undefined
-@@ -2417,16 +2436,21 @@ WebConsoleFrame.prototype = {
+@@ -2369,32 +2395,50 @@ WebConsoleFrame.prototype = {
+    * Release an object actor.
+    *
+    * @private
+    * @param string aActor
+    *        The object actor ID you want to release.
+    */
+   _releaseObject: function WCF__releaseObject(aActor)
+   {
+-    this.proxy.releaseActor(aActor);
++    if (this.proxy) {
++      this.proxy.releaseActor(aActor);
++    }
+   },
+ 
    /**
     * Destroy the HUD object. Call this method to avoid memory leaks when the Web
     * Console is closed.
     */
    destroy: function WCF_destroy()
    {
-     Object.keys(this._objectActors).forEach(this._releaseObject, this);
- 
++    this._cssNodes = {};
++    this._outputQueue = [];
++    this._pruneCategoriesQueue = {};
++    this._networkRequests = {};
++
 +    if (this._outputTimerInitialized) {
 +      this._outputTimerInitialized = false;
 +      this._outputTimer.cancel();
 +    }
++    this._outputTimer = null;
 +
      if (this.proxy) {
        this.proxy.disconnect();
++      this.proxy = null;
      }
  
      if (this.jsterm) {
        this.jsterm.destroy();
++      this.jsterm = null;
      }
++
++    this._commandController = null;
++    this.owner = null;
    },
-diff --git a/toolkit/devtools/webconsole/NetworkHelper.jsm b/toolkit/devtools/webconsole/NetworkHelper.jsm
---- a/toolkit/devtools/webconsole/NetworkHelper.jsm
-+++ b/toolkit/devtools/webconsole/NetworkHelper.jsm
-@@ -172,18 +172,34 @@ var NetworkHelper =
-    * @param string aCharset
-    * @returns string or null
-    *          Returns the posted string if it was possible to read from
-    *          aDocShell otherwise null.
+ };
+ 
+ /**
+  * Create a JSTerminal (a JavaScript command line). This is attached to an
+  * existing HeadsUpDisplay (a Web Console instance). This code is responsible
+  * with handling command line input, code evaluation and result output.
+  *
+@@ -2500,16 +2544,20 @@ JSTerm.prototype = {
+    *        Optional function to invoke when the evaluation result is added to
+    *        the output.
+    * @param object aResponse
+    *        The message received from the server.
     */
-   readPostTextFromPage: function NH_readPostTextFromPage(aDocShell, aCharset)
+   _executeResultCallback:
+   function JST__executeResultCallback(aCallback, aResponse)
    {
-     let webNav = aDocShell.QueryInterface(Ci.nsIWebNavigation);
--    if (webNav instanceof Ci.nsIWebPageDescriptor) {
--      let descriptor = webNav.currentDescriptor;
-+    return this.readPostTextFromPageViaWebNav(webNav, aCharset);
-+  },
++    if (!this.hud) {
++      return;
++    }
++
+     let errorMessage = aResponse.errorMessage;
+     let result = aResponse.result;
+     let inspectable = result && typeof result == "object" && result.inspectable;
+     let helperResult = aResponse.helperResult;
+     let helperRawOutput = !!(helperResult || {}).rawOutput;
+     let resultString =
+       WebConsoleUtils.objectActorGripToString(result, !helperRawOutput);
+ 
+@@ -3417,20 +3465,23 @@ JSTerm.prototype = {
+    * Destroy the JSTerm object. Call this method to avoid memory leaks.
+    */
+   destroy: function JST_destroy()
+   {
+     this.clearCompletion();
+     this.clearOutput();
+ 
+     this.autocompletePopup.destroy();
++    this.autocompletePopup = null;
+ 
+     this.inputNode.removeEventListener("keypress", this._keyPress, false);
+     this.inputNode.removeEventListener("input", this._inputEventHandler, false);
+     this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
++
++    this.hud = null;
+   },
+ };
+ 
+ /**
+  * Utils: a collection of globally used functions.
+  */
+ var Utils = {
+   /**
+@@ -3635,16 +3686,24 @@ WebConsoleConnectionProxy.prototype = {
+    * The DebuggerClient object.
+    *
+    * @see DebuggerClient
+    * @type object
+    */
+   client: null,
+ 
+   /**
++   * The WebConsoleClient object.
++   *
++   * @see WebConsoleClient
++   * @type object
++   */
++  webConsoleClient: null,
 +
 +  /**
-+   * Reads the posted text from the page's cache, given an nsIWebNavigation
-+   * object.
-+   *
-+   * @param nsIWebNavigation aWebNav
-+   * @param string aCharset
-+   * @returns string or null
-+   *          Returns the posted string if it was possible to read from
-+   *          aWebNav, otherwise null.
-+   */
-+  readPostTextFromPageViaWebNav:
-+  function NH_readPostTextFromPageViaWebNav(aWebNav, aCharset)
-+  {
-+    if (aWebNav instanceof Ci.nsIWebPageDescriptor) {
-+      let descriptor = aWebNav.currentDescriptor;
+    * Tells if the connection was established.
+    * @type boolean
+    */
+   connected: false,
  
-       if (descriptor instanceof Ci.nsISHEntry && descriptor.postData &&
-           descriptor instanceof Ci.nsISeekableStream) {
-         descriptor.seek(NS_SEEK_SET, 0);
+   /**
+    * Tells if the window.console object of the remote web page is the native
+    * object or not.
+@@ -3762,76 +3821,88 @@ WebConsoleConnectionProxy.prototype = {
+    * @private
+    * @param string aType
+    *        Message type.
+    * @param object aPacket
+    *        The message received from the server.
+    */
+   _onPageError: function WCCP__onPageError(aType, aPacket)
+   {
+-    this.owner.handlePageError(aPacket.pageError);
++    if (this.owner) {
++      this.owner.handlePageError(aPacket.pageError);
++    }
+   },
  
-         return this.readAndConvertFromStream(descriptor, aCharset);
-       }
+   /**
+    * The "consoleAPICall" message type handler. We redirect any message to
+    * the UI for displaying.
+    *
+    * @private
+    * @param string aType
+    *        Message type.
+    * @param object aPacket
+    *        The message received from the server.
+    */
+   _onConsoleAPICall: function WCCP__onConsoleAPICall(aType, aPacket)
+   {
+-    this.owner.handleConsoleAPICall(aPacket.message);
++    if (this.owner) {
++      this.owner.handleConsoleAPICall(aPacket.message);
++    }
+   },
+ 
+   /**
+    * The "networkActivity" message type handler. We redirect any message to
+    * the UI for displaying.
+    *
+    * @private
+    * @param string aType
+    *        Message type.
+    * @param object aPacket
+    *        The message received from the server.
+    */
+   _onNetworkActivity: function WCCP__onNetworkActivity(aType, aPacket)
+   {
+-    this.owner.handleNetworkActivity(aPacket.log, aPacket.meta);
++    if (this.owner) {
++      this.owner.handleNetworkActivity(aPacket.log, aPacket.meta);
++    }
+   },
+ 
+   /**
+    * The "fileActivity" message type handler. We redirect any message to
+    * the UI for displaying.
+    *
+    * @private
+    * @param string aType
+    *        Message type.
+    * @param object aPacket
+    *        The message received from the server.
+    */
+   _onFileActivity: function WCCP__onFileActivity(aType, aPacket)
+   {
+-    this.owner.handleFileActivity(aPacket.uri);
++    if (this.owner) {
++      this.owner.handleFileActivity(aPacket.uri);
++    }
+   },
+ 
+   /**
+    * The "locationChange" message type handler. We redirect any message to
+    * the UI for displaying.
+    *
+    * @private
+    * @param string aType
+    *        Message type.
+    * @param object aPacket
+    *        The message received from the server.
+    */
+   _onLocationChange: function WCCP__onLocationChange(aType, aPacket)
+   {
++    if (!this.owner) {
++      return;
++    }
++
+     this.owner.onLocationChange(aPacket.uri, aPacket.title);
+     if (aPacket.state == "stop" && !aPacket.nativeConsoleAPI) {
+       this.owner.logWarningAboutReplacedAPI();
      }
+   },
+ 
+   /**
+    * Release an object actor.
+@@ -3860,16 +3931,17 @@ WebConsoleConnectionProxy.prototype = {
+     this.client.removeListener("networkActivity", this._onNetworkActivity);
+     this.client.removeListener("fileActivity", this._onFileActivity);
+     this.client.removeListener("locationChange", this._onLocationChange);
+     this.client.close();
+ 
+     this.client = null;
+     this.webConsoleClient = null;
+     this.connected = false;
++    this.owner = null;
+   },
+ };
+ 
+ function gSequenceId()
+ {
+   return gSequenceId.n++;
+ }
+ gSequenceId.n = 0;
+diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
+@@ -97,16 +97,30 @@ WebConsoleActor.prototype =
+   /**
+    * Web Console-related preferences.
+    * @private
+    * @type object
+    */
+   _prefs: null,
+ 
+   /**
++   * Tells the current page location associated to the sandbox. When the page
++   * location is changed, we recreate the sandbox.
++   * @private
++   * @type object
++   */
++  _sandboxLocation: null,
++
++  /**
++   * The JavaScript Sandbox where code is evaluated.
++   * @type object
++   */
++  sandbox: null,
++
++  /**
+    * The debugger server connection instance.
+    * @type object
+    */
+   conn: null,
+ 
+   /**
+    * The content window we work with.
+    * @type nsIDOMWindow
+@@ -184,16 +198,17 @@ WebConsoleActor.prototype =
+       this.networkMonitor = null;
+     }
+     if (this.consoleProgressListener) {
+       this.consoleProgressListener.destroy();
+       this.consoleProgressListener = null;
+     }
+     this.conn.removeActorPool(this._objectActorsPool);
+     this._objectActorsPool = null;
++    this._sandboxLocation = this.sandbox = null;
+     this.conn = this._browser = null;
+   },
+ 
+   /**
+    * Create a grip for the given value. If the value is an object,
+    * a WebConsoleObjectActor will be created.
+    *
+    * @param mixed aValue
+@@ -811,16 +826,17 @@ WebConsoleObjectActor.prototype =
+   },
+ 
+   /**
+    * Releases this actor from the pool.
+    */
+   release: function WCOA_release()
+   {
+     this.parent.releaseObject(this);
++    this.parent = this.obj = null;
+   },
+ 
+   /**
+    * Handle a protocol request to inspect the properties of the object.
+    *
+    * @return object
+    *         Message to send to the client. This holds the 'properties' property
+    *         - an array with a descriptor for each property in the object.
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -709,21 +709,21 @@ var WebConsoleUtils = {
+@@ -39,31 +39,17 @@ var EXPORTED_SYMBOLS = ["WebConsoleUtils
+ // (function foobar(a, b) { ...
+ // function foobar2(a) { ...
+ // function() { ...
+ const REGEX_MATCH_FUNCTION_NAME = /^\(?function\s+([^(\s]+)\s*\(/;
  
-     let result = { name: aProperty };
-     result.configurable = descriptor.configurable;
-     result.enumerable = descriptor.enumerable;
-     result.writable = descriptor.writable;
-     if (descriptor.value !== undefined) {
-       result.value = this.createValueGrip(descriptor.value, aObjectWrapper);
-     }
--    else {
-+    else if (descriptor.get) {
-       if (this.isNativeFunction(descriptor.get)) {
-         result.value = this.createValueGrip(aObject[aProperty], aObjectWrapper);
-       }
--      else if (descriptor.get) {
-+      else {
-         result.get = this.createValueGrip(descriptor.get, aObjectWrapper);
-         result.set = this.createValueGrip(descriptor.set, aObjectWrapper);
-       }
+ // Match the function arguments from the result of toString() or toSource().
+ const REGEX_MATCH_FUNCTION_ARGS = /^\(?function\s*[^\s(]*\s*\((.+?)\)/;
+ 
+-const TYPES = { OBJECT: 0,
+-                FUNCTION: 1,
+-                ARRAY: 2,
+-                OTHER: 3,
+-                ITERATOR: 4,
+-                GETTER: 5,
+-                GENERATOR: 6,
+-                STRING: 7
+-              };
+-
+-var gObjectId = 0;
+-
+ var WebConsoleUtils = {
+-  TYPES: TYPES,
+-
+   /**
+    * Convenience function to unwrap a wrapped object.
+    *
+    * @param aObject the object to unwrap.
+    * @return aObject unwrapped.
+    */
+   unwrap: function WCU_unwrap(aObject)
+   {
+@@ -350,113 +336,16 @@ var WebConsoleUtils = {
+       // the Web Console. If the constructor.name is a getter that throws, or
+       // something else bad happens.
      }
  
-     // There are cases with properties that have no value and no getter. For
-     // example window.screen.width.
-     if (result.value === undefined && result.get === undefined) {
-@@ -1363,27 +1363,27 @@ function getMatchedProps(aObj, aOptions 
+     return type.toLowerCase();
+   },
+ 
+   /**
+-   * Figures out the type of aObject and the string to display as the object
+-   * value.
+-   *
+-   * @see TYPES
+-   * @param object aObject
+-   *        The object to operate on.
+-   * @return object
+-   *         An object of the form:
+-   *         {
+-   *           type: TYPES.OBJECT || TYPES.FUNCTION || ...
+-   *           display: string for displaying the object
+-   *         }
+-   */
+-  presentableValueFor: function WCU_presentableValueFor(aObject)
+-  {
+-    let type = this.getResultType(aObject);
+-    let presentable;
+-
+-    switch (type) {
+-      case "undefined":
+-      case "null":
+-        return {
+-          type: TYPES.OTHER,
+-          display: type
+-        };
+-
+-      case "array":
+-        return {
+-          type: TYPES.ARRAY,
+-          display: "Array"
+-        };
+-
+-      case "string":
+-        return {
+-          type: TYPES.STRING,
+-          display: "\"" + aObject + "\""
+-        };
+-
+-      case "date":
+-      case "regexp":
+-      case "number":
+-      case "boolean":
+-        return {
+-          type: TYPES.OTHER,
+-          display: aObject.toString()
+-        };
+-
+-      case "iterator":
+-        return {
+-          type: TYPES.ITERATOR,
+-          display: "Iterator"
+-        };
+-
+-      case "function":
+-        presentable = aObject.toString();
+-        return {
+-          type: TYPES.FUNCTION,
+-          display: presentable.substring(0, presentable.indexOf(')') + 1)
+-        };
+-
+-      default:
+-        presentable = String(aObject);
+-        let m = /^\[object (\S+)\]/.exec(presentable);
+-
+-        try {
+-          if (typeof aObject == "object" && typeof aObject.next == "function" &&
+-              m && m[1] == "Generator") {
+-            return {
+-              type: TYPES.GENERATOR,
+-              display: m[1]
+-            };
+-          }
+-        }
+-        catch (ex) {
+-          // window.history.next throws in the typeof check above.
+-          return {
+-            type: TYPES.OBJECT,
+-            display: m ? m[1] : "Object"
+-          };
+-        }
+-
+-        if (typeof aObject == "object" &&
+-            typeof aObject.__iterator__ == "function") {
+-          return {
+-            type: TYPES.ITERATOR,
+-            display: "Iterator"
+-          };
+-        }
+-
+-        return {
+-          type: TYPES.OBJECT,
+-          display: m ? m[1] : "Object"
+-        };
+-    }
+-  },
+-
+-  /**
+    * Tells if the given function is native or not.
+    *
+    * @param function aFunction
+    *        The function you want to check if it is native or not.
+    * @return boolean
+    *         True if the given function is native, false otherwise.
+    */
+   isNativeFunction: function WCU_isNativeFunction(aFunction)
+@@ -515,105 +404,16 @@ var WebConsoleUtils = {
+       catch (ex if (ex.name == "TypeError")) {
+         return desc;
+       }
+     }
+     return desc;
+   },
+ 
+   /**
+-   * Get an array that describes the properties of the given object.
+-   *
+-   * @param object aObject
+-   *        The object to get the properties from.
+-   * @param object aObjectCache
+-   *        Optional object cache where to store references to properties of
+-   *        aObject that are inspectable. See this.isObjectInspectable().
+-   * @return array
+-   *         An array that describes each property from the given object. Each
+-   *         array element is an object (a property descriptor). Each property
+-   *         descriptor has the following properties:
+-   *         - name - property name
+-   *         - value - a presentable property value representation (see
+-   *                   this.presentableValueFor())
+-   *         - type - value type (see this.presentableValueFor())
+-   *         - inspectable - tells if the property value holds further
+-   *                         properties (see this.isObjectInspectable()).
+-   *         - objectId - optional, available only if aObjectCache is given and
+-   *         if |inspectable| is true. You can do
+-   *         aObjectCache[propertyDescriptor.objectId] to get the actual object
+-   *         referenced by the property of aObject.
+-   */
+-  namesAndValuesOf: function WCU_namesAndValuesOf(aObject, aObjectCache)
+-  {
+-    let pairs = [];
+-    let value, presentable;
+-
+-    let isDOMDocument = aObject instanceof Ci.nsIDOMDocument;
+-    let deprecated = ["width", "height", "inputEncoding"];
+-
+-    for (let propName in aObject) {
+-      // See bug 632275: skip deprecated properties.
+-      if (isDOMDocument && deprecated.indexOf(propName) > -1) {
+-        continue;
+-      }
+-
+-      // Also skip non-native getters.
+-      if (this.isNonNativeGetter(aObject, propName)) {
+-        value = "";
+-        presentable = {type: TYPES.GETTER, display: "Getter"};
+-      }
+-      else {
+-        try {
+-          value = aObject[propName];
+-          presentable = this.presentableValueFor(value);
+-        }
+-        catch (ex) {
+-          continue;
+-        }
+-      }
+-
+-      let pair = {};
+-      pair.name = propName;
+-      pair.value = presentable.display;
+-      pair.inspectable = false;
+-      pair.type = presentable.type;
+-
+-      switch (presentable.type) {
+-        case TYPES.GETTER:
+-        case TYPES.ITERATOR:
+-        case TYPES.GENERATOR:
+-        case TYPES.STRING:
+-          break;
+-        default:
+-          try {
+-            for (let p in value) {
+-              pair.inspectable = true;
+-              break;
+-            }
+-          }
+-          catch (ex) { }
+-          break;
+-      }
+-
+-      // Store the inspectable object.
+-      if (pair.inspectable && aObjectCache) {
+-        pair.objectId = ++gObjectId;
+-        aObjectCache[pair.objectId] = value;
+-      }
+-
+-      pairs.push(pair);
+-    }
+-
+-    pairs.sort(this.propertiesSort);
+-
+-    return pairs;
+-  },
+-
+-  /**
+    * Sort function for object properties.
+    *
+    * @param object a
+    *        Property descriptor.
+    * @param object b
+    *        Property descriptor.
+    * @return integer
+    *         -1 if a.name < b.name,
+@@ -1363,27 +1163,27 @@ function getMatchedProps(aObj, aOptions 
  
    if (aObj == null) { return {}; }
    try {
@@ -3422,98 +3958,21 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        }
        // If it is an array index, we can't take it.
        // This uses a trick: converting a string to a number yields NaN if
-@@ -2639,26 +2639,28 @@ NetworkMonitor.prototype = {
-     }
- 
-     let request = aHttpActivity.log.entries[0].request;
- 
-     let sentBody = NetworkHelper.
-                    readPostTextFromRequest(aHttpActivity.channel,
-                                            aHttpActivity.charset);
- 
--    if (!sentBody && request.url == Manager.window.location.href) {
-+    if (!sentBody && request.url == this.window.location.href) {
-       // If the request URL is the same as the current page URL, then
-       // we can try to get the posted text from the page directly.
-       // This check is necessary as otherwise the
-       //   NetworkHelper.readPostTextFromPage()
-       // function is called for image requests as well but these
-       // are not web pages and as such don't store the posted text
-       // in the cache of the webpage.
--      sentBody = NetworkHelper.readPostTextFromPage(docShell,
--                                                    aHttpActivity.charset);
-+      let webNav = this.window.QueryInterface(Ci.nsIInterfaceRequestor).
-+                   getInterface(Ci.nsIWebNavigation);
-+      sentBody = NetworkHelper.
-+                 readPostTextFromPageViaWebNav(webNav, aHttpActivity.charset);
-     }
-     if (!sentBody) {
-       return;
-     }
- 
-     request.postData = {
-       mimeType: "", // never set
-       params: [],  // never set
-@@ -2814,20 +2816,16 @@ NetworkMonitor.prototype = {
-    */
-   destroy: function NM_destroy()
-   {
+@@ -2819,16 +2619,17 @@ NetworkMonitor.prototype = {
      Services.obs.removeObserver(this._httpResponseExaminer,
                                  "http-on-examine-response");
  
      gActivityDistributor.removeObserver(this);
  
--    //FIXME
--    //ConsoleProgressListener.stopMonitor(ConsoleProgressListener
--    //                                    .MONITOR_FILE_ACTIVITY);
--
      this.openRequests = {};
      this.openResponses = {};
      this.owner = null;
++    this.window = null;
    },
  };
  
  _global.NetworkMonitor = NetworkMonitor;
  _global.NetworkResponseListener = NetworkResponseListener;
-@@ -2897,18 +2895,17 @@ ConsoleProgressListener.prototype = {
-    */
-   _init: function CPL__init()
-   {
-     if (this._initialized) {
-       return;
-     }
+ })(this, WebConsoleUtils);
  
-     this._initialized = true;
--    let webProgress = this.browser.docShell.QueryInterface(Ci.nsIWebProgress);
--    webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_ALL);
-+    this.browser.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_ALL);
-   },
  
-   /**
-    * Start a monitor/tracker related to the current nsIWebProgressListener
-    * instance.
-    *
-    * @param number aMonitor
-    *        Tells what you want to track. Available constants:
-@@ -3047,18 +3044,19 @@ ConsoleProgressListener.prototype = {
-     if (!this._initialized) {
-       return;
-     }
- 
-     this._initialized = false;
-     this._fileActivity = false;
-     this._locationChange = false;
- 
--    let webProgress = this.browser.docShell.QueryInterface(Ci.nsIWebProgress);
--    webProgress.removeProgressListener(this);
-+    if (this.browser.removeProgressListener) {
-+      this.browser.removeProgressListener(this);
-+    }
- 
-     this.browser = null;
-     this.owner = null;
-   },
- };
- 
- function gSequenceId()
- {

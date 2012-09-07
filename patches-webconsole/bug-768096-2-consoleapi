@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 11f5c58ce117cc8c7c5dc86f60d6deb47392b3b4
+# Parent f8e3a6a01e8ff72497667b5c4db5a39cd2d44ecb
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1346698372 -10800
+# Date 1347035392 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API and JS evaluation
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -78,7 +78,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
 --- a/browser/devtools/webconsole/PropertyPanel.jsm
 +++ b/browser/devtools/webconsole/PropertyPanel.jsm
-@@ -22,95 +22,118 @@ var EXPORTED_SYMBOLS = ["PropertyPanel",
+@@ -22,95 +22,102 @@ var EXPORTED_SYMBOLS = ["PropertyPanel",
  
  /**
   * This is an implementation of the nsITreeView interface. For comments on the
@@ -116,26 +116,15 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
 +  _objectActors: null,
 +
 +  /**
-+   * Map between inspected objects and the fake object actor grips. This is used
-+   * when we inspect local objects.
++   * Map fake object actors to their IDs. This is used when we inspect local
++   * objects.
 +   * @private
-+   * @type Map
++   * @type Object
 +   */
 +  _localObjectActors: null,
 +
-+  /**
-+   * Map between fake object actor IDs and their respective inspected object.
-+   * @private
-+   * @type object
-+   */
-+  _localActorToObject: null,
-+
-+  _trackObject: null,
 +  _releaseObject: null,
 +  _objectPropertiesProvider: null,
-+
-+  __n: 0,
-+  get _n() ++this.__n,
  
    /**
     * Use this setter to update the content of the tree.
@@ -179,9 +168,6 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
 +   *          received. This function takes one argument: the array of
 +   *          descriptors for each property in the object represented by the
 +   *          actor.
-+   *        - trackObject:
-+   *        Function to invoke when an object actor needs to be tracked. The
-+   *        function must take one argument: the object actor ID.
 +   *        - releaseObject:
 +   *        Function to invoke when an object actor should be released. The
 +   *        function must take one argument: the object actor ID.
@@ -204,14 +190,12 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
 -      this._updateRemoteObject(this._rows, 0);
 +    if (aData.objectPropertiesProvider) {
 +      this._objectPropertiesProvider = aData.objectPropertiesProvider;
-+      this._trackObject = aData.trackObject;
 +      this._releaseObject = aData.releaseObject;
 +      this._propertiesToRows(aData.objectProperties, 0);
 +      this._rows = aData.objectProperties;
      }
      else if (aData.object) {
-+      this._localObjectActors = new Map();
-+      this._localActorToObject = {};
++      this._localObjectActors = Object.create(null);
        this._rows = this._inspectObject(aData.object);
      }
      else {
@@ -227,7 +211,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
          this._treeBox.rowCountChanged(0, -oldLen);
        }
        this._treeBox.rowCountChanged(0, this._rows.length);
-@@ -123,87 +146,117 @@ PropertyTreeView.prototype = {
+@@ -123,87 +130,109 @@ PropertyTreeView.prototype = {
     * adds properties to each array element.
     *
     * @private
@@ -249,16 +233,15 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
 +      aItem._open = false;
 +      aItem._children = null;
 +
-+      if (this._trackObject) {
++      if (this._releaseObject) {
 +        ["value", "get", "set"].forEach(function(aProp) {
 +          let val = aItem[aProp];
 +          if (val && val.actor) {
-+            this._trackObject(val.actor);
 +            this._objectActors.push(val.actor);
 +          }
 +        }, this);
 +      }
-+    }.bind(this));
++    }, this);
    },
  
    /**
@@ -286,26 +269,19 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
  
    /**
 -   * An object provider for when the user inspects local objects (not remote
-+   * Make a local fake object grip for the given object.
++   * Make a local fake object actor for the given object.
 +   *
 +   * @private
 +   * @param object aObject
-+   *        The object to make a grip for.
++   *        The object to make an actor for.
 +   * @return object
-+   *         The grip that represents the given object.
++   *         The fake actor grip that represents the given object.
 +   */
 +  _localObjectGrip: function PTV__localObjectGrip(aObject)
 +  {
-+    if (this._localObjectActors.has(aObject)) {
-+      return this._localObjectActors.get(aObject).grip;
-+    }
-+
 +    let grip = WebConsoleUtils.getObjectGrip(aObject);
 +    grip.actor = "obj" + this._n;
-+
-+    this._localObjectActors.set(aObject, grip);
-+    this._localActorToObject[grip.actor] = aObject;
-+
++    this._localObjectActors[grip.actor] = aObject;
 +    return grip;
 +  },
 +
@@ -340,7 +316,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
 -               object: object,
 -               childrenCacheId: aDestCacheId || aFromCacheId,
 -    });
-+    let object = this._localActorToObject[aActor];
++    let object = this._localObjectActors[aActor];
 +    let properties =
 +      WebConsoleUtils.inspectObject(object, this._localObjectGrip.bind(this));
 +    aCallback(properties);
@@ -379,7 +355,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
    isSelectable: function(row, col)   { return true; },
  
    getParentIndex: function(idx)
-@@ -216,71 +269,67 @@ PropertyTreeView.prototype = {
+@@ -216,71 +245,67 @@ PropertyTreeView.prototype = {
          return t;
        }
      }
@@ -466,7 +442,7 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
    getProgressMode : function(idx,column) { },
    getCellValue: function(idx, column) { },
    cycleHeader: function(col, elem) { },
-@@ -293,28 +342,35 @@ PropertyTreeView.prototype = {
+@@ -293,28 +318,33 @@ PropertyTreeView.prototype = {
    getCellProperties: function(idx, column, prop) { },
    getColumnProperties: function(column, element, prop) { },
  
@@ -489,11 +465,9 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
 +      this._objectActors.forEach(this._releaseObject);
 +      delete this._objectPropertiesProvider;
 +      delete this._releaseObject;
-+      delete this._trackObject;
 +    }
 +    if (this._localObjectActors) {
 +      delete this._localObjectActors;
-+      delete this._localActorToObject;
 +      delete this._objectPropertiesProvider;
      }
  
@@ -511,6 +485,21 @@ diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/we
  
  /**
   * Creates a DOMNode and sets all the attributes of aAttributes on the created
+@@ -454,8 +484,14 @@ PropertyPanel.prototype.destroy = functi
+ {
+   this.treeView.data = null;
+   this.panel.parentNode.removeChild(this.panel);
+   this.treeView = null;
+   this.panel = null;
+   this.tree = null;
+ }
+ 
++
++function gSequenceId()
++{
++  return gSequenceId.n++;
++}
++gSequenceId.n = 0;
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
@@ -576,25 +565,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/bro
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -180,16 +180,17 @@ function WebConsoleFrame(aWebConsoleOwne
- {
-   this.owner = aWebConsoleOwner;
-   this.hudId = this.owner.hudId;
- 
-   this._cssNodes = {};
-   this._outputQueue = [];
-   this._pruneCategoriesQueue = {};
-   this._networkRequests = {};
-+  this._objectActors = {};
- 
-   this._toggleFilter = this._toggleFilter.bind(this);
-   this._onPositionConsoleCommand = this._onPositionConsoleCommand.bind(this);
- 
-   this._initDefaultFilterPrefs();
-   this._commandController = new CommandController(this);
-   this.positionConsole(aPosition, window);
- 
-@@ -305,16 +306,29 @@ WebConsoleFrame.prototype = {
+@@ -305,16 +305,22 @@ WebConsoleFrame.prototype = {
    outputNode: null,
  
    /**
@@ -603,13 +574,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    filterBox: null,
  
-+  /**
-+   * Track object actor IDs to use-counts.
-+   * @private
-+   * @type object
-+   */
-+  _objectActors: null,
-+
 +  /**
 +   * Getter for the debugger WebConsoleClient.
 +   * @type object
@@ -624,7 +588,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @type boolean
     */
    get saveRequestAndResponseBodies() this._saveRequestAndResponseBodies,
-@@ -392,18 +406,20 @@ WebConsoleFrame.prototype = {
+@@ -392,18 +398,20 @@ WebConsoleFrame.prototype = {
        saveBodies.setAttribute("checked", this.saveRequestAndResponseBodies);
      }.bind(this));
  
@@ -647,7 +611,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    _initDefaultFilterPrefs: function WCF__initDefaultFilterPrefs()
    {
-@@ -636,50 +652,29 @@ WebConsoleFrame.prototype = {
+@@ -636,50 +644,29 @@ WebConsoleFrame.prototype = {
     */
    receiveMessage: function WCF_receiveMessage(aMessage)
    {
@@ -698,7 +662,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * manager.
     *
     * @private
-@@ -1003,88 +998,98 @@ WebConsoleFrame.prototype = {
+@@ -1003,88 +990,97 @@ WebConsoleFrame.prototype = {
  
      return false;
    },
@@ -793,7 +757,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +          clipboardArray.push(WebConsoleUtils.objectActorGripToString(aValue));
 +          if (aValue && typeof aValue == "object" && aValue.actor) {
 +            objectActors.push(aValue.actor);
-+            this._trackObject(aValue.actor);
 +          }
 +        }, this);
 +        clipboardText = clipboardArray.join(" ");
@@ -826,7 +789,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          body = l10n.getFormatStr("stacktrace.outputMessage",
                                   [filename, functionName, lineNumber]);
  
-@@ -1096,77 +1101,63 @@ WebConsoleFrame.prototype = {
+@@ -1096,77 +1092,63 @@ WebConsoleFrame.prototype = {
          args.forEach(function(aFrame) {
            clipboardText += aFrame.filename + " :: " +
                             aFrame.functionName + " :: " +
@@ -915,7 +878,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.makeOutputMessageLink(node, function _traceNodeClickCallback() {
          if (node._panelOpen) {
            return;
-@@ -1178,80 +1169,88 @@ WebConsoleFrame.prototype = {
+@@ -1178,80 +1160,87 @@ WebConsoleFrame.prototype = {
          };
  
          let propPanel = this.jsterm.openPropertyPanel(options);
@@ -987,7 +950,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -        panelCacheId: "HUDPanel-" + gSequenceId(),
 -        remoteObjectProvider: this.jsterm.remoteObjectProvider.bind(this.jsterm),
 +        objectPropertiesProvider: this.objectPropertiesProvider.bind(this),
-+        trackObject: this._trackObject.bind(this),
 +        releaseObject: this._releaseObject.bind(this),
        },
      };
@@ -1026,7 +988,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1423,24 +1422,22 @@ WebConsoleFrame.prototype = {
+@@ -1423,24 +1412,22 @@ WebConsoleFrame.prototype = {
      }.bind(this));
  
      return outputNode;
@@ -1054,7 +1016,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param object aMessage
     *        The HTTP activity object. This object needs to hold two properties:
-@@ -1822,37 +1819,59 @@ WebConsoleFrame.prototype = {
+@@ -1822,37 +1809,57 @@ WebConsoleFrame.prototype = {
     * @private
     * @param array aItem
     *        The item you want to remove from the output queue.
@@ -1087,29 +1049,27 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      if (level == "dir") {
 -        this.jsterm.clearObjectCache(args[0].objectsCacheId);
 +      let level = args[0].level;
++      let releaseObject = function _releaseObject(aValue) {
++        if (aValue && typeof aValue == "object" && aValue.actor) {
++          this._releaseObject(aValue.actor);
++        }
++      }.bind(this);
 +      switch (level) {
 +        case "log":
 +        case "info":
 +        case "warn":
 +        case "error":
 +        case "debug":
-+        case "dir": {
-+          args[0].arguments.forEach(function(aValue) {
-+            if (aValue && typeof aValue == "object" && aValue.actor) {
-+              // TODO: this avoids releasing objects too early - if we already
-+              // use them in other places. However, there's the possibility that
-+              // the server has already messages in queue with the same object
-+              // actor. In that case, here we release the object actor too
-+              // early. More thinking: I could move refcount into the
-+              // WebConsoleObjectActor and only require the client to always
-+              // release the objects - I only truely release the object once
-+              // refcount gets to 0, on the server.Thoughts?
-+              let count = this._objectActors[aValue.actor];
-+              if (!count) {
-+                this._releaseObject(aValue.actor);
-+              }
-+            }
-+          }, this);
++        case "dir":
++        case "groupEnd": {
++          args[0].arguments.forEach(releaseObject);
++          if (level == "dir") {
++            args[0].objectProperties.forEach(function(aObject) {
++              ["value", "get", "set"].forEach(function(aProp) {
++                releaseObject(aObject[aProp]);
++              });
++            });
++          }
 +        }
        }
      }
@@ -1119,7 +1079,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Ensures that the number of message nodes of type aCategory don't exceed that
     * category's line limit by removing old messages as needed.
     *
-@@ -1886,33 +1905,31 @@ WebConsoleFrame.prototype = {
+@@ -1886,33 +1893,31 @@ WebConsoleFrame.prototype = {
    pruneConsoleDirNode: function WCF_pruneConsoleDirNode(aMessageNode)
    {
      if (aMessageNode.parentNode) {
@@ -1156,7 +1116,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        if (aNode.childNodes[4]) {
          location = aNode.childNodes[4].getAttribute("title");
        }
-@@ -2027,17 +2044,17 @@ WebConsoleFrame.prototype = {
+@@ -2027,17 +2032,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -1175,7 +1135,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2102,20 +2119,20 @@ WebConsoleFrame.prototype = {
+@@ -2102,20 +2107,19 @@ WebConsoleFrame.prototype = {
  
        bodyContainer.appendChild(tree);
        node.appendChild(bodyContainer);
@@ -1189,7 +1149,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -        remoteObject: Array.isArray(body.remoteObject) ? body.remoteObject : [],
 -        remoteObjectProvider: body.remoteObjectProvider,
 +        objectPropertiesProvider: this.objectPropertiesProvider.bind(this),
-+        trackObject: this._trackObject.bind(this),
 +        releaseObject: this._releaseObject.bind(this),
 +        objectProperties: body.objectProperties,
        };
@@ -1200,7 +1159,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        node.appendChild(bodyNode);
      }
      node.appendChild(repeatContainer);
-@@ -2134,45 +2151,46 @@ WebConsoleFrame.prototype = {
+@@ -2134,45 +2138,46 @@ WebConsoleFrame.prototype = {
     * @private
     * @param nsIDOMElement aMessage
     *        The message element that holds the output for the given call.
@@ -1253,7 +1212,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this._addMessageLinkCallback(elem,
          this._consoleLogClick.bind(this, aMessage, elem, aItem));
  
-@@ -2351,21 +2369,82 @@ WebConsoleFrame.prototype = {
+@@ -2351,16 +2356,51 @@ WebConsoleFrame.prototype = {
          strings.push("[" + timestampString + "] " + item.clipboardText);
        }
      }
@@ -1285,21 +1244,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  },
 +
 +  /**
-+   * Track an object actor.
-+   *
-+   * @private
-+   * @param string aActor
-+   *        The object actor ID you want to track.
-+   */
-+  _trackObject: function WCF_trackObject(aActor)
-+  {
-+    if (!(aActor in this._objectActors)) {
-+      this._objectActors[aActor] = 0;
-+    }
-+    this._objectActors[aActor]++;
-+  },
-+
-+  /**
 +   * Release an object actor.
 +   *
 +   * @private
@@ -1308,16 +1252,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   */
 +  _releaseObject: function WCF__releaseObject(aActor)
 +  {
-+    let count = 0;
-+    if (aActor in this._objectActors) {
-+      count = --this._objectActors[aActor];
-+      if (count <= 0) {
-+        delete this._objectActors[aActor];
-+      }
-+    }
-+    if (this.proxy && count <= 0) {
-+      this.proxy.releaseActor(aActor);
-+    }
++    this.proxy.releaseActor(aActor);
 +  },
 +
 +  /**
@@ -1326,17 +1261,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    destroy: function WCF_destroy()
    {
-+    Object.keys(this._objectActors).forEach(this._releaseObject, this);
-+
      if (this.proxy) {
        this.proxy.disconnect();
      }
- 
-     if (this.jsterm) {
-       this.jsterm.destroy();
-     }
-   },
-@@ -2387,22 +2466,26 @@ function JSTerm(aWebConsoleFrame)
+@@ -2387,22 +2427,26 @@ function JSTerm(aWebConsoleFrame)
  
    this.lastCompletion = { value: null };
    this.history = [];
@@ -1363,7 +1291,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Last input value.
-@@ -2417,16 +2500,22 @@ JSTerm.prototype = {
+@@ -2417,16 +2461,22 @@ JSTerm.prototype = {
    history: null,
  
    /**
@@ -1386,7 +1314,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Initialize the JSTerminal UI.
     * @private
     */
-@@ -2448,82 +2537,104 @@ JSTerm.prototype = {
+@@ -2448,82 +2498,103 @@ JSTerm.prototype = {
     * @param string aString
     *        String to evaluate in the content process JavaScript sandbox.
     * @param function [aCallback]
@@ -1517,7 +1445,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    }
 +
 +    if (result && typeof result == "object" && result.actor) {
-+      this.hud._trackObject(result.actor);
 +      node._objectActors = [result.actor];
      }
    },
@@ -1527,7 +1454,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
-@@ -2538,18 +2649,18 @@ JSTerm.prototype = {
+@@ -2538,18 +2609,18 @@ JSTerm.prototype = {
      if (!aExecuteString) {
        this.writeOutput("no value to execute", CATEGORY_OUTPUT, SEVERITY_LOG);
        return;
@@ -1548,7 +1475,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.clearCompletion();
    },
  
-@@ -2690,17 +2801,17 @@ JSTerm.prototype = {
+@@ -2690,17 +2761,17 @@ JSTerm.prototype = {
  
      hud.groupDepth = 0;
      hud._outputQueue.forEach(hud._pruneItemFromQueue, hud);
@@ -1567,7 +1494,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @returns void
     */
-@@ -3017,28 +3128,29 @@ JSTerm.prototype = {
+@@ -3017,28 +3088,29 @@ JSTerm.prototype = {
     */
    _updateCompletionResult:
    function JST__updateCompletionResult(aType, aCallback)
@@ -1604,7 +1531,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * accordingly.
     *
     * @param function [aCallback=null]
-@@ -3047,19 +3159,18 @@ JSTerm.prototype = {
+@@ -3047,19 +3119,18 @@ JSTerm.prototype = {
     *        The JSON message which holds the completion results received from
     *        the content process.
     */
@@ -1626,7 +1553,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.clearCompletion();
        return;
      }
-@@ -3205,99 +3316,105 @@ JSTerm.prototype = {
+@@ -3205,99 +3276,101 @@ JSTerm.prototype = {
        objectId: aObjectId,
        resultCacheId: aResultCacheId,
      };
@@ -1657,7 +1584,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -        remoteObject: aRequest.resultObject,
 -        remoteObjectProvider: this.remoteObjectProvider.bind(this),
 +        objectPropertiesProvider: this.hud.objectPropertiesProvider.bind(this.hud),
-+        trackObject: this.hud._trackObject.bind(this.hud),
 +        releaseObject: this.hud._releaseObject.bind(this.hud),
        },
      };
@@ -1674,8 +1600,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }.bind(this);
  
 -    propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
-+    this.hud._trackObject(aActor.actor);
-+
 +    this.hud.objectPropertiesProvider(aActor.actor,
 +      function _onObjectProperties(aProperties) {
 +        options.data.objectProperties = aProperties;
@@ -1714,7 +1638,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -        panelCacheId: "HUDPanel-" + gSequenceId(),
 -        remoteObjectProvider: this.remoteObjectProvider.bind(this),
 +        objectPropertiesProvider: this.hud.objectPropertiesProvider.bind(this.hud),
-+        trackObject: this.hud._trackObject.bind(this.hud),
 +        releaseObject: this.hud._releaseObject.bind(this.hud),
        },
      };
@@ -1759,7 +1682,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param object aOptions
-@@ -3316,42 +3433,52 @@ JSTerm.prototype = {
+@@ -3316,42 +3389,51 @@ JSTerm.prototype = {
                                      aNewResponse)
    {
      if (aNewResponse.errorMessage) {
@@ -1779,7 +1702,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +        anchor._objectActors = [];
 +      }
 +      if (anchor._objectActors.indexOf(newActor) == -1) {
-+        this.hud._trackObject(newActor);
 +        anchor._objectActors.push(newActor);
 +      }
 +    }
@@ -1832,7 +1754,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    destroy: function JST_destroy()
    {
      this.clearCompletion();
-@@ -3547,34 +3674,51 @@ CommandController.prototype = {
+@@ -3547,34 +3629,51 @@ CommandController.prototype = {
   * @param object aWebConsole
   *        The Web Console instance that owns this connection proxy.
   */
@@ -1884,7 +1806,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        // Always allow connections from nsIPipe transports.
        DebuggerServer.init(function () { return true; });
        DebuggerServer.addBrowserActors();
-@@ -3588,18 +3732,20 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3588,18 +3687,20 @@ WebConsoleConnectionProxy.prototype = {
     *        Optional function to invoke when connection is established.
     */
    connect: function WCCP_connect(aCallback)
@@ -1907,7 +1829,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                               this._onAttachConsole.bind(this, aCallback));
        }.bind(this));
      }.bind(this));
-@@ -3623,39 +3769,105 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3623,39 +3724,105 @@ WebConsoleConnectionProxy.prototype = {
      if (aResponse.error) {
        Cu.reportError("attachConsole failed: " + aResponse.error + " " +
                       aResponse.message);
@@ -2273,7 +2195,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  const CACHED_MESSAGES = {
    PageError: "PageError",
    ConsoleAPI: "ConsoleAPI",
-@@ -40,89 +52,221 @@ const CACHED_MESSAGES = {
+@@ -40,89 +52,205 @@ const CACHED_MESSAGES = {
   *        The connection to the client, DebuggerServerConnection.
   * @param nsIDOMElement aBrowser
   *        The xul:browser we work with.
@@ -2285,8 +2207,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +
 +  this._objectActorsPool = new ActorPool(this.conn);
 +  this.conn.addActorPool(this._objectActorsPool);
-+
-+  this._objectActors = new Map();
  }
  
  WebConsoleActor.prototype =
@@ -2306,13 +2226,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   * @see this.objectGrip()
 +   */
 +  _objectActorsPool: null,
-+
-+  /**
-+   * Map between objects and their WebConsoleObjectActor wrappers.
-+   * @private
-+   * @type Map
-+   */
-+  _objectActors: null,
 +
 +  /**
     * The debugger server connection instance.
@@ -2378,7 +2291,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    }
 +    this.conn.removeActorPool(this._objectActorsPool);
 +    this._objectActorsPool = null;
-+    this._objectActors = null;
      this.conn = this._browser = null;
    },
  
@@ -2408,13 +2320,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    // We need to unwrap the object, otherwise we cannot access the properties
 +    // and methods added by the content scripts.
 +    let obj = WebConsoleUtils.unwrap(aObject);
-+    if (this._objectActors.has(obj)) {
-+      return this._objectActors.get(obj).grip();
-+    }
-+
 +    let actor = new WebConsoleObjectActor(obj, this);
 +    this._objectActorsPool.addActor(actor);
-+    this._objectActors.set(obj, actor);
 +    return actor.grip();
 +  },
 +
@@ -2437,7 +2344,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +   */
 +  releaseObject: function WCA_releaseObject(aActor)
 +  {
-+    this._objectActors.delete(aActor.obj);
 +    this._objectActorsPool.removeActor(aActor.actorID);
 +  },
 +
@@ -2498,7 +2404,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      if (!toDetach.length) {
        // If no specific listeners are requested to be detached, we stop all
        // listeners.
-@@ -136,84 +280,393 @@ WebConsoleActor.prototype =
+@@ -136,84 +264,393 @@ WebConsoleActor.prototype =
        switch (listener) {
          case LISTENERS.PageError:
            if (this.pageErrorListener) {
@@ -3055,7 +2961,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     * @param object aObject
     *        The object to get the properties from.
     * @param object aObjectCache
-@@ -544,48 +586,220 @@ var WebConsoleUtils = {
+@@ -544,45 +586,217 @@ var WebConsoleUtils = {
        if (pair.inspectable && aObjectCache) {
          pair.objectId = ++gObjectId;
          aObjectCache[pair.objectId] = value;
@@ -3069,34 +2975,15 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 -      // Convert the pair.name to a number for later sorting.
 -      let aNumber = parseFloat(a.name);
 -      let bNumber = parseFloat(b.name);
--
++    pairs.sort(this.propertiesSort);
+ 
 -      // Sort numbers.
 -      if (!isNaN(aNumber) && isNaN(bNumber)) {
 -        return -1;
--      }
--      else if (isNaN(aNumber) && !isNaN(bNumber)) {
--        return 1;
--      }
--      else if (!isNaN(aNumber) && !isNaN(bNumber)) {
--        return aNumber - bNumber;
--      }
--      // Sort string.
--      else if (a.name < b.name) {
--        return -1;
--      }
--      else if (a.name > b.name) {
--        return 1;
--      }
--      else {
--        return 0;
--      }
--    });
-+    pairs.sort(this.propertiesSort);
- 
-     return pairs;
-   },
- 
-   /**
++    return pairs;
++  },
++
++  /**
 +   * Sort function for object properties.
 +   *
 +   * @param object a
@@ -3163,7 +3050,19 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +      // See bug 632275: skip deprecated properties.
 +      if (isDOMDocument && deprecated.indexOf(name) > -1) {
 +        continue;
-+      }
+       }
+-      else if (isNaN(aNumber) && !isNaN(bNumber)) {
+-        return 1;
+-      }
+-      else if (!isNaN(aNumber) && !isNaN(bNumber)) {
+-        return aNumber - bNumber;
+-      }
+-      // Sort string.
+-      else if (a.name < b.name) {
+-        return -1;
+-      }
+-      else if (a.name > b.name) {
+-        return 1;
 +
 +      properties.push(this.inspectObjectProperty(aObject, name, aObjectWrapper));
 +    }
@@ -3202,16 +3101,19 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +    if (descriptor.value !== undefined) {
 +      result.value = this.createValueGrip(descriptor.value, aObjectWrapper);
 +    }
-+    else {
++    else if (descriptor.get) {
 +      if (this.isNativeFunction(descriptor.get)) {
 +        result.value = this.createValueGrip(aObject[aProperty], aObjectWrapper);
-+      }
-+      else if (descriptor.get) {
+       }
+       else {
+-        return 0;
 +        result.get = this.createValueGrip(descriptor.get, aObjectWrapper);
 +        result.set = this.createValueGrip(descriptor.set, aObjectWrapper);
-+      }
+       }
+-    });
 +    }
-+
+ 
+-    return pairs;
 +    // There are cases with properties that have no value and no getter. For
 +    // example window.screen.width.
 +    if (result.value === undefined && result.get === undefined) {
@@ -3292,17 +3194,14 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +                       aValue);
 +        return null;
 +    }
-+  },
-+
-+  /**
+   },
+ 
+   /**
     * Check if the given object is an iterator or a generator.
     *
     * @param object aObject
     *        The object you want to check.
     * @return boolean
-    *         True if the given object is an iterator or a generator, otherwise
-    *         false is returned.
-    */
 @@ -633,16 +847,169 @@ var WebConsoleUtils = {
        let requestURI = Services.io.newURI(aRequest, null, null);
        let contentURI = Services.io.newURI(aLocation, null, null);
