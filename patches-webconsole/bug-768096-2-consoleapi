@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 10e3995877a1429b7d2587e5d366f3ccc6c68b81
+# Parent 6e5c33038a8895877d50b2f33bfa00e06e15ee93
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1347362001 -10800
+# Date 1347388274 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API and JS evaluation
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -988,7 +988,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1451,24 +1440,22 @@ WebConsoleFrame.prototype = {
+@@ -1450,24 +1439,22 @@ WebConsoleFrame.prototype = {
      }.bind(this));
  
      return outputNode;
@@ -1016,7 +1016,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param object aMessage
     *        The HTTP activity object. This object needs to hold two properties:
-@@ -1850,37 +1837,57 @@ WebConsoleFrame.prototype = {
+@@ -1849,37 +1836,57 @@ WebConsoleFrame.prototype = {
     * @private
     * @param array aItem
     *        The item you want to remove from the output queue.
@@ -1079,7 +1079,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Ensures that the number of message nodes of type aCategory don't exceed that
     * category's line limit by removing old messages as needed.
     *
-@@ -1914,33 +1921,31 @@ WebConsoleFrame.prototype = {
+@@ -1913,33 +1920,31 @@ WebConsoleFrame.prototype = {
    pruneConsoleDirNode: function WCF_pruneConsoleDirNode(aMessageNode)
    {
      if (aMessageNode.parentNode) {
@@ -1116,7 +1116,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        if (aNode.childNodes[4]) {
          location = aNode.childNodes[4].getAttribute("title");
        }
-@@ -2055,17 +2060,17 @@ WebConsoleFrame.prototype = {
+@@ -2054,17 +2059,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -1135,7 +1135,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2130,20 +2135,19 @@ WebConsoleFrame.prototype = {
+@@ -2129,20 +2134,19 @@ WebConsoleFrame.prototype = {
  
        bodyContainer.appendChild(tree);
        node.appendChild(bodyContainer);
@@ -1159,7 +1159,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        node.appendChild(bodyNode);
      }
      node.appendChild(repeatContainer);
-@@ -2162,45 +2166,46 @@ WebConsoleFrame.prototype = {
+@@ -2161,45 +2165,46 @@ WebConsoleFrame.prototype = {
     * @private
     * @param nsIDOMElement aMessage
     *        The message element that holds the output for the given call.
@@ -1212,7 +1212,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this._addMessageLinkCallback(elem,
          this._consoleLogClick.bind(this, aMessage, elem, aItem));
  
-@@ -2379,16 +2384,51 @@ WebConsoleFrame.prototype = {
+@@ -2378,16 +2383,51 @@ WebConsoleFrame.prototype = {
          strings.push("[" + timestampString + "] " + item.clipboardText);
        }
      }
@@ -1264,7 +1264,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (this.proxy) {
        this.proxy.disconnect();
      }
-@@ -2415,22 +2455,26 @@ function JSTerm(aWebConsoleFrame)
+@@ -2414,16 +2454,17 @@ function JSTerm(aWebConsoleFrame)
  
    this.lastCompletion = { value: null };
    this.history = [];
@@ -1276,22 +1276,13 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
    this._keyPress = this.keyPress.bind(this);
    this._inputEventHandler = this.inputEventHandler.bind(this);
-+  this._evalRequests = {};
    this._initUI();
  }
  
  JSTerm.prototype = {
-+  _evalRequests: null,
-+
    /**
     * Stores the data for the last completion.
-    * @type object
-    */
-   lastCompletion: null,
- 
-   /**
-    * Last input value.
-@@ -2445,16 +2489,22 @@ JSTerm.prototype = {
+@@ -2444,16 +2485,22 @@ JSTerm.prototype = {
    history: null,
  
    /**
@@ -1314,15 +1305,25 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Initialize the JSTerminal UI.
     * @private
     */
-@@ -2476,82 +2526,103 @@ JSTerm.prototype = {
-    * @param string aString
-    *        String to evaluate in the content process JavaScript sandbox.
-    * @param function [aCallback]
-    *        Optional function to be invoked when the evaluation result is
-    *        received.
-    */
-   evalInContentSandbox: function JST_evalInContentSandbox(aString, aCallback)
-   {
+@@ -2465,92 +2512,93 @@ JSTerm.prototype = {
+     this.inputNode.addEventListener("keypress", this._keyPress, false);
+     this.inputNode.addEventListener("input", this._inputEventHandler, false);
+     this.inputNode.addEventListener("keyup", this._inputEventHandler, false);
+ 
+     this.lastInputValue && this.setInputValue(this.lastInputValue);
+   },
+ 
+   /**
+-   * Asynchronously evaluate a string in the content process sandbox.
+-   *
+-   * @param string aString
+-   *        String to evaluate in the content process JavaScript sandbox.
+-   * @param function [aCallback]
+-   *        Optional function to be invoked when the evaluation result is
+-   *        received.
+-   */
+-  evalInContentSandbox: function JST_evalInContentSandbox(aString, aCallback)
+-  {
 -    let message = {
 -      str: aString,
 -      resultCacheId: "HUDEval-" + gSequenceId(),
@@ -1331,20 +1332,18 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    this.hud.owner.sendMessageToContent("JSTerm:EvalRequest", message, aCallback);
 -
 -    return message;
-+    let requestId = this.hudId + "_eval" + gSequenceId();
-+
-+    this.webConsoleClient.evaluateJS(requestId, aString, aCallback);
-+
-+    return requestId;
-   },
- 
-   /**
+-  },
+-
+-  /**
 -   * The "JSTerm:EvalResult" message handler. This is the JSTerm execution
 -   * result callback which is invoked whenever JavaScript code evaluation
 -   * results come from the content process.
 +   * The JavaScript evaluation response handler.
     *
     * @private
++   * @param nsIDOMElement [aAfterNode]
++   *        Optional DOM element after which the evaluation result will be
++   *        inserted.
     * @param function [aCallback]
     *        Optional function to invoke when the evaluation result is added to
     *        the output.
@@ -1359,7 +1358,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    _executeResultCallback:
 -  function JST__executeResultCallback(aCallback, aResponse, aRequest)
-+  function JST__executeResultCallback(aCallback, aResponse)
++  function JST__executeResultCallback(aAfterNode, aCallback, aResponse)
    {
      let errorMessage = aResponse.errorMessage;
 -    let resultString = aResponse.resultString;
@@ -1387,11 +1386,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +          }
 +          break;
 +      }
-+    }
-+
-+    let afterNode = this._evalRequests[aResponse.requestId];
-+    if (afterNode) {
-+      delete this._evalRequests[aResponse.requestId];
 +    }
  
      // Hide undefined results coming from JSTerm helper functions.
@@ -1425,7 +1419,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +    if (errorMessage) {
 +      node = this.writeOutput(errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
-+                              afterNode, aResponse.timestamp);
++                              aAfterNode, aResponse.timestamp);
      }
 -    else if (aResponse.inspectable) {
 -      let node = this.writeOutputJS(aResponse.resultString,
@@ -1435,13 +1429,13 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    else if (inspectable) {
 +      node = this.writeOutputJS(resultString,
 +                                this._evalOutputClick.bind(this, aResponse),
-+                                afterNode, aResponse.timestamp);
++                                aAfterNode, aResponse.timestamp);
      }
      else {
 -      this.writeOutput(aResponse.resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
 -                       afterNode, aResponse.timestamp);
 +      node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
-+                              afterNode, aResponse.timestamp);
++                              aAfterNode, aResponse.timestamp);
 +    }
 +
 +    if (result && typeof result == "object" && result.actor) {
@@ -1454,19 +1448,22 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
-@@ -2566,18 +2637,18 @@ JSTerm.prototype = {
+@@ -2563,20 +2611,19 @@ JSTerm.prototype = {
+     // attempt to execute the content of the inputNode
+     aExecuteString = aExecuteString || this.inputNode.value;
      if (!aExecuteString) {
        this.writeOutput("no value to execute", CATEGORY_OUTPUT, SEVERITY_LOG);
        return;
      }
  
      let node = this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
- 
-     let onResult = this._executeResultCallback.bind(this, aCallback);
+-
+-    let onResult = this._executeResultCallback.bind(this, aCallback);
 -    let messageToContent = this.evalInContentSandbox(aExecuteString, onResult);
 -    messageToContent.outputNode = node;
-+    let evalId = this.evalInContentSandbox(aExecuteString, onResult);
-+    this._evalRequests[evalId] = node;
++    let onResult = this._executeResultCallback.bind(this, node, aCallback);
++
++    this.webConsoleClient.evaluateJS(aExecuteString, onResult);
  
      this.history.push(aExecuteString);
      this.historyIndex++;
@@ -1475,7 +1472,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.clearCompletion();
    },
  
-@@ -2718,17 +2789,17 @@ JSTerm.prototype = {
+@@ -2717,17 +2764,17 @@ JSTerm.prototype = {
  
      hud.groupDepth = 0;
      hud._outputQueue.forEach(hud._pruneItemFromQueue, hud);
@@ -1494,7 +1491,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @returns void
     */
-@@ -3045,28 +3116,29 @@ JSTerm.prototype = {
+@@ -3044,49 +3091,53 @@ JSTerm.prototype = {
     */
    _updateCompletionResult:
    function JST__updateCompletionResult(aType, aCallback)
@@ -1508,7 +1505,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      input: this.inputNode.value,
 -    };
 -
-+    let requestId = this.hudId + "_complete" + gSequenceId();
++    let requestId = gSequenceId();
 +    let input = this.inputNode.value;
 +    let cursor = this.inputNode.selectionStart;
 +
@@ -1520,23 +1517,32 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        completionType: aType,
        value: null,
      };
-     let callback = this._receiveAutocompleteProperties.bind(this, aCallback);
+-    let callback = this._receiveAutocompleteProperties.bind(this, aCallback);
 -    this.hud.owner.sendMessageToContent("JSTerm:Autocomplete", message, callback);
-+    this.webConsoleClient.autocomplete(requestId, input, cursor, callback);
++
++    let callback = this._receiveAutocompleteProperties.bind(this, requestId,
++                                                            aCallback);
++    this.webConsoleClient.autocomplete(input, cursor, callback);
    },
  
    /**
-    * Handler for the "JSTerm:AutocompleteProperties" message. This method takes
-    * the completion result received from the content process and updates the UI
+-   * Handler for the "JSTerm:AutocompleteProperties" message. This method takes
+-   * the completion result received from the content process and updates the UI
++   * Handler for the autocompletion results. This method takes
++   * the completion result received from the server and updates the UI
     * accordingly.
     *
++   * @param number aRequestId
++   *        Request ID.
     * @param function [aCallback=null]
-@@ -3075,19 +3147,18 @@ JSTerm.prototype = {
+    *        Optional, function to invoke when the completion result is received.
+    * @param object aMessage
     *        The JSON message which holds the completion results received from
     *        the content process.
     */
    _receiveAutocompleteProperties:
-   function JST__receiveAutocompleteProperties(aCallback, aMessage)
+-  function JST__receiveAutocompleteProperties(aCallback, aMessage)
++  function JST__receiveAutocompleteProperties(aRequestId, aCallback, aMessage)
    {
      let inputNode = this.inputNode;
      let inputValue = inputNode.value;
@@ -1544,7 +1550,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -        this.lastCompletion.value == inputValue ||
 -        aMessage.id != this.lastCompletion.requestId) {
 +    if (this.lastCompletion.value == inputValue ||
-+        aMessage.requestId != this.lastCompletion.requestId) {
++        aRequestId != this.lastCompletion.requestId) {
        return;
      }
  
@@ -1553,7 +1559,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.clearCompletion();
        return;
      }
-@@ -3233,99 +3304,101 @@ JSTerm.prototype = {
+@@ -3232,99 +3283,102 @@ JSTerm.prototype = {
        objectId: aObjectId,
        resultCacheId: aResultCacheId,
      };
@@ -1645,9 +1651,12 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    let propPanel;
 +
      options.updateButtonCallback = function JST__evalUpdateButton() {
-       this.evalInContentSandbox(aResponse.input,
+-      this.evalInContentSandbox(aResponse.input,
++      let onResult =
          this._evalOutputUpdatePanelCallback.bind(this, options, propPanel,
-                                                  aResponse));
+-                                                 aResponse));
++                                                 aResponse);
++      this.webConsoleClient.evaluateJS(aResponse.input, onResult);
      }.bind(this);
  
 -    let propPanel = this.openPropertyPanel(options);
@@ -1682,7 +1691,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param object aOptions
-@@ -3344,42 +3417,51 @@ JSTerm.prototype = {
+@@ -3343,42 +3397,50 @@ JSTerm.prototype = {
                                      aNewResponse)
    {
      if (aNewResponse.errorMessage) {
@@ -1732,7 +1741,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    // However, the states of open nodes is not saved.
 -    // See bug 586246.
 -    aPropPanel.treeView.data = aOptions.data;
-+    aOldResponse.requestId = aNewResponse.requestId;
 +    aOldResponse.result = aNewResponse.result;
 +    aOldResponse.error = aNewResponse.error;
 +    aOldResponse.errorMessage = aNewResponse.errorMessage;
@@ -1754,7 +1762,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    destroy: function JST_destroy()
    {
      this.clearCompletion();
-@@ -3575,34 +3657,51 @@ CommandController.prototype = {
+@@ -3574,34 +3636,51 @@ CommandController.prototype = {
   * @param object aWebConsole
   *        The Web Console instance that owns this connection proxy.
   */
@@ -1806,7 +1814,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        // Always allow connections from nsIPipe transports.
        DebuggerServer.init(function () { return true; });
        DebuggerServer.addBrowserActors();
-@@ -3616,18 +3715,20 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3615,18 +3694,20 @@ WebConsoleConnectionProxy.prototype = {
     *        Optional function to invoke when connection is established.
     */
    connect: function WCCP_connect(aCallback)
@@ -1829,7 +1837,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                               this._onAttachConsole.bind(this, aCallback));
        }.bind(this));
      }.bind(this));
-@@ -3651,39 +3752,105 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3650,39 +3731,105 @@ WebConsoleConnectionProxy.prototype = {
      if (aResponse.error) {
        Cu.reportError("attachConsole failed: " + aResponse.error + " " +
                       aResponse.message);
@@ -2006,7 +2014,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *        If specified, will be called with the response packet when
     *        debugging server responds.
     */
-@@ -565,16 +580,88 @@ WebConsoleClient.prototype = {
+@@ -565,16 +580,81 @@ WebConsoleClient.prototype = {
        to: this._actor,
        type: "getCachedMessages",
        messageTypes: aTypes,
@@ -2034,18 +2042,15 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +  /**
 +   * Evaluate a JavaScript expression.
 +   *
-+   * @param string aRequestId
-+   *        The evaluation request ID.
 +   * @param string aString
 +   *        The code you want to evaluate.
 +   * @param function aOnResponse
 +   *        The function invoked when the response is received.
 +   */
-+  evaluateJS: function WCC_evaluateJS(aRequestId, aString, aOnResponse) {
++  evaluateJS: function WCC_evaluateJS(aString, aOnResponse) {
 +    let packet = {
 +      to: this._actor,
 +      type: "evaluateJS",
-+      requestId: aRequestId,
 +      text: aString,
 +    };
 +    this._client.request(packet, aOnResponse);
@@ -2054,8 +2059,6 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +  /**
 +   * Autocomplete a JavaScript expression.
 +   *
-+   * @param string aRequestId
-+   *        The evaluation request ID.
 +   * @param string aString
 +   *        The code you want to autocomplete.
 +   * @param number aCursor
@@ -2063,12 +2066,10 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +   * @param function aOnResponse
 +   *        The function invoked when the response is received.
 +   */
-+  autocomplete:
-+  function WCC_autocomplete(aRequestId, aString, aCursor, aOnResponse) {
++  autocomplete: function WCC_autocomplete(aString, aCursor, aOnResponse) {
 +    let packet = {
 +      to: this._actor,
 +      type: "autocomplete",
-+      requestId: aRequestId,
 +      text: aString,
 +      cursor: aCursor,
 +    };
@@ -2404,7 +2405,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      if (!toDetach.length) {
        // If no specific listeners are requested to be detached, we stop all
        // listeners.
-@@ -136,84 +264,393 @@ WebConsoleActor.prototype =
+@@ -136,23 +264,220 @@ WebConsoleActor.prototype =
        switch (listener) {
          case LISTENERS.PageError:
            if (this.pageErrorListener) {
@@ -2427,67 +2428,62 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    },
  
    /**
-    * Handler for the "getCachedMessages" request. This method sends the cached
-    * error messages and the window.console API calls to the client.
-    *
-    * @param object aRequest
-    *        The JSON request object received from the Web Console client.
++   * Handler for the "getCachedMessages" request. This method sends the cached
++   * error messages and the window.console API calls to the client.
++   *
++   * @param object aRequest
++   *        The JSON request object received from the Web Console client.
 +   * @return object
 +   *         The response packet to send to the client: it holds the cached
 +   *         messages array.
-    */
-   onGetCachedMessages: function WCA_onGetCachedMessages(aRequest)
-   {
-     let types = aRequest.messageTypes;
-     if (!types) {
-       return {
-         error: "missingParameter",
-         message: "The messageTypes parameter is missing.",
-       };
-     }
- 
-     let messages = [];
- 
-     while (types.length > 0) {
--      switch (types.shift()) {
-+      let type = types.shift();
-+      let cache = [];
-+      switch (type) {
-         case CACHED_MESSAGES.ConsoleAPI:
-           if (this.consoleAPIListener) {
--            messages.push.apply(messages,
--                                this.consoleAPIListener.getCachedMessages());
-+            cache = this.consoleAPIListener.getCachedMessages();
-           }
-           break;
-         case CACHED_MESSAGES.PageError:
-           if (this.pageErrorListener) {
--            messages.push.apply(messages,
--                                this.pageErrorListener.getCachedMessages());
-+            cache = this.pageErrorListener.getCachedMessages();
-           }
-           break;
-       }
++   */
++  onGetCachedMessages: function WCA_onGetCachedMessages(aRequest)
++  {
++    let types = aRequest.messageTypes;
++    if (!types) {
++      return {
++        error: "missingParameter",
++        message: "The messageTypes parameter is missing.",
++      };
++    }
 +
-+      cache.forEach(function(aMessage) {
-+        aMessage._type = type;
-+        if (type == CACHED_MESSAGES.ConsoleAPI) {
-+          aMessage = this.prepareConsoleMessageForRemote(aMessage);
-+        }
-+        messages.push(aMessage);
-+      }, this);
-     }
- 
-     messages.sort(function(a, b) { return a.timeStamp - b.timeStamp; });
- 
-     return {
-       from: this.actorID,
--      type: "cachedMessages",
-       messages: messages,
-     };
-   },
- 
-   /**
++    let messages = [];
++
++    while (types.length > 0) {
++      let type = types.shift();
++      switch (type) {
++        case CACHED_MESSAGES.ConsoleAPI:
++          if (this.consoleAPIListener) {
++            let cache = this.consoleAPIListener.getCachedMessages();
++            cache.forEach(function(aMessage) {
++              let message = this.prepareConsoleMessageForRemote(aMessage);
++              message._type = type;
++              messages.push(message);
++            }, this);
++          }
++          break;
++        case CACHED_MESSAGES.PageError:
++          if (this.pageErrorListener) {
++            let cache = this.pageErrorListener.getCachedMessages();
++            cache.forEach(function(aMessage) {
++              let message = this.preparePageErrorForRemote(aMessage);
++              message._type = type;
++              messages.push(message);
++            }, this);
++          }
++          break;
++      }
++    }
++
++    messages.sort(function(a, b) { return a.timeStamp - b.timeStamp; });
++
++    return {
++      from: this.actorID,
++      messages: messages,
++    };
++  },
++
++  /**
 +   * Handler for the "evaluateJS" request. This method evaluates the given
 +   * JavaScript string and sends back the result.
 +   *
@@ -2518,7 +2514,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +
 +    return {
 +      from: this.actorID,
-+      requestId: aRequest.requestId,
 +      input: input,
 +      result: this.createValueGrip(result),
 +      timestamp: timestamp,
@@ -2541,7 +2536,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    let result = JSPropertyProvider(this.window, aRequest.text) || {};
 +    return {
 +      from: this.actorID,
-+      requestId: aRequest.requestId,
 +      matches: result.matches || [],
 +      matchProp: result.matchProp,
 +    };
@@ -2628,17 +2622,18 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     * sends the nsIScriptError to the remote Web Console client.
     *
     * @param nsIScriptError aPageError
--   *        The page error we need to send to the remote.
-+   *        The page error we need to send to the remote client.
+    *        The page error we need to send to the client.
     */
    onPageError: function WCA_onPageError(aPageError)
    {
-     let packet = {
-       from: this.actorID,
-       type: "pageError",
-       pageError: aPageError,
+@@ -184,16 +509,169 @@ WebConsoleActor.prototype =
+       category: aPageError.category,
+       timeStamp: aPageError.timeStamp,
+       warning: !!(aPageError.flags & aPageError.warningFlag),
+       error: !!(aPageError.flags & aPageError.errorFlag),
+       exception: !!(aPageError.flags & aPageError.exceptionFlag),
+       strict: !!(aPageError.flags & aPageError.strictFlag),
      };
-     this.conn.send(packet);
    },
 +
 +  /**
@@ -2670,17 +2665,13 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +  prepareConsoleMessageForRemote:
 +  function WCA_prepareConsoleMessageForRemote(aMessage)
 +  {
-+    let result = WebConsoleUtils.cloneObject(aMessage, true,
-+      function(aKey, aValue, aObject) {
-+        // We need to skip the arguments property from the original object: to
-+        // avoid deep-copying the objects that come from the page. We handle the
-+        // arguments in a different way.
-+        if (aKey == "wrappedJSObject" || aObject === aMessage &&
-+            aKey == "arguments") {
-+          return false;
-+        }
-+        return true;
-+      });
++    let result = {
++      level: aMessage.level,
++      filename: aMessage.filename,
++      lineNumber: aMessage.lineNumber,
++      functionName: aMessage.functionName,
++      timeStamp: aMessage.timeStamp,
++    };
 +
 +    switch (result.level) {
 +      case "trace":
@@ -2726,9 +2717,9 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
  WebConsoleActor.prototype.requestTypes =
  {
-   getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
    startListeners: WebConsoleActor.prototype.onStartListeners,
    stopListeners: WebConsoleActor.prototype.onStopListeners,
++  getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
 +  evaluateJS: WebConsoleActor.prototype.onEvaluateJS,
 +  autocomplete: WebConsoleActor.prototype.onAutocomplete,
 +  clearMessagesCache: WebConsoleActor.prototype.onClearMessagesCache,
