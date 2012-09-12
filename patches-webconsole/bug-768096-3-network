@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent cc82201b6b55d51c61117d509892256944adf3af
+# Parent 7a8c5e20a52da680a348b721c4a994d150b42042
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1347390301 -10800
+# Date 1347482767 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 3: network logging
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
@@ -598,6 +598,38 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        The event that triggered the filter change.
     */
    _toggleFilter: function WCF__toggleFilter(aEvent)
+@@ -1300,26 +1254,26 @@ WebConsoleFrame.prototype = {
+    */
+   handlePageError: function WCF_handlePageError(aPageError)
+   {
+     let category = Utils.categoryForScriptError(aPageError);
+     this.outputMessage(category, this.reportPageError, [category, aPageError]);
+   },
+ 
+   /**
+-   * Log network activity.
++   * Log network event.
+    *
+-   * @param object aHttpActivity
+-   *        The HTTP activity to log.
++   * @param object aActorId
++   *        The network event actor ID to log.
+    * @return nsIDOMElement|undefined
+    *         The message element to display in the Web Console output.
+    */
+-  logNetActivity: function WCF_logNetActivity(aConnectionId)
++  logNetEvent: function WCF_logNetEvent(aActorId)
+   {
+-    let networkInfo = this._networkRequests[aConnectionId];
++    let networkInfo = this._networkRequests[aActorId];
+     if (!networkInfo) {
+       return;
+     }
+ 
+     let entry = networkInfo.httpActivity.log.entries[0];
+     let request = entry.request;
+ 
+     let msgNode = this.document.createElementNS(XUL_NS, "hbox");
 @@ -1344,17 +1298,17 @@ WebConsoleFrame.prototype = {
      urlNode.classList.add("hud-clickable");
      urlNode.classList.add("webconsole-msg-body-piece");
@@ -617,7 +649,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        severity = SEVERITY_WARNING;
      }
  
-@@ -1437,73 +1391,87 @@ WebConsoleFrame.prototype = {
+@@ -1437,73 +1391,97 @@ WebConsoleFrame.prototype = {
        let viewSourceUtils = this.owner.gViewSourceUtils;
        viewSourceUtils.viewSource(aFileURI, null, this.document);
      }.bind(this));
@@ -649,29 +681,43 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
 -   * Handle the "WebConsole:NetworkActivity" message coming from the remote Web
-+   * Handle the network activity messages coming from the remote Web
-    * Console.
+-   * Console.
++   * Handle the network events coming from the remote Web Console.
     *
 -   * @param object aMessage
 -   *        The HTTP activity object. This object needs to hold two properties:
 -   *        - meta - some metadata about the request log:
-+   * @param object aLog
-+   *        The request and response information. This is a HAR-like
-+   *        object. See NetworkMonitor.createActivityObject().
-+   * @param object aMeta
-+   *        Additional data about the request log:
-    *          - stages - the stages the network request went through.
-    *          - discardRequestBody and discardResponseBody - booleans that tell
-    *          if the network request/response body was discarded or not.
+-   *          - stages - the stages the network request went through.
+-   *          - discardRequestBody and discardResponseBody - booleans that tell
+-   *          if the network request/response body was discarded or not.
 -   *        - log - the request and response information. This is a HAR-like
 -   *        object. See HUDService-content.js
 -   *        NetworkMonitor.createActivityObject().
++   * @param object aActor
++   *        The NetworkEventActor grip.
     */
 -  handleNetworkActivity: function WCF_handleNetworkActivity(aMessage)
-+  handleNetworkActivity: function WCF_handleNetworkActivity(aLog, aMeta)
++  handleNetworkEvent: function WCF_handleNetworkEvent(aActor)
    {
 -    let stage = aMessage.meta.stages[aMessage.meta.stages.length - 1];
 -    let entry = aMessage.log.entries[0];
++    let networkInfo = {
++      node: null,
++      actor: aActor,
++    };
++
++    this._networkRequests[aActor.actor] = networkInfo;
++    this.outputMessage(CATEGORY_NETWORK, this.logNetActivity,
++                       [aActor.aActor]);
++  },
++
++  handleNetworkEventUpdate:
++  function WCF_handleNetworkEventUpdate(aType, aPacket)
++  {
++  },
++
++  foo: function foobar() // TODO: remove this
++  {
 +    let stage = aMeta.stages[aMeta.stages.length - 1];
 +    let entry = aLog.entries[0];
  
@@ -720,7 +766,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * given a network connection ID.
     *
     * @private
-@@ -1569,31 +1537,45 @@ WebConsoleFrame.prototype = {
+@@ -1569,31 +1547,45 @@ WebConsoleFrame.prototype = {
    {
      let netPanel = new NetworkPanel(this.popupset, aHttpActivity);
      netPanel.linkNode = aNode;
@@ -767,7 +813,26 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param integer aCategory
     *        The category of the message you want to output. See the CATEGORY_*
-@@ -3637,16 +3619,19 @@ CommandController.prototype = {
+@@ -1842,17 +1834,17 @@ WebConsoleFrame.prototype = {
+     let [category, methodOrNode, args] = aItem;
+     if (typeof methodOrNode != "function" &&
+         methodOrNode._objectActors && !methodOrNode._panelOpen) {
+       methodOrNode._objectActors.forEach(this._releaseObject, this);
+     }
+ 
+     if (category == CATEGORY_NETWORK) {
+       let connectionId = null;
+-      if (methodOrNode == this.logNetActivity) {
++      if (methodOrNode == this.logNetEvent) {
+         connectionId = args[0];
+       }
+       else if (typeof methodOrNode != "function") {
+         connectionId = methodOrNode._connectionId;
+       }
+       if (connectionId && connectionId in this._networkRequests) {
+         delete this._networkRequests[connectionId];
+       }
+@@ -3637,16 +3629,19 @@ CommandController.prototype = {
   *        The Web Console instance that owns this connection proxy.
   */
  function WebConsoleConnectionProxy(aWebConsole)
@@ -776,7 +841,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    this._onPageError = this._onPageError.bind(this);
    this._onConsoleAPICall = this._onConsoleAPICall.bind(this);
-+  this._onNetworkActivity = this._onNetworkActivity.bind(this);
++  this._onNetworkEvent = this._onNetworkEvent.bind(this);
 +  this._onFileActivity = this._onFileActivity.bind(this);
 +  this._onLocationChange = this._onLocationChange.bind(this);
  }
@@ -787,7 +852,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @see WebConsoleFrame
     * @type object
-@@ -3695,23 +3680,29 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3695,23 +3690,29 @@ WebConsoleConnectionProxy.prototype = {
     */
    connect: function WCCP_connect(aCallback)
    {
@@ -796,7 +861,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      client.addListener("pageError", this._onPageError);
      client.addListener("consoleAPICall", this._onConsoleAPICall);
-+    client.addListener("networkActivity", this._onNetworkActivity);
++    client.addListener("networkEvent", this._onNetworkEvent);
 +    client.addListener("fileActivity", this._onFileActivity);
 +    client.addListener("locationChange", this._onLocationChange);
  
@@ -818,7 +883,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * The "attachConsole" response handler.
-@@ -3797,16 +3788,64 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3797,16 +3798,64 @@ WebConsoleConnectionProxy.prototype = {
     *        The message received from the server.
     */
    _onConsoleAPICall: function WCCP__onConsoleAPICall(aType, aPacket)
@@ -827,7 +892,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-+   * The "networkActivity" message type handler. We redirect any message to
++   * The "networkEvent" message type handler. We redirect any message to
 +   * the UI for displaying.
 +   *
 +   * @private
@@ -836,9 +901,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   * @param object aPacket
 +   *        The message received from the server.
 +   */
-+  _onNetworkActivity: function WCCP__onNetworkActivity(aType, aPacket)
++  _onNetworkEvent: function WCCP__onNetworkEvent(aType, aPacket)
 +  {
-+    this.owner.handleNetworkActivity(aPacket.log, aPacket.meta);
++    this.owner.handleNetworkEvent(aPacket.eventActor);
 +  },
 +
 +  /**
@@ -883,7 +948,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    releaseActor: function WCCP_releaseActor(aActor)
    {
      if (this.client) {
-@@ -3820,16 +3859,19 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3820,16 +3869,19 @@ WebConsoleConnectionProxy.prototype = {
    disconnect: function WCCP_disconnect()
    {
      if (!this.client) {
@@ -1019,7 +1084,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  };
  
  /**
-@@ -55,16 +63,22 @@ const CACHED_MESSAGES = {
+@@ -55,37 +63,62 @@ const CACHED_MESSAGES = {
   */
  function WebConsoleActor(aConnection, aBrowser)
  {
@@ -1028,6 +1093,9 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    this._objectActorsPool = new ActorPool(this.conn);
    this.conn.addActorPool(this._objectActorsPool);
++
++  this._networkEventActorsPool = new ActorPool(this.conn);
++  this.conn.addActorPool(this._networkEventActorsPool);
 +
 +  this._prefs = {};
 +
@@ -1042,15 +1110,28 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     * The xul:browser we work with.
     * @private
     * @type nsIDOMElement
-@@ -76,16 +90,23 @@ WebConsoleActor.prototype =
+    */
+   _browser: null,
+ 
+   /**
+    * Actor pool for all of the object actors for objects we send to the client.
     * @private
     * @type object
     * @see ActorPool
++   * @see WebConsoleObjectActor
     * @see this.objectGrip()
     */
    _objectActorsPool: null,
  
    /**
++   * Actor pool for all of the network event actors.
++   * @private
++   * @type object
++   * @see NetworkEventActor
++   */
++  _networkEventActorsPool: null,
++
++  /**
 +   * Web Console-related preferences.
 +   * @private
 +   * @type object
@@ -1066,7 +1147,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    /**
     * The content window we work with.
     * @type nsIDOMWindow
-@@ -98,16 +119,33 @@ WebConsoleActor.prototype =
+@@ -98,16 +131,33 @@ WebConsoleActor.prototype =
     */
    pageErrorListener: null,
  
@@ -1100,7 +1181,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    },
  
    /**
-@@ -136,16 +174,24 @@ WebConsoleActor.prototype =
+@@ -136,18 +186,28 @@ WebConsoleActor.prototype =
      if (this.pageErrorListener) {
        this.pageErrorListener.destroy();
        this.pageErrorListener = null;
@@ -1118,15 +1199,18 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      this.consoleProgressListener = null;
 +    }
      this.conn.removeActorPool(this._objectActorsPool);
++    this.conn.removeActorPool(this._networkEventActorsPool);
      this._objectActorsPool = null;
++    this._networkEventActorsPool = null;
      this.conn = this._browser = null;
    },
  
    /**
     * Create a grip for the given value. If the value is an object,
     * a WebConsoleObjectActor will be created.
-@@ -194,16 +240,20 @@ WebConsoleActor.prototype =
-    * @param object aActor
+    *
+    * @param mixed aValue
+@@ -195,16 +255,31 @@ WebConsoleActor.prototype =
     *        The WebConsoleObjectActor instance you want to release.
     */
    releaseObject: function WCA_releaseObject(aActor)
@@ -1134,11 +1218,22 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      this._objectActorsPool.removeActor(aActor.actorID);
    },
  
+   /**
++   * Release a network event actor.
++   *
++   * @param object aActor
++   *        The NetworkEventActor instance you want to release.
++   */
++  releaseNetworkEvent: function WCA_releaseNetworkEvent(aActor)
++  {
++    this._networkEventActorsPool.removeActor(aActor.actorID);
++  },
++
 +  //////////////////
 +  // Request handlers for known packet types.
 +  //////////////////
 +
-   /**
++  /**
     * Handler for the "startListeners" request.
     *
     * @param object aRequest
@@ -1146,7 +1241,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     * @return object
     *         The response object which holds the startedListeners array.
     */
-@@ -225,16 +275,29 @@ WebConsoleActor.prototype =
+   onStartListeners: function WCA_onStartListeners(aRequest)
+@@ -225,16 +300,29 @@ WebConsoleActor.prototype =
          case LISTENERS.ConsoleAPI:
            if (!this.consoleAPIListener) {
              this.consoleAPIListener =
@@ -1176,7 +1272,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      };
    },
  
-@@ -271,16 +334,28 @@ WebConsoleActor.prototype =
+@@ -271,16 +359,28 @@ WebConsoleActor.prototype =
            break;
          case LISTENERS.ConsoleAPI:
            if (this.consoleAPIListener) {
@@ -1205,7 +1301,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
  
    /**
     * Handler for the "getCachedMessages" request. This method sends the cached
-@@ -403,16 +478,34 @@ WebConsoleActor.prototype =
+@@ -403,16 +503,34 @@ WebConsoleActor.prototype =
    {
      // TODO: Bug 717611 - Web Console clear button does not clear cached errors
      let windowId = WebConsoleUtils.getInnerWindowId(this.window);
@@ -1240,7 +1336,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
      this._sandboxLocation = this.window.location;
      this.sandbox = new Cu.Sandbox(this.window, {
        sandboxPrototype: this.window,
-@@ -467,16 +560,20 @@ WebConsoleActor.prototype =
+@@ -467,16 +585,20 @@ WebConsoleActor.prototype =
      }
      if ($$) {
        this.sandbox.$$ = $$;
@@ -1261,7 +1357,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     *        The page error we need to send to the client.
     */
    onPageError: function WCA_onPageError(aPageError)
-@@ -514,30 +611,107 @@ WebConsoleActor.prototype =
+@@ -514,30 +636,111 @@ WebConsoleActor.prototype =
        strict: !!(aPageError.flags & aPageError.strictFlag),
      };
    },
@@ -1285,25 +1381,29 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
    },
  
    /**
-+   * Handler for network activity. This method sends the network request and
-+   * response information to the remote Web Console client.
++   * Handler for network events. This method is invoked when a new network event
++   * is about to be recorded.
 +   *
-+   * @see NetworkMonitor
-+   * @param object aLog
-+   *        The network request and response object, in a similar format to that
-+   *        of a HAR log.
-+   * @param object aMeta
-+   *        The metadata about network logging - was the request/response body
-+   *        discarded? and other information.
++   * @see NetworkEventActor
++   * @see NetworkMonitor from WebConsoleUtils.jsm
++   *
++   * @param object aEvent
++   *        The initial network event information - about the request.
++   * @return object
++   *         A new NetworkEventActor is returned. This is used for tracking the
++   *         network request and response.
 +   */
-+  onNetworkActivity: function WCA_onNetworkActivity(aLog, aMeta)
++  onNetworkEvent: function WCA_onNetworkEvent(aEvent)
 +  {
++    let actor = new NetworkEventActor(aEvent, this);
++    this._networkEventActorsPool.addActor(actor);
++
 +    let packet = {
 +      from: this.actorID,
-+      type: "networkActivity",
-+      meta: aMeta,
-+      log: aLog,
++      type: "networkEvent",
++      eventActor: actor.grip(),
 +    };
++
 +    this.conn.send(packet);
 +  },
 +
@@ -1369,7 +1469,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     * @return object
     *         The object that can be sent to the remote client.
     */
-@@ -597,16 +771,17 @@ WebConsoleActor.prototype =
+@@ -597,16 +800,17 @@ WebConsoleActor.prototype =
  WebConsoleActor.prototype.requestTypes =
  {
    startListeners: WebConsoleActor.prototype.onStartListeners,
@@ -1387,6 +1487,285 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
   * @constructor
   * @param object aObj
   *        The object you want.
+@@ -670,8 +874,278 @@ WebConsoleObjectActor.prototype =
+ };
+ 
+ WebConsoleObjectActor.prototype.requestTypes =
+ {
+   "inspectProperties": WebConsoleObjectActor.prototype.onInspectProperties,
+   "release": WebConsoleObjectActor.prototype.onRelease,
+ };
+ 
++
++/**
++ * Creates an actor for a network event.
++ *
++ * @constructor
++ * @param object aNetworkEvent
++ *        The network event you want to use the actor for.
++ * @param object aWebConsoleActor
++ *        The parent WebConsoleActor instance for this object.
++ */
++function NetworkEventActor(aNetworkEvent, aWebConsoleActor)
++{
++  this.parent = aWebConsoleActor;
++  this.conn = this.parent.conn;
++
++  this._request = {
++    startedDateTime: aNetworkEvent.startedDateTime,
++    method: aNetworkEvent.method,
++    url: aNetworkEvent.url,
++    httpVersion: aNetworkEvent.httpVersion,
++    headers: [],
++    cookies: [],
++    headersSize: aNetworkEvent.headersSize,
++  };
++
++  this._response = {
++    headers: [],
++    cookies: [],
++    content: {},
++  };
++
++  this._timings = {};
++
++  this._discardRequestBody = aNetworkEvent.discardRequestBody;
++  this._discardResponseBody = aNetworkEvent.discardResponseBody;
++}
++
++NetworkEventActor.prototype =
++{
++  _request: null,
++  _response: null,
++  _timings: null,
++
++  actorPrefix: "netEvent",
++
++  /**
++   * Returns a grip for this actor for returning in a protocol message.
++   */
++  grip: function NEA_grip()
++  {
++    return {
++      actor: this.actorID,
++      startedDateTime: this._request.startedDateTime,
++      url: this._request.url,
++      method: this._request.method,
++    };
++  },
++
++  /**
++   * Releases this actor from the pool.
++   */
++  release: function NEA_release()
++  {
++    this.parent.releaseNetworkEvent(this);
++  },
++
++  /**
++   * Handle a protocol request to release a grip.
++   */
++  onRelease: function NEA_onRelease()
++  {
++    this.release();
++    return {};
++  },
++
++  onGetRequestHeaders: function NEA_onGetRequestHeaders()
++  {
++    return {
++      from: this.actorID,
++      headers: this._request.headers,
++      headersSize: this._request.headersSize,
++    };
++  },
++
++  onGetRequestCookies: function NEA_onGetRequestCookies()
++  {
++    return {
++      from: this.actorID,
++      cookies: this._request.cookies,
++    };
++  },
++
++  onGetRequestPostData: function NEA_onGetRequestPostData()
++  {
++    return {
++      from: this.actorID,
++      postData: this._request.postData,
++      postDataDiscarded: this._discardRequestBody,
++    };
++  },
++
++  onGetResponseHeaders: function NEA_onGetResponseHeaders()
++  {
++    return {
++      from: this.actorID,
++      headers: this._response.headers,
++      headersSize: this._response.headersSize,
++    };
++  },
++
++  onGetResponseCookies: function NEA_onGetResponseCookies()
++  {
++    return {
++      from: this.actorID,
++      cookies: this._response.cookies,
++    };
++  },
++
++  onGetResponseContent: function NEA_onGetResponseContent()
++  {
++    return {
++      from: this.actorID,
++      content: this._response.content,
++      contentDiscarded: this._discardResponseBody,
++    };
++  },
++
++  onGetEventTimings: function NEA_onGetEventTimings()
++  {
++    return {
++      from: this.actorID,
++      timings: this._response._timings,
++      totalTime: this._response._totalTime,
++    };
++  },
++
++  /*****************************************
++   * Listeners for new network event data.
++   *****************************************/
++
++  addRequestHeaders: function NEA_addRequestHeaders(aHeaders)
++  {
++    this._request.headers = aHeaders;
++
++    let packet = {
++      from: this.actorID,
++      type: "networkEventUpdate",
++      updateType: "requestHeaders",
++      headers: aHeaders.length,
++    };
++
++    this.conn.send(packet);
++  },
++
++  addRequestCookies: function NEA_addRequestCookies(aCookies)
++  {
++    this._request.cookies = aCookies;
++
++    let packet = {
++      from: this.actorID,
++      type: "networkEventUpdate",
++      updateType: "requestCookies",
++      cookies: aCookies.length,
++    };
++
++    this.conn.send(packet);
++  },
++
++  addRequestPostData: function NEA_addRequestPostData(aPostData)
++  {
++    this._request.postData = aPostData;
++
++    let packet = {
++      from: this.actorID,
++      type: "networkEventUpdate",
++      updateType: "requestPostData",
++      dataSize: aPostData.length,
++    };
++
++    this.conn.send(packet);
++  },
++
++  addResponseStart: function NEA_addResponseStart(aInfo)
++  {
++    this._response.httpVersion = aInfo.httpVersion;
++    this._response.status = aInfo.status;
++    this._response.statusText = aInfo.statusText;
++    this._response.headersSize = aInfo.headersSize;
++    this._discardResponseBody = aInfo.discardResponseBody;
++
++    let packet = {
++      from: this.actorID,
++      type: "networkEventUpdate",
++      updateType: "responseStart",
++      response: aInfo,
++    };
++
++    this.conn.send(packet);
++  },
++
++  addResponseHeaders: function NEA_addResponseHeaders(aHeaders)
++  {
++    this._response.headers = aHeaders;
++
++    let packet = {
++      from: this.actorID,
++      type: "networkEventUpdate",
++      updateType: "responseHeaders",
++      headers: aHeaders.length,
++    };
++
++    this.conn.send(packet);
++  },
++
++  addResponseCookies: function NEA_addResponseCookies(aCookies)
++  {
++    this._response.cookies = aCookies;
++
++    let packet = {
++      from: this.actorID,
++      type: "networkEventUpdate",
++      updateType: "responseCookies",
++      cookies: aCookies.length,
++    };
++
++    this.conn.send(packet);
++  },
++
++  addResponseContent: function NEA_addResponseContent(aContent)
++  {
++    this._response.content = aContent;
++
++    let packet = {
++      from: this.actorID,
++      type: "networkEventUpdate",
++      updateType: "responseContent",
++      contentSize: aContent.length,
++    };
++
++    this.conn.send(packet);
++  },
++
++  addResponseTimings: function NEA_addResponseTimings(aTotal, aTimings)
++  {
++    this._totalTime = aTotal;
++    this._timings = aTimings;
++
++    let packet = {
++      from: this.actorID,
++      type: "networkEventUpdate",
++      updateType: "responseTimings",
++      totalTime: aTotal,
++    };
++
++    this.conn.send(packet);
++  },
++};
++
++NetworkEventActor.prototype.requestTypes =
++{
++  "release": NetworkEventActor.prototype.onRelease,
++  "getRequestHeaders": NetworkEventActor.prototype.onGetRequestHeaders,
++  "getRequestCookies": NetworkEventActor.prototype.onGetRequestCookies,
++  "getRequestPostData": NetworkEventActor.prototype.onGetRequestPostData,
++  "getResponseHeaders": NetworkEventActor.prototype.onGetResponseHeaders,
++  "getResponseCookies": NetworkEventActor.prototype.onGetResponseCookies,
++  "getResponseContent": NetworkEventActor.prototype.onGetResponseContent,
++  "getEventTimings": NetworkEventActor.prototype.onGetEventTimings,
++};
++
 diff --git a/browser/devtools/webconsole/NetworkHelper.jsm b/toolkit/devtools/webconsole/NetworkHelper.jsm
 rename from browser/devtools/webconsole/NetworkHelper.jsm
 rename to toolkit/devtools/webconsole/NetworkHelper.jsm
@@ -1464,7 +1843,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  // function foobar2(a) { ...
  // function() { ...
  const REGEX_MATCH_FUNCTION_NAME = /^\(?function\s+([^(\s]+)\s*\(/;
-@@ -1854,8 +1866,1201 @@ function JSTermHelpers(aOwner)
+@@ -1854,8 +1866,1132 @@ function JSTermHelpers(aOwner)
     * @return void
     */
    aOwner.sandbox.print = function JSTH_print(aString)
@@ -1510,6 +1889,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 + *        HttpActivity object associated with this request. Once the request is
 + *        complete the aHttpActivity object is updated to include the response
 + *        headers and body.
++ * TODO: update comment
 + */
 +function NetworkResponseListener(aOwner, aHttpActivity)
 +{
@@ -1602,7 +1982,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +
 +    this.bodySize += aCount;
 +
-+    if (!this.httpActivity.meta.discardResponseBody &&
++    if (!this.httpActivity.discardResponseBody &&
 +        this.receivedData.length < RESPONSE_BODY_LIMIT) {
 +      this.receivedData += NetworkHelper.
 +                           convertToUnicode(data, aRequest.contentCharset);
@@ -1665,19 +2045,10 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +    }
 +    this._foundOpenResponse = true;
 +
-+    let logResponse = this.httpActivity.log.entries[0].response;
-+    logResponse.headers = openResponse.headers;
-+    logResponse.httpVersion = openResponse.httpVersion;
-+    logResponse.status = openResponse.status;
-+    logResponse.statusText = openResponse.statusText;
-+    if (openResponse.cookies) {
-+      logResponse.cookies = openResponse.cookies;
-+    }
-+
 +    delete this.owner.openResponses[openResponse.id];
 +
-+    this.httpActivity.meta.stages.push("http-on-examine-response");
-+    this.owner.sendActivity(this.httpActivity);
++    this.httpActivity.owner.addResponseHeaders(openResponse.headers);
++    this.httpActivity.owner.addResponseCookies(openResponse.cookies);
 +  },
 +
 +  /**
@@ -1696,20 +2067,14 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +
 +    this._findOpenResponse();
 +
-+    let meta = this.httpActivity.meta;
-+    let entry = this.httpActivity.log.entries[0];
-+    let request = entry.request;
-+    let response = entry.response;
-+
-+    meta.stages.push("REQUEST_STOP");
-+
-+    if (!meta.discardResponseBody && this.receivedData.length) {
++    if (!this.httpActivity.discardResponseBody && this.receivedData.length) {
 +      this._onComplete(this.receivedData);
 +    }
-+    else if (!meta.discardResponseBody && response.status == 304) {
++    else if (!this.httpActivity.discardResponseBody &&
++             this.httpActivity.responseStatus == 304) {
 +      // Response is cached, so we load it from cache.
 +      let charset = this.request.contentCharset || this.httpActivity.charset;
-+      NetworkHelper.loadFromCache(request.url, charset,
++      NetworkHelper.loadFromCache(this.httpActivity.url, charset,
 +                                  this._onComplete.bind(this));
 +    }
 +    else {
@@ -1727,39 +2092,31 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   */
 +  _onComplete: function NRL__onComplete(aData)
 +  {
-+    let response = this.httpActivity.log.entries[0].response;
-+
-+    try {
-+      response.bodySize = response.status != 304 ? this.request.contentLength : 0;
-+    }
-+    catch (ex) {
-+      response.bodySize = -1;
-+    }
++    let response = {};
 +
 +    // TODO: Bug 787981 - use LongStringActor for strings that are too long.
 +
 +    try {
-+      response.content = { mimeType: this.request.contentType };
++      response.mimeType = this.request.contentType;
 +    }
 +    catch (ex) {
-+      response.content = { mimeType: "" };
++      response.mimeType = "";
 +    }
 +
 +    if (response.content.mimeType && this.request.contentCharset) {
-+      response.content.mimeType += "; charset=" + this.request.contentCharset;
++      response.mimeType += "; charset=" + this.request.contentCharset;
 +    }
 +
-+    response.content.size = this.bodySize || (aData || "").length;
-+
 +    if (aData) {
-+      response.content.text = aData;
++      response.text = aData;
 +    }
 +
 +    this.receivedData = "";
 +
-+    this.owner.sendActivity(this.httpActivity);
++    this.httpActivity.owner.addResponseContent(response);
 +
 +    this.httpActivity.channel = null;
++    this.httpActivity.owner = null;
 +    this.httpActivity = null;
 +    this.sink = null;
 +    this.inputStream = null;
@@ -1820,6 +2177,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 + *        and associated metadata/information for the request.
 + *        - saveRequestAndResponseBodies property which tells if you want to log
 + *        request and response bodies.
++ * TODO: update comment
 + */
 +function NetworkMonitor(aWindow, aOwner)
 +{
@@ -1846,11 +2204,6 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +    0x804b0005: "STATUS_SENDING_TO",
 +    0x804b000a: "STATUS_WAITING_FOR",
 +    0x804b0006: "STATUS_RECEIVING_FROM"
-+  },
-+
-+  harCreator: {
-+    name: Services.appinfo.name + " - Web Console",
-+    version: Services.appinfo.version,
 +  },
 +
 +  // Network response bodies are piped through a buffer of the given size (in
@@ -2017,7 +2370,6 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +        httpActivity.timings[stage].last = aTimestamp;
 +      }
 +      else {
-+        httpActivity.meta.stages.push(stage);
 +        httpActivity.timings[stage] = {
 +          first: aTimestamp,
 +          last: aTimestamp,
@@ -2063,18 +2415,32 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +
 +    let httpActivity = this.createActivityObject(aChannel);
 +    httpActivity.charset = win.document.characterSet; // see NM__onRequestBodySent()
-+    httpActivity.meta.stages.push("REQUEST_HEADER"); // activity stage (aActivitySubtype)
 +
 +    httpActivity.timings.REQUEST_HEADER = {
 +      first: aTimestamp,
 +      last: aTimestamp
 +    };
 +
-+    let entry = httpActivity.log.entries[0];
-+    entry.startedDateTime = new Date(Math.round(aTimestamp / 1000)).toISOString();
++    let httpVersionMaj = {};
++    let httpVersionMin = {};
++    let event = {};
++    event.startedDateTime = new Date(Math.round(aTimestamp / 1000)).toISOString();
++    event.headersSize = aExtraStringData.length;
++    event.method = aChannel.requestMethod;
++    event.url = aChannel.URI.spec;
 +
-+    let request = httpActivity.log.entries[0].request;
++    // Determine the HTTP version.
++    aChannel.QueryInterface(Ci.nsIHttpChannelInternal);
++    aChannel.getRequestVersion(httpVersionMaj, httpVersionMin);
 +
++    event.httpVersion = "HTTP/" + httpVersionMaj.value + "." +
++                                  httpVersionMin.value;
++
++    event.discardRequestBody = !this.saveRequestAndResponseBodies;
++    event.discardResponseBody = !this.saveRequestAndResponseBodies;
++
++    let headers = [];
++    let cookies = [];
 +    let cookieHeader = null;
 +
 +    // Copy the request header data.
@@ -2084,31 +2450,22 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +        if (aName == "Cookie") {
 +          cookieHeader = aValue;
 +        }
-+        request.headers.push({ name: aName, value: aValue });
++        headers.push({ name: aName, value: aValue });
 +      }
 +    });
 +
 +    if (cookieHeader) {
-+      request.cookies = NetworkHelper.parseCookieHeader(cookieHeader);
++      cookies = NetworkHelper.parseCookieHeader(cookieHeader);
 +    }
 +
-+    // Determine the HTTP version.
-+    let httpVersionMaj = {};
-+    let httpVersionMin = {};
-+
-+    aChannel.QueryInterface(Ci.nsIHttpChannelInternal);
-+    aChannel.getRequestVersion(httpVersionMaj, httpVersionMin);
-+
-+    request.httpVersion = "HTTP/" + httpVersionMaj.value + "." +
-+                                    httpVersionMin.value;
-+
-+    request.headersSize = aExtraStringData.length;
++    httpActivity.owner = this.owner.onNetworkEvent(event);
 +
 +    this._setupResponseListener(httpActivity);
 +
 +    this.openRequests[httpActivity.id] = httpActivity;
 +
-+    this.sendActivity(httpActivity);
++    httpActivity.owner.addRequestHeaders(headers);
++    httpActivity.owner.addRequestCookies(cookies);
 +  },
 +
 +  /**
@@ -2132,46 +2489,12 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +      id: gSequenceId(),
 +      channel: aChannel,
 +      charset: null, // see NM__onRequestHeader()
-+      meta: { // holds metadata about the activity object
-+        stages: [], // activity stages (aActivitySubtype)
-+        discardRequestBody: !this.saveRequestAndResponseBodies,
-+        discardResponseBody: !this.saveRequestAndResponseBodies,
-+      },
++      url: aChannel.URI.spec,
++      discardRequestBody: !this.saveRequestAndResponseBodies,
++      discardResponseBody: !this.saveRequestAndResponseBodies,
 +      timings: {}, // internal timing information, see NM_observeActivity()
-+      log: { // HAR-like object
-+        version: "1.2",
-+        creator: this.harCreator,
-+        // missing |browser| and |pages|
-+        entries: [{  // we only track one entry at a time
-+          connection: gSequenceId(), // connection ID
-+          startedDateTime: 0, // see NM__onRequestHeader()
-+          time: 0, // see NM__setupHarTimings()
-+          // missing |serverIPAddress| and |cache|
-+          request: {
-+            method: aChannel.requestMethod,
-+            url: aChannel.URI.spec,
-+            httpVersion: "", // see NM__onRequestHeader()
-+            headers: [], // see NM__onRequestHeader()
-+            cookies: [], // see NM__onRequestHeader()
-+            queryString: [], // never set
-+            headersSize: -1, // see NM__onRequestHeader()
-+            bodySize: -1, // see NM__onRequestBodySent()
-+            postData: null, // see NM__onRequestBodySent()
-+          },
-+          response: {
-+            status: 0, // see NM__onResponseHeader()
-+            statusText: "", // see NM__onResponseHeader()
-+            httpVersion: "", // see NM__onResponseHeader()
-+            headers: [], // see NM_httpResponseExaminer()
-+            cookies: [], // see NM_httpResponseExaminer()
-+            content: null, // see NRL_onStreamClose()
-+            redirectURL: "", // never set
-+            headersSize: -1, // see NM__onResponseHeader()
-+            bodySize: -1, // see NRL_onStreamClose()
-+          },
-+          timings: {}, // see NM__setupHarTimings()
-+        }],
-+      },
++      responseStatus: null, // see NM__onResponseHeader()
++      owner: null, // the activity owner which is notified when changes happen
 +    };
 +  },
 +
@@ -2214,19 +2537,6 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +  },
 +
 +  /**
-+   * Send an HTTP activity object to the network monitorowner.
-+   *
-+   * @param object aHttpActivity
-+   *        The HTTP activity object you want to send.
-+   */
-+  sendActivity: function NM_sendActivity(aHttpActivity)
-+  {
-+    if (this.owner) {
-+      this.owner.onNetworkActivity(aHttpActivity.log, aHttpActivity.meta);
-+    }
-+  },
-+
-+  /**
 +   * Handler for ACTIVITY_SUBTYPE_REQUEST_BODY_SENT. The request body is logged
 +   * here.
 +   *
@@ -2236,17 +2546,15 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   */
 +  _onRequestBodySent: function NM__onRequestBodySent(aHttpActivity)
 +  {
-+    if (aHttpActivity.meta.discardRequestBody) {
++    if (aHttpActivity.discardRequestBody) {
 +      return;
 +    }
-+
-+    let request = aHttpActivity.log.entries[0].request;
 +
 +    let sentBody = NetworkHelper.
 +                   readPostTextFromRequest(aHttpActivity.channel,
 +                                           aHttpActivity.charset);
 +
-+    if (!sentBody && request.url == this.window.location.href) {
++    if (!sentBody && aHttpActivity.url == this.window.location.href) {
 +      // If the request URL is the same as the current page URL, then
 +      // we can try to get the posted text from the page directly.
 +      // This check is necessary as otherwise the
@@ -2259,19 +2567,10 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +      sentBody = NetworkHelper.
 +                 readPostTextFromPageViaWebNav(webNav, aHttpActivity.charset);
 +    }
-+    if (!sentBody) {
-+      return;
++
++    if (sentBody) {
++      aHttpActivity.owner.addRequestPostData(sentBody);
 +    }
-+
-+    request.postData = {
-+      mimeType: "", // never set
-+      params: [],  // never set
-+      text: sentBody,
-+    };
-+
-+    request.bodySize = sentBody.length;
-+
-+    this.sendActivity(aHttpActivity);
 +  },
 +
 +  /**
@@ -2298,16 +2597,17 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +    // that is not trivial to do in an accurate manner. Hence, we save the
 +    // response headers in this._httpResponseExaminer().
 +
-+    let response = aHttpActivity.log.entries[0].response;
-+
 +    let headers = aExtraStringData.split(/\r\n|\n|\r/);
 +    let statusLine = headers.shift();
-+
 +    let statusLineArray = statusLine.split(" ");
++
++    let response = {};
 +    response.httpVersion = statusLineArray.shift();
 +    response.status = statusLineArray.shift();
 +    response.statusText = statusLineArray.join(" ");
 +    response.headersSize = aExtraStringData.length;
++
++    aHttpActivity.responseStatus = response.status;
 +
 +    // Discard the response body for known response statuses.
 +    switch (parseInt(response.status)) {
@@ -2315,11 +2615,13 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +      case HTTP_FOUND:
 +      case HTTP_SEE_OTHER:
 +      case HTTP_TEMPORARY_REDIRECT:
-+        aHttpActivity.meta.discardResponseBody = true;
++        aHttpActivity.discardResponseBody = true;
 +        break;
 +    }
 +
-+    this.sendActivity(aHttpActivity);
++    response.discardResponseBody = aHttpActivity.discardResponseBody;
++
++    aHttpActivity.owner.addResponseStart(response);
 +  },
 +
 +  /**
@@ -2333,8 +2635,8 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   */
 +  _onTransactionClose: function NM__onTransactionClose(aHttpActivity)
 +  {
-+    this._setupHarTimings(aHttpActivity);
-+    this.sendActivity(aHttpActivity);
++    let result = this._setupHarTimings(aHttpActivity);
++    aHttpActivity.owner.addResponseTimings(result.total, result.timings);
 +    delete this.openRequests[aHttpActivity.id];
 +  },
 +
@@ -2346,12 +2648,15 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   *
 +   * @param object aHttpActivity
 +   *        The HTTP activity object we are working with.
++   * @return object
++   *         This object holds two properties:
++   *         - total - the total time for all of the request and response.
++   *         - timings - the HAR timings object.
 +   */
 +  _setupHarTimings: function NM__setupHarTimings(aHttpActivity)
 +  {
 +    let timings = aHttpActivity.timings;
-+    let entry = aHttpActivity.log.entries[0];
-+    let harTimings = entry.timings;
++    let harTimings = {};
 +
 +    // Not clear how we can determine "blocked" time.
 +    harTimings.blocked = -1;
@@ -2402,14 +2707,19 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +      harTimings.receive = -1;
 +    }
 +
-+    entry.time = 0;
++    let totalTime = 0;
 +    for (let timing in harTimings) {
 +      let time = Math.max(Math.round(harTimings[timing] / 1000), -1);
 +      harTimings[timing] = time;
 +      if (time > -1) {
-+        entry.time += time;
++        totalTime += time;
 +      }
 +    }
++
++    return {
++      total: totalTime,
++      timings: harTimings,
++    };
 +  },
 +
 +  /**
