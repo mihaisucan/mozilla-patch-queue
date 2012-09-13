@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 7a8c5e20a52da680a348b721c4a994d150b42042
+# Parent de964b070c2a26cc9f015359d36e741aeff1dcd8
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1347482767 -10800
+# Date 1347569651 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 3: network logging
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
@@ -205,12 +205,466 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
                                    "resource://gre/modules/devtools/WebConsoleUtils.jsm");
  
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+@@ -71,41 +71,43 @@ function NetworkPanel(aParent, aHttpActi
+ 
+     if (self.linkNode) {
+       self.linkNode._panelOpen = false;
+       self.linkNode = null;
+     }
+   }, false);
+ 
+   // Set the document object and update the content once the panel is loaded.
+-  this.panel.addEventListener("load", function onLoad() {
+-    self.panel.removeEventListener("load", onLoad, true);
+-    self.document = self.iframe.contentWindow.document;
++  this.iframe.addEventListener("load", function onLoad() {
++    self.iframe.removeEventListener("load", onLoad, true);
++    self.document = (self.iframe.contentWindow || {}).document;
++    self.update();
++  }, true);
++
++  this.panel.addEventListener("popupshown", function onPopupShown() {
++    self.panel.removeEventListener("popupshown", onPopupShown, true);
++    if (!self.document) {
++      self.document = (self.iframe.contentWindow || {}).document;
++    }
+     self.update();
+   }, true);
+ 
+   // Create the footer.
+   let footer = createElement(doc, "hbox", { align: "end" });
+   createAndAppendElement(footer, "spacer", { flex: 1 });
+ 
+   createAndAppendElement(footer, "resizer", { dir: "bottomend" });
+   this.panel.appendChild(footer);
+ 
+   aParent.appendChild(this.panel);
+ }
+ 
+ NetworkPanel.prototype =
+ {
+   /**
+-   * Callback is called once the NetworkPanel is processed completely. Used by
+-   * unit tests.
+-   */
+-  isDoneCallback: null,
+-
+-  /**
+    * The current state of the output.
+    */
+   _state: 0,
+ 
+   /**
+    * State variables.
+    */
+   _INIT: 0,
+@@ -145,19 +147,18 @@ NetworkPanel.prototype =
+    *         out.
+    */
+   get contentType()
+   {
+     if (this._contentType) {
+       return this._contentType;
+     }
+ 
+-    let entry = this.httpActivity.log.entries[0];
+-    let request = entry.request;
+-    let response = entry.response;
++    let request = this.httpActivity.request;
++    let response = this.httpActivity.response;
+ 
+     let contentType = "";
+     let types = response.content ?
+                 (response.content.mimeType || "").split(/,|;/) : [];
+     for (let i = 0; i < types.length; i++) {
+       if (types[i] in NetworkHelper.mimeCategoryMap) {
+         contentType = types[i];
+         break;
+@@ -231,28 +232,28 @@ NetworkPanel.prototype =
+    * Tells if the server response is cached.
+    *
+    * @returns boolean
+    *          Returns true if the server responded that the request is already
+    *          in the browser's cache, false otherwise.
+    */
+   get _isResponseCached()
+   {
+-    return this.httpActivity.log.entries[0].response.status == 304;
++    return this.httpActivity.response.status == 304;
+   },
+ 
+   /**
+    * Tells if the request body includes form data.
+    *
+    * @returns boolean
+    *          Returns true if the posted body contains form data.
+    */
+   get _isRequestBodyFormData()
+   {
+-    let requestBody = this.httpActivity.log.entries[0].request.postData.text;
++    let requestBody = this.httpActivity.request.postData.text;
+     return this._fromDataRegExp.test(requestBody);
+   },
+ 
+   /**
+    * Appends the node with id=aId by the text aValue.
+    *
+    * @param string aId
+    * @param string aValue
+@@ -336,19 +337,18 @@ NetworkPanel.prototype =
+    * If the request header contains cookie data, a list of sent cookies is
+    * generated and a special sent cookie section is displayed + the cookie list
+    * added to it.
+    *
+    * @returns void
+    */
+   _displayRequestHeader: function NP__displayRequestHeader()
+   {
+-    let entry = this.httpActivity.log.entries[0];
+-    let request = entry.request;
+-    let requestTime = new Date(entry.startedDateTime);
++    let request = this.httpActivity.request;
++    let requestTime = new Date(this.httpActivity.startedDateTime);
+ 
+     this._appendTextNode("headUrl", request.url);
+     this._appendTextNode("headMethod", request.method);
+     this._appendTextNode("requestHeadersInfo",
+                          l10n.timestampString(requestTime));
+ 
+     this._appendList("requestHeadersContent", request.headers, true);
+ 
+@@ -359,30 +359,32 @@ NetworkPanel.prototype =
+   },
+ 
+   /**
+    * Displays the request body section of the NetworkPanel and set the request
+    * body content on the NetworkPanel.
+    *
+    * @returns void
+    */
+-  _displayRequestBody: function NP__displayRequestBody() {
+-    let postData = this.httpActivity.log.entries[0].request.postData;
++  _displayRequestBody: function NP__displayRequestBody()
++  {
++    let postData = this.httpActivity.request.postData;
+     this._displayNode("requestBody");
+     this._appendTextNode("requestBodyContent", postData.text);
+   },
+ 
+   /*
+    * Displays the `sent form data` section. Parses the request header for the
+    * submitted form data displays it inside of the `sent form data` section.
+    *
+    * @returns void
+    */
+-  _displayRequestForm: function NP__processRequestForm() {
+-    let postData = this.httpActivity.log.entries[0].request.postData.text;
++  _displayRequestForm: function NP__processRequestForm()
++  {
++    let postData = this.httpActivity.postData.text;
+     let requestBodyLines = postData.split("\n");
+     let formData = requestBodyLines[requestBodyLines.length - 1].
+                       replace(/\+/g, " ").split("&");
+ 
+     function unescapeText(aText)
+     {
+       try {
+         return decodeURIComponent(aText);
+@@ -412,19 +414,18 @@ NetworkPanel.prototype =
+    * Displays the response section of the NetworkPanel, sets the response status,
+    * the duration between the start of the request and the receiving of the
+    * response header as well as the response header content on the the NetworkPanel.
+    *
+    * @returns void
+    */
+   _displayResponseHeader: function NP__displayResponseHeader()
+   {
+-    let entry = this.httpActivity.log.entries[0];
+-    let timing = entry.timings;
+-    let response = entry.response;
++    let timing = this.httpActivity.timings;
++    let response = this.httpActivity.response;
+ 
+     this._appendTextNode("headStatus",
+                          [response.httpVersion, response.status,
+                           response.statusText].join(" "));
+ 
+     // Calculate how much time it took from the request start, until the
+     // response started to be received.
+     let deltaDuration = 0;
+@@ -448,26 +449,26 @@ NetworkPanel.prototype =
+    * the receiving of the response header and the end of the request. Once the
+    * image is loaded, the size of the requested image is set.
+    *
+    * @returns void
+    */
+   _displayResponseImage: function NP__displayResponseImage()
+   {
+     let self = this;
+-    let entry = this.httpActivity.log.entries[0];
+-    let timing = entry.timings;
+-    let request = entry.request;
++    let timing = this.httpActivity.timings;
++    let request = this.httpActivity.request;
+     let cached = "";
+ 
+     if (this._isResponseCached) {
+       cached = "Cached";
+     }
+ 
+-    let imageNode = this.document.getElementById("responseImage" + cached +"Node");
++    let imageNode = this.document.getElementById("responseImage" +
++                                                 cached + "Node");
+     imageNode.setAttribute("src", request.url);
+ 
+     // This function is called to set the imageInfo.
+     function setImageInfo() {
+       self._appendTextNode("responseImage" + cached + "Info",
+         self._format("imageSizeDeltaDurationMS",
+           [ imageNode.width, imageNode.height, timing.receive ]
+         )
+@@ -493,19 +494,18 @@ NetworkPanel.prototype =
+    * Displays the response body section, sets the the duration between
+    * the receiving of the response header and the end of the request as well as
+    * the content of the response body on the NetworkPanel.
+    *
+    * @returns void
+    */
+   _displayResponseBody: function NP__displayResponseBody()
+   {
+-    let entry = this.httpActivity.log.entries[0];
+-    let timing = entry.timings;
+-    let response = entry.response;
++    let timing = this.httpActivity.timings;
++    let response = this.httpActivity.response;
+     let cached =  this._isResponseCached ? "Cached" : "";
+ 
+     this._appendTextNode("responseBody" + cached + "Info",
+       this._format("durationMS", [timing.receive]));
+ 
+     this._displayNode("responseBody" + cached);
+     this._appendTextNode("responseBody" + cached + "Content",
+                          response.content.text);
+@@ -514,17 +514,17 @@ NetworkPanel.prototype =
+   /**
+    * Displays the `Unknown Content-Type hint` and sets the duration between the
+    * receiving of the response header on the NetworkPanel.
+    *
+    * @returns void
+    */
+   _displayResponseBodyUnknownType: function NP__displayResponseBodyUnknownType()
+   {
+-    let timing = this.httpActivity.log.entries[0].timings;
++    let timing = this.httpActivity.timings;
+ 
+     this._displayNode("responseBodyUnknownType");
+     this._appendTextNode("responseBodyUnknownTypeInfo",
+       this._format("durationMS", [timing.receive]));
+ 
+     this._appendTextNode("responseBodyUnknownTypeContent",
+       this._format("responseBodyUnableToDisplay.content", [this.contentType]));
+   },
+@@ -532,17 +532,17 @@ NetworkPanel.prototype =
+   /**
+    * Displays the `no response body` section and sets the the duration between
+    * the receiving of the response header and the end of the request.
+    *
+    * @returns void
+    */
+   _displayNoResponseBody: function NP_displayNoResponseBody()
+   {
+-    let timing = this.httpActivity.log.entries[0].timings;
++    let timing = this.httpActivity.timings;
+ 
+     this._displayNode("responseNoBody");
+     this._appendTextNode("responseNoBodyInfo",
+       this._format("durationMS", [timing.receive]));
+   },
+ 
+   /**
+    * Updates the content of the NetworkPanel's iframe.
+@@ -552,61 +552,58 @@ NetworkPanel.prototype =
+   update: function NP_update()
+   {
+     // After the iframe's contentWindow is ready, the document object is set.
+     // If the document object is not available yet nothing needs to be updated.
+     if (!this.document) {
+       return;
+     }
+ 
+-    let stages = this.httpActivity.meta.stages;
+-    let entry = this.httpActivity.log.entries[0];
+-    let timing = entry.timings;
+-    let request = entry.request;
+-    let response = entry.response;
++    let updates = this.httpActivity.updates;
++    let timing = this.httpActivity.timings;
++    let request = this.httpActivity.request;
++    let response = this.httpActivity.response;
+ 
+     switch (this._state) {
+       case this._INIT:
+         this._displayRequestHeader();
+         this._state = this._DISPLAYED_REQUEST_HEADER;
+         // FALL THROUGH
+ 
+       case this._DISPLAYED_REQUEST_HEADER:
+         // Process the request body if there is one.
+-        if (!this.httpActivity.meta.discardRequestBody && request.postData) {
++        if (!this.httpActivity.discardRequestBody && request.method == "POST" &&
++            request.postData.text) {
+           // Check if we send some form data. If so, display the form data special.
+           if (this._isRequestBodyFormData) {
+             this._displayRequestForm();
+           }
+           else {
+             this._displayRequestBody();
+           }
+           this._state = this._DISPLAYED_REQUEST_BODY;
+         }
+         // FALL THROUGH
+ 
+       case this._DISPLAYED_REQUEST_BODY:
+-        // There is always a response header. Therefore we can skip here if
+-        // we don't have a response header yet and don't have to try updating
+-        // anything else in the NetworkPanel.
+         if (!response.headers.length || !Object.keys(timing).length) {
+           break;
+         }
+         this._displayResponseHeader();
+         this._state = this._DISPLAYED_RESPONSE_HEADER;
+         // FALL THROUGH
+ 
+       case this._DISPLAYED_RESPONSE_HEADER:
+-        if (stages.indexOf("REQUEST_STOP") == -1 ||
+-            stages.indexOf("TRANSACTION_CLOSE") == -1) {
++        if (updates.indexOf("responseContent") == -1 ||
++            updates.indexOf("eventTimings") == -1) {
+           break;
+         }
+ 
+         this._state = this._TRANSITION_CLOSED;
+-        if (this.httpActivity.meta.discardResponseBody) {
++        if (this.httpActivity.discardResponseBody) {
+           break;
+         }
+ 
+         if (!response.content || !response.content.text) {
+           this._displayNoResponseBody();
+         }
+         else if (this._responseIsImage) {
+           this._displayResponseImage();
+diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
+--- a/browser/devtools/webconsole/PropertyPanel.jsm
++++ b/browser/devtools/webconsole/PropertyPanel.jsm
+@@ -179,17 +179,17 @@ PropertyTreeView.prototype = {
+    * @param object aObject
+    *        The object to make an actor for.
+    * @return object
+    *         The fake actor grip that represents the given object.
+    */
+   _localObjectGrip: function PTV__localObjectGrip(aObject)
+   {
+     let grip = WebConsoleUtils.getObjectGrip(aObject);
+-    grip.actor = "obj" + this._n;
++    grip.actor = "obj" + gSequenceId();
+     this._localObjectActors[grip.actor] = aObject;
+     return grip;
+   },
+ 
+   /**
+    * A properties provider for when the user inspects local objects (not remote
+    * ones).
+    *
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js b/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js
+@@ -5,37 +5,42 @@
+  *
+  * Contributor(s):
+  *  Mihai Șucan <mihai.sucan@gmail.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-599725-response-headers.sjs";
+ 
+-function performTest(lastFinishedRequest)
++function performTest(lastFinishedRequest, aConsole)
+ {
+   ok(lastFinishedRequest, "page load was logged");
+ 
++  let headers = null;
++
+   function readHeader(aName)
+   {
+     for (let header of headers) {
+       if (header.name == aName) {
+         return header.value;
+       }
+     }
+     return null;
+   }
+ 
+-  let headers = lastFinishedRequest.log.entries[0].response.headers;
+-  ok(headers, "we have the response headers");
+-  ok(!readHeader("Content-Type"), "we do not have the Content-Type header");
+-  isnot(readHeader("Content-Length"), 60, "Content-Length != 60");
++  aConsole.webConsoleClient.getResponseHeaders(lastFinishedRequest.actor,
++    function (aResponse) {
++      headers = aResponse.headers;
++      ok(headers, "we have the response headers");
++      ok(!readHeader("Content-Type"), "we do not have the Content-Type header");
++      isnot(readHeader("Content-Length"), 60, "Content-Length != 60");
++      executeSoon(finishTest);
++    });
+ 
+   HUDService.lastFinishedRequestCallback = null;
+-  executeSoon(finishTest);
+ }
+ 
+ function test()
+ {
+   addTab(TEST_URI);
+ 
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js b/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_600183_charset.js
-@@ -24,25 +24,30 @@ function performTest(lastFinishedRequest
+@@ -5,44 +5,54 @@
+  *
+  * Contributor(s):
+  *  Mihai Șucan <mihai.sucan@gmail.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-600183-charset.html";
+ 
+-function performTest(lastFinishedRequest)
++function performTest(lastFinishedRequest, aConsole)
+ {
+   ok(lastFinishedRequest, "charset test page was loaded and logged");
+ 
+-  let body = lastFinishedRequest.log.entries[0].response.content.text;
+-  ok(body, "we have the response body");
++  aConsole.webConsoleClient.getResponseContent(lastFinishedRequest.actor,
++    function (aResponse) {
++      ok(!aResponse.contentDiscarded, "response body was not discarded");
+ 
+-  let chars = "\u7684\u95ee\u5019!"; // 的问候!
+-  isnot(body.indexOf("<p>" + chars + "</p>"), -1,
+-    "found the chinese simplified string");
++      let body = aResponse.content.text;
++      ok(body, "we have the response body");
++
++      let chars = "\u7684\u95ee\u5019!"; // 的问候!
++      isnot(body.indexOf("<p>" + chars + "</p>"), -1,
++        "found the chinese simplified string");
++      executeSoon(finishTest);
++    });
+ 
    HUDService.lastFinishedRequestCallback = null;
-   executeSoon(finishTest);
+-  executeSoon(finishTest);
  }
  
  function test()
@@ -317,18 +771,29 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
-@@ -12,17 +12,48 @@ const TEST_URI = "http://example.com/bro
- let lastFinishedRequests = {};
+@@ -5,75 +5,133 @@
+  *
+  * Contributor(s):
+  *   Mihai Sucan <mihai.sucan@gmail.com>
+  */
  
- function requestDoneCallback(aHttpRequest)
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-630733-response-redirect-headers.sjs";
+ 
+ let lastFinishedRequests = {};
++let webConsoleClient;
+ 
+-function requestDoneCallback(aHttpRequest)
++function requestDoneCallback(aHttpRequest )
  {
-   let status = aHttpRequest.log.entries[0].response.status;
+-  let status = aHttpRequest.log.entries[0].response.status;
++  let status = aHttpRequest.response.status;
    lastFinishedRequests[status] = aHttpRequest;
  }
  
 -function performTest(aEvent)
 +function consoleOpened(hud)
 +{
++  webConsoleClient = hud.ui.webConsoleClient;
 +  hud.ui.saveRequestAndResponseBodies = true;
 +
 +  waitForSuccess({
@@ -353,21 +818,87 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_resp
 +      return "301" in lastFinishedRequests &&
 +             "404" in lastFinishedRequests;
 +    },
-+    successFn: performTest,
++    successFn: getHeaders,
 +    failureFn: finishTest,
 +  };
 +}
 +
-+function performTest()
++function getHeaders()
  {
    HUDService.lastFinishedRequestCallback = null;
  
    ok("301" in lastFinishedRequests, "request 1: 301 Moved Permanently");
    ok("404" in lastFinishedRequests, "request 2: 404 Not found");
  
++  webConsoleClient.getResponseHeaders(lastFinishedRequests["301"].actor,
++    function (aResponse) {
++      lastFinishedRequests["301"].response.headers = aResponse.headers;
++
++      webConsoleClient.getResponseHeaders(lastFinishedRequests["404"].actor,
++        function (aResponse) {
++          lastFinishedRequests["404"].response.headers = aResponse.headers;
++          executeSoon(getContent);
++        });
++    });
++}
++
++function getContent()
++{
++  webConsoleClient.getResponseContent(lastFinishedRequests["301"].actor,
++    function (aResponse) {
++      lastFinishedRequests["301"].response.content = aResponse.content;
++      lastFinishedRequests["301"].discardResponseBody = aResponse.contentDiscarded;
++
++      webConsoleClient.getResponseContent(lastFinishedRequests["404"].actor,
++        function (aResponse) {
++          lastFinishedRequests["404"].response.content = aResponse.content;
++          lastFinishedRequests["404"].discardResponseBody =
++            aResponse.contentDiscarded;
++
++          webConsoleClient = null;
++          executeSoon(performTest);
++        });
++    });
++}
++
++function performTest()
++{
    function readHeader(aName)
    {
-@@ -56,24 +87,13 @@ function performTest(aEvent)
+     for (let header of headers) {
+       if (header.name == aName) {
+         return header.value;
+       }
+     }
+     return null;
+   }
+ 
+-  let headers = lastFinishedRequests["301"].log.entries[0].response.headers;
++  let headers = lastFinishedRequests["301"].response.headers;
+   is(readHeader("Content-Type"), "text/html",
+      "we do have the Content-Type header");
+   is(readHeader("Content-Length"), 71, "Content-Length is correct");
+   is(readHeader("Location"), "/redirect-from-bug-630733",
+      "Content-Length is correct");
+   is(readHeader("x-foobar-bug630733"), "bazbaz",
+      "X-Foobar-bug630733 is correct");
+-  let body = lastFinishedRequests["301"].log.entries[0].response.content;
++
++  let body = lastFinishedRequests["301"].response.content;
+   ok(!body.text, "body discarded for request 1");
++  ok(lastFinishedRequests["301"].discardResponseBody,
++     "body discarded for request 1 (confirmed)");
+ 
+-  headers = lastFinishedRequests["404"].log.entries[0].response.headers;
++  headers = lastFinishedRequests["404"].response.headers;
+   ok(!readHeader("Location"), "no Location header");
+   ok(!readHeader("x-foobar-bug630733"), "no X-Foobar-bug630733 header");
+ 
+-  body = lastFinishedRequests["404"].log.entries[0].response.content.text;
++  body = lastFinishedRequests["404"].response.content.text;
+   isnot(body.indexOf("404"), -1,
+         "body is correct for request 2");
+ 
    lastFinishedRequests = null;
    executeSoon(finishTest);
  }
@@ -395,6 +926,28 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_resp
 +    openConsole(null, consoleOpened);
    }, true);
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
+@@ -20,17 +20,17 @@ function test()
+ 
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+ 
+     openConsole(null, function(aHud) {
+       hud = aHud;
+ 
+       HUDService.lastFinishedRequestCallback = function(aRequest) {
+-        lastRequest = aRequest.log.entries[0];
++        lastRequest = aRequest;
+         if (requestCallback) {
+           requestCallback();
+         }
+       };
+ 
+       executeSoon(testPageLoad);
+     });
+   }, true);
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js b/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
@@ -598,7 +1151,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        The event that triggered the filter change.
     */
    _toggleFilter: function WCF__toggleFilter(aEvent)
-@@ -1300,26 +1254,26 @@ WebConsoleFrame.prototype = {
+@@ -1300,32 +1254,31 @@ WebConsoleFrame.prototype = {
     */
    handlePageError: function WCF_handlePageError(aPageError)
    {
@@ -626,11 +1179,19 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        return;
      }
  
-     let entry = networkInfo.httpActivity.log.entries[0];
-     let request = entry.request;
+-    let entry = networkInfo.httpActivity.log.entries[0];
+-    let request = entry.request;
++    let request = networkInfo.request;
  
      let msgNode = this.document.createElementNS(XUL_NS, "hbox");
-@@ -1344,17 +1298,17 @@ WebConsoleFrame.prototype = {
+ 
+     let methodNode = this.document.createElementNS(XUL_NS, "label");
+     methodNode.setAttribute("value", request.method);
+     methodNode.classList.add("webconsole-msg-body-piece");
+     msgNode.appendChild(methodNode);
+ 
+@@ -1343,18 +1296,17 @@ WebConsoleFrame.prototype = {
+     urlNode.setAttribute("value", request.url);
      urlNode.classList.add("hud-clickable");
      urlNode.classList.add("webconsole-msg-body-piece");
      urlNode.classList.add("webconsole-msg-url");
@@ -638,9 +1199,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      let severity = SEVERITY_LOG;
      let mixedRequest =
-       WebConsoleUtils.isMixedHTTPSRequest(request.url,
+-      WebConsoleUtils.isMixedHTTPSRequest(request.url,
 -                                          this.owner.contentLocation);
-+                                          this.contentLocation);
++      WebConsoleUtils.isMixedHTTPSRequest(request.url, this.contentLocation);
      if (mixedRequest) {
        urlNode.classList.add("webconsole-mixed-content");
        this.makeMixedContentNode(linkNode);
@@ -649,7 +1210,38 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        severity = SEVERITY_WARNING;
      }
  
-@@ -1437,73 +1391,97 @@ WebConsoleFrame.prototype = {
+@@ -1365,27 +1317,27 @@ WebConsoleFrame.prototype = {
+     statusNode.classList.add("webconsole-msg-status");
+     linkNode.appendChild(statusNode);
+ 
+     let clipboardText = request.method + " " + request.url;
+ 
+     let messageNode = this.createMessageNode(CATEGORY_NETWORK, severity,
+                                              msgNode, null, null, clipboardText);
+ 
+-    messageNode._connectionId = entry.connection;
++    messageNode._connectionId = aActorId;
+ 
+     this.makeOutputMessageLink(messageNode, function WCF_net_message_link() {
+       if (!messageNode._panelOpen) {
+-        this.openNetworkPanel(messageNode, networkInfo.httpActivity);
++        this.openNetworkPanel(messageNode, networkInfo);
+       }
+     }.bind(this));
+ 
+     networkInfo.node = messageNode;
+ 
+-    this._updateNetMessage(entry.connection);
++    this._updateNetMessage(aActorId);
+ 
+     return messageNode;
+   },
+ 
+   /**
+    * Create a mixed content warning Node.
+    *
+    * @param aLinkNode
+@@ -1437,73 +1389,111 @@ WebConsoleFrame.prototype = {
        let viewSourceUtils = this.owner.gViewSourceUtils;
        viewSourceUtils.viewSource(aFileURI, null, this.document);
      }.bind(this));
@@ -701,52 +1293,80 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    {
 -    let stage = aMessage.meta.stages[aMessage.meta.stages.length - 1];
 -    let entry = aMessage.log.entries[0];
+-
+-    if (stage == "REQUEST_HEADER") {
+-      let networkInfo = {
+-        node: null,
+-        httpActivity: aMessage,
+-      };
+-
+-      this._networkRequests[entry.connection] = networkInfo;
+-      this.outputMessage(CATEGORY_NETWORK, this.logNetActivity,
+-                         [entry.connection]);
 +    let networkInfo = {
 +      node: null,
-+      actor: aActor,
++      actor: aActor.actor,
++      discardRequestBody: true,
++      discardResponseBody: true,
++      startedDateTime: aActor.startedDateTime,
++      request: {
++        url: aActor.url,
++        method: aActor.method,
++      },
++      response: {},
++      updates: [], // track the list of network event updates
 +    };
 +
 +    this._networkRequests[aActor.actor] = networkInfo;
-+    this.outputMessage(CATEGORY_NETWORK, this.logNetActivity,
-+                       [aActor.aActor]);
++    this.outputMessage(CATEGORY_NETWORK, this.logNetEvent,
++                       [aActor.actor]);
 +  },
 +
 +  handleNetworkEventUpdate:
-+  function WCF_handleNetworkEventUpdate(aType, aPacket)
++  function WCF_handleNetworkEventUpdate(aActorId, aType, aPacket)
 +  {
-+  },
++    let networkInfo = this._networkRequests[aActorId];
++    if (!networkInfo) {
+       return;
+     }
+-    else if (!(entry.connection in this._networkRequests)) {
+-      return;
 +
-+  foo: function foobar() // TODO: remove this
-+  {
-+    let stage = aMeta.stages[aMeta.stages.length - 1];
-+    let entry = aLog.entries[0];
- 
-     if (stage == "REQUEST_HEADER") {
-       let networkInfo = {
-         node: null,
--        httpActivity: aMessage,
-+        httpActivity: {
-+          log: aLog,
-+          meta: aMeta,
-+        },
-       };
- 
-       this._networkRequests[entry.connection] = networkInfo;
-       this.outputMessage(CATEGORY_NETWORK, this.logNetActivity,
-                          [entry.connection]);
-       return;
++    networkInfo.updates.push(aType);
++
++    switch (aType) {
++      case "requestHeaders":
++        networkInfo.request.headersSize = aPacket.headersSize;
++        break;
++      case "requestPostData":
++        networkInfo.discardRequestBody = aPacket.discardRequestBody;
++        networkInfo.request.bodySize = aPacket.dataSize;
++        break;
++      case "responseStart":
++        networkInfo.response.httpVersion = aPacket.response.httpVersion;
++        networkInfo.response.status = aPacket.response.status;
++        networkInfo.response.statusText = aPacket.response.statusText;
++        networkInfo.response.headersSize = aPacket.response.headersSize;
++        networkInfo.discardResponseBody = aPacket.response.discardResponseBody;
++        break;
++      case "responseContent":
++        networkInfo.response.content = {
++          mimeType: aPacket.mimeType,
++        };
++        networkInfo.response.bodySize = aPacket.contentSize;
++        networkInfo.discardResponseBody = aPacket.discardResponseBody;
++        break;
++      case "eventTimings":
++        networkInfo.totalTime = aPacket.totalTime;
++        break;
      }
-     else if (!(entry.connection in this._networkRequests)) {
-       return;
-     }
  
-     let networkInfo = this._networkRequests[entry.connection];
+-    let networkInfo = this._networkRequests[entry.connection];
 -    networkInfo.httpActivity = aMessage;
-+    networkInfo.httpActivity.meta = aMeta;
-+    networkInfo.httpActivity.log = aLog;
- 
+-
      if (networkInfo.node) {
-       this._updateNetMessage(entry.connection);
+-      this._updateNetMessage(entry.connection);
++      this._updateNetMessage(aActorId);
      }
  
      // For unit tests we pass the HTTP activity object to the test callback,
@@ -755,9 +1375,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -        aMessage.meta.stages.indexOf("REQUEST_STOP") > -1 &&
 -        aMessage.meta.stages.indexOf("TRANSACTION_CLOSE") > -1) {
 -      this.owner.lastFinishedRequestCallback(aMessage);
-+        aMeta.stages.indexOf("REQUEST_STOP") > -1 &&
-+        aMeta.stages.indexOf("TRANSACTION_CLOSE") > -1) {
-+      this.owner.lastFinishedRequestCallback(networkInfo.httpActivity);
++        networkInfo.updates.indexOf("responseContent") > -1 &&
++        networkInfo.updates.indexOf("eventTimings") > -1) {
++      this.owner.lastFinishedRequestCallback(networkInfo, this);
      }
    },
  
@@ -766,26 +1386,192 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * given a network connection ID.
     *
     * @private
-@@ -1569,31 +1547,45 @@ WebConsoleFrame.prototype = {
+@@ -1513,42 +1503,41 @@ WebConsoleFrame.prototype = {
+   _updateNetMessage: function WCF__updateNetMessage(aConnectionId)
    {
+     let networkInfo = this._networkRequests[aConnectionId];
+     if (!networkInfo || !networkInfo.node) {
+       return;
+     }
+ 
+     let messageNode = networkInfo.node;
+-    let httpActivity = networkInfo.httpActivity;
+-    let stages = httpActivity.meta.stages;
+-    let hasTransactionClose = stages.indexOf("TRANSACTION_CLOSE") > -1;
+-    let hasResponseHeader = stages.indexOf("RESPONSE_HEADER") > -1;
+-    let entry = httpActivity.log.entries[0];
+-    let request = entry.request;
+-    let response = entry.response;
+-
+-    if (hasTransactionClose || hasResponseHeader) {
++    let updates = networkInfo.updates;
++    let hasEventTimings = updates.indexOf("eventTimings") > -1;
++    let hasResponseStart = updates.indexOf("responseStart") > -1;
++    let request = networkInfo.request;
++    let response = networkInfo.response;
++
++    if (hasEventTimings || hasResponseStart) {
+       let status = [];
+       if (response.httpVersion && response.status) {
+         status = [response.httpVersion, response.status, response.statusText];
+       }
+-      if (hasTransactionClose) {
+-        status.push(l10n.getFormatStr("NetworkPanel.durationMS", [entry.time]));
++      if (hasEventTimings) {
++        status.push(l10n.getFormatStr("NetworkPanel.durationMS",
++                                      [networkInfo.totalTime]));
+       }
+       let statusText = "[" + status.join(" ") + "]";
+ 
+       let linkNode = messageNode.querySelector(".webconsole-msg-link");
+       let statusNode = linkNode.querySelector(".webconsole-msg-status");
+       statusNode.setAttribute("value", statusText);
+ 
+       messageNode.clipboardText = [request.method, request.url, statusText]
+                                   .join(" ");
+ 
+-      if (hasResponseHeader && response.status >= MIN_HTTP_ERROR_CODE &&
++      if (hasResponseStart && response.status >= MIN_HTTP_ERROR_CODE &&
+           response.status <= MAX_HTTP_ERROR_CODE) {
+         this.setMessageType(messageNode, CATEGORY_NETWORK, SEVERITY_ERROR);
+       }
+     }
+ 
+     if (messageNode._netPanel) {
+       messageNode._netPanel.update();
+     }
+@@ -1562,38 +1551,143 @@ WebConsoleFrame.prototype = {
+    * @param object aHttpActivity
+    *        The HTTP activity object that holds network request and response
+    *        information. This object is given to the NetworkPanel constructor.
+    * @return object
+    *         The new NetworkPanel instance.
+    */
+   openNetworkPanel: function WCF_openNetworkPanel(aNode, aHttpActivity)
+   {
++    let actor = aHttpActivity.actor;
++
++    this.webConsoleClient.getRequestHeaders(actor, function(aResponse) {
++      if (aResponse.error) {
++        Cu.reportError("WCF_openNetworkPanel getRequestHeaders:" +
++                       aResponse.error);
++        return;
++      }
++
++      aHttpActivity.request.headers = aResponse.headers;
++
++      this.webConsoleClient.getRequestCookies(actor, onRequestCookies);
++    }.bind(this));
++
++    let onRequestCookies = function(aResponse) {
++      if (aResponse.error) {
++        Cu.reportError("WCF_openNetworkPanel getRequestCookies:" +
++                       aResponse.error);
++        return;
++      }
++
++      aHttpActivity.request.cookies = aResponse.cookies;
++
++      this.webConsoleClient.getResponseHeaders(actor, onResponseHeaders);
++    }.bind(this);
++
++    let onResponseHeaders = function(aResponse) {
++      if (aResponse.error) {
++        Cu.reportError("WCF_openNetworkPanel getResponseHeaders:" +
++                       aResponse.error);
++        return;
++      }
++
++      aHttpActivity.response.headers = aResponse.headers;
++
++      this.webConsoleClient.getResponseCookies(actor, onResponseCookies);
++    }.bind(this);
++
++    let onResponseCookies = function(aResponse) {
++      if (aResponse.error) {
++        Cu.reportError("WCF_openNetworkPanel getResponseCookies:" +
++                       aResponse.error);
++        return;
++      }
++
++      aHttpActivity.response.cookies = aResponse.cookies;
++
++      this.webConsoleClient.getRequestPostData(actor, onRequestPostData);
++    }.bind(this);
++
++    let onRequestPostData = function(aResponse) {
++      if (aResponse.error) {
++        Cu.reportError("WCF_openNetworkPanel getRequestPostData:" +
++                       aResponse.error);
++        return;
++      }
++
++      aHttpActivity.request.postData = { text: aResponse.postData };
++      aHttpActivity.discardRequestBody = aResponse.postDataDiscarded;
++
++      this.webConsoleClient.getResponseContent(actor, onResponseContent);
++    }.bind(this);
++
++    let onResponseContent = function(aResponse) {
++      if (aResponse.error) {
++        Cu.reportError("WCF_openNetworkPanel getResponseContent:" +
++                       aResponse.error);
++        return;
++      }
++
++      aHttpActivity.response.content = aResponse.content;
++      aHttpActivity.discardResponseBody = aResponse.contentDiscarded;
++
++      this.webConsoleClient.getEventTimings(actor, onEventTimings);
++    }.bind(this);
++
++    let onEventTimings = function(aResponse) {
++      if (aResponse.error) {
++        Cu.reportError("WCF_openNetworkPanel getEventTimings:" +
++                       aResponse.error);
++        return;
++      }
++
++      aHttpActivity.timings = aResponse.timings;
++
++      openPanel();
++    }.bind(this);
++
++    let openPanel = function() {
++      aNode._netPanel = netPanel;
++
++      let panel = netPanel.panel;
++      panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
++      panel.sizeTo(450, 500);
++      panel.setAttribute("hudId", this.hudId);
++
++      panel.addEventListener("popuphiding", function WCF_netPanel_onHide() {
++        panel.removeEventListener("popuphiding", WCF_netPanel_onHide);
++
++        aNode._panelOpen = false;
++        aNode._netPanel = null;
++      });
++
++      aNode._panelOpen = true;
++    }.bind(this);
++
      let netPanel = new NetworkPanel(this.popupset, aHttpActivity);
      netPanel.linkNode = aNode;
-     aNode._netPanel = netPanel;
- 
-     let panel = netPanel.panel;
-     panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
-     panel.sizeTo(450, 500);
+-    aNode._netPanel = netPanel;
+-
+-    let panel = netPanel.panel;
+-    panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
+-    panel.sizeTo(450, 500);
 -    panel.setAttribute("hudId", aHttpActivity.hudId);
-+    panel.setAttribute("hudId", this.hudId);
- 
-     panel.addEventListener("popuphiding", function WCF_netPanel_onHide() {
-       panel.removeEventListener("popuphiding", WCF_netPanel_onHide);
- 
-       aNode._panelOpen = false;
-       aNode._netPanel = null;
-     });
- 
-     aNode._panelOpen = true;
+-
+-    panel.addEventListener("popuphiding", function WCF_netPanel_onHide() {
+-      panel.removeEventListener("popuphiding", WCF_netPanel_onHide);
+-
+-      aNode._panelOpen = false;
+-      aNode._netPanel = null;
+-    });
+-
+-    aNode._panelOpen = true;
  
      return netPanel;
    },
@@ -813,7 +1599,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param integer aCategory
     *        The category of the message you want to output. See the CATEGORY_*
-@@ -1842,17 +1834,17 @@ WebConsoleFrame.prototype = {
+@@ -1842,24 +1936,25 @@ WebConsoleFrame.prototype = {
      let [category, methodOrNode, args] = aItem;
      if (typeof methodOrNode != "function" &&
          methodOrNode._objectActors && !methodOrNode._panelOpen) {
@@ -831,8 +1617,62 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        }
        if (connectionId && connectionId in this._networkRequests) {
          delete this._networkRequests[connectionId];
++        this._releaseObject(connectionId);
        }
-@@ -3637,16 +3629,19 @@ CommandController.prototype = {
+     }
+     else if (category == CATEGORY_WEBDEV &&
+              methodOrNode == this.logConsoleAPIMessage) {
+       let level = args[0].level;
+       let releaseObject = function _releaseObject(aValue) {
+         if (aValue && typeof aValue == "object" && aValue.actor) {
+           this._releaseObject(aValue.actor);
+@@ -1945,18 +2040,20 @@ WebConsoleFrame.prototype = {
+     if (aNode.classList.contains("webconsole-msg-cssparser")) {
+       let desc = aNode.childNodes[2].textContent;
+       let location = "";
+       if (aNode.childNodes[4]) {
+         location = aNode.childNodes[4].getAttribute("title");
+       }
+       delete this._cssNodes[desc + location];
+     }
+-    else if (aNode.classList.contains("webconsole-msg-network")) {
++    else if (aNode._connectionId &&
++             aNode.classList.contains("webconsole-msg-network")) {
+       delete this._networkRequests[aNode._connectionId];
++      this._releaseObject(aNode._connectionId);
+     }
+     else if (aNode.classList.contains("webconsole-msg-inspector")) {
+       this.pruneConsoleDirNode(aNode);
+       return;
+     }
+ 
+     if (aNode.parentNode) {
+       aNode.parentNode.removeChild(aNode);
+@@ -2406,21 +2503,21 @@ WebConsoleFrame.prototype = {
+                          "server. Error: " + aResponse.error);
+           return;
+         }
+         aCallback(aResponse.properties);
+       });
+   },
+ 
+   /**
+-   * Release an object actor.
++   * Release an actor.
+    *
+    * @private
+    * @param string aActor
+-   *        The object actor ID you want to release.
++   *        The actor ID you want to release.
+    */
+   _releaseObject: function WCF__releaseObject(aActor)
+   {
+     this.proxy.releaseActor(aActor);
+   },
+ 
+   /**
+    * Destroy the HUD object. Call this method to avoid memory leaks when the Web
+@@ -3637,16 +3734,20 @@ CommandController.prototype = {
   *        The Web Console instance that owns this connection proxy.
   */
  function WebConsoleConnectionProxy(aWebConsole)
@@ -842,6 +1682,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    this._onPageError = this._onPageError.bind(this);
    this._onConsoleAPICall = this._onConsoleAPICall.bind(this);
 +  this._onNetworkEvent = this._onNetworkEvent.bind(this);
++  this._onNetworkEventUpdate = this._onNetworkEventUpdate.bind(this);
 +  this._onFileActivity = this._onFileActivity.bind(this);
 +  this._onLocationChange = this._onLocationChange.bind(this);
  }
@@ -852,7 +1693,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @see WebConsoleFrame
     * @type object
-@@ -3695,23 +3690,29 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3695,23 +3796,30 @@ WebConsoleConnectionProxy.prototype = {
     */
    connect: function WCCP_connect(aCallback)
    {
@@ -862,6 +1703,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      client.addListener("pageError", this._onPageError);
      client.addListener("consoleAPICall", this._onConsoleAPICall);
 +    client.addListener("networkEvent", this._onNetworkEvent);
++    client.addListener("networkEventUpdate", this._onNetworkEventUpdate);
 +    client.addListener("fileActivity", this._onFileActivity);
 +    client.addListener("locationChange", this._onLocationChange);
  
@@ -883,7 +1725,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * The "attachConsole" response handler.
-@@ -3797,16 +3798,64 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3797,16 +3905,80 @@ WebConsoleConnectionProxy.prototype = {
     *        The message received from the server.
     */
    _onConsoleAPICall: function WCCP__onConsoleAPICall(aType, aPacket)
@@ -904,6 +1746,22 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  _onNetworkEvent: function WCCP__onNetworkEvent(aType, aPacket)
 +  {
 +    this.owner.handleNetworkEvent(aPacket.eventActor);
++  },
++
++  /**
++   * The "networkEventUpdate" message type handler. We redirect any message to
++   * the UI for displaying.
++   *
++   * @private
++   * @param string aType
++   *        Message type.
++   * @param object aPacket
++   *        The message received from the server.
++   */
++  _onNetworkEventUpdate: function WCCP__onNetworkEvenUpdatet(aType, aPacket)
++  {
++    this.owner.handleNetworkEventUpdate(aPacket.from, aPacket.updateType,
++                                        aPacket);
 +  },
 +
 +  /**
@@ -948,7 +1806,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    releaseActor: function WCCP_releaseActor(aActor)
    {
      if (this.client) {
-@@ -3820,16 +3869,19 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3820,16 +3992,20 @@ WebConsoleConnectionProxy.prototype = {
    disconnect: function WCCP_disconnect()
    {
      if (!this.client) {
@@ -957,7 +1815,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      this.client.removeListener("pageError", this._onPageError);
      this.client.removeListener("consoleAPICall", this._onConsoleAPICall);
-+    this.client.removeListener("networkActivity", this._onNetworkActivity);
++    this.client.removeListener("networkEvent", this._onNetworkEvent);
++    this.client.removeListener("networkEventUpdate", this._onNetworkEventUpdate);
 +    this.client.removeListener("fileActivity", this._onFileActivity);
 +    this.client.removeListener("locationChange", this._onLocationChange);
      this.client.close();
@@ -971,7 +1830,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
-@@ -161,16 +161,19 @@ const ThreadStateTypes = {
+@@ -161,16 +161,20 @@ const ThreadStateTypes = {
  };
  
  /**
@@ -982,7 +1841,8 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
    "consoleAPICall": "consoleAPICall",
 +  "fileActivity": "fileActivity",
 +  "locationChange": "locationChange",
-+  "networkActivity": "networkActivity",
++  "networkEvent": "networkEvent",
++  "networkEventUpdate": "networkEventUpdate",
    "newScript": "newScript",
    "pageError": "pageError",
    "tabDetached": "tabDetached",
@@ -991,7 +1851,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  
  /**
   * Set of pause types that are sent by the server and not as an immediate
-@@ -552,16 +555,18 @@ function WebConsoleClient(aDebuggerClien
+@@ -552,16 +556,18 @@ function WebConsoleClient(aDebuggerClien
    this._actor = aActor;
    this._client = aDebuggerClient;
  }
@@ -1010,7 +1870,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
    },
  
    /**
-@@ -645,16 +650,33 @@ WebConsoleClient.prototype = {
+@@ -645,16 +651,152 @@ WebConsoleClient.prototype = {
      let packet = {
        to: this._actor,
        type: "clearMessagesCache",
@@ -1031,6 +1891,125 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +      to: this._actor,
 +      type: "setPreferences",
 +      preferences: aPreferences,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Retrieve the request headers from the given NetworkEventActor.
++   *
++   * @param string aActor
++   *        The NetworkEventActor ID.
++   * @param function aOnResponse
++   *        The function invoked when the response is received.
++   */
++  getRequestHeaders:
++  function WCC_getRequestHeaders(aActor, aOnResponse) {
++    let packet = {
++      to: aActor,
++      type: "getRequestHeaders",
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Retrieve the request cookies from the given NetworkEventActor.
++   *
++   * @param string aActor
++   *        The NetworkEventActor ID.
++   * @param function aOnResponse
++   *        The function invoked when the response is received.
++   */
++  getRequestCookies:
++  function WCC_getRequestCookies(aActor, aOnResponse) {
++    let packet = {
++      to: aActor,
++      type: "getRequestCookies",
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Retrieve the request post data from the given NetworkEventActor.
++   *
++   * @param string aActor
++   *        The NetworkEventActor ID.
++   * @param function aOnResponse
++   *        The function invoked when the response is received.
++   */
++  getRequestPostData:
++  function WCC_getRequestPostData(aActor, aOnResponse) {
++    let packet = {
++      to: aActor,
++      type: "getRequestPostData",
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Retrieve the response headers from the given NetworkEventActor.
++   *
++   * @param string aActor
++   *        The NetworkEventActor ID.
++   * @param function aOnResponse
++   *        The function invoked when the response is received.
++   */
++  getResponseHeaders:
++  function WCC_getResponseHeaders(aActor, aOnResponse) {
++    let packet = {
++      to: aActor,
++      type: "getResponseHeaders",
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Retrieve the response cookies from the given NetworkEventActor.
++   *
++   * @param string aActor
++   *        The NetworkEventActor ID.
++   * @param function aOnResponse
++   *        The function invoked when the response is received.
++   */
++  getResponseCookies:
++  function WCC_getResponseCookies(aActor, aOnResponse) {
++    let packet = {
++      to: aActor,
++      type: "getResponseCookies",
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Retrieve the response content from the given NetworkEventActor.
++   *
++   * @param string aActor
++   *        The NetworkEventActor ID.
++   * @param function aOnResponse
++   *        The function invoked when the response is received.
++   */
++  getResponseContent:
++  function WCC_getResponseContent(aActor, aOnResponse) {
++    let packet = {
++      to: aActor,
++      type: "getResponseContent",
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Retrieve the timing information for the given NetworkEventActor.
++   *
++   * @param string aActor
++   *        The NetworkEventActor ID.
++   * @param function aOnResponse
++   *        The function invoked when the response is received.
++   */
++  getEventTimings:
++  function WCC_getEventTimings(aActor, aOnResponse) {
++    let packet = {
++      to: aActor,
++      type: "getEventTimings",
 +    };
 +    this._client.request(packet, aOnResponse);
 +  },
@@ -1357,7 +2336,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     *        The page error we need to send to the client.
     */
    onPageError: function WCA_onPageError(aPageError)
-@@ -514,30 +636,111 @@ WebConsoleActor.prototype =
+@@ -514,30 +636,113 @@ WebConsoleActor.prototype =
        strict: !!(aPageError.flags & aPageError.strictFlag),
      };
    },
@@ -1405,6 +2384,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    };
 +
 +    this.conn.send(packet);
++
++    return actor;
 +  },
 +
 +  /**
@@ -1469,7 +2450,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
     * @return object
     *         The object that can be sent to the remote client.
     */
-@@ -597,16 +800,17 @@ WebConsoleActor.prototype =
+@@ -597,16 +802,17 @@ WebConsoleActor.prototype =
  WebConsoleActor.prototype.requestTypes =
  {
    startListeners: WebConsoleActor.prototype.onStartListeners,
@@ -1487,7 +2468,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
   * @constructor
   * @param object aObj
   *        The object you want.
-@@ -670,8 +874,278 @@ WebConsoleObjectActor.prototype =
+@@ -670,8 +876,284 @@ WebConsoleObjectActor.prototype =
  };
  
  WebConsoleObjectActor.prototype.requestTypes =
@@ -1627,7 +2608,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +  {
 +    return {
 +      from: this.actorID,
-+      timings: this._response._timings,
++      timings: this._timings,
 +      totalTime: this._response._totalTime,
 +    };
 +  },
@@ -1645,6 +2626,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      type: "networkEventUpdate",
 +      updateType: "requestHeaders",
 +      headers: aHeaders.length,
++      headersSize: this._request.headersSize,
 +    };
 +
 +    this.conn.send(packet);
@@ -1673,6 +2655,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      type: "networkEventUpdate",
 +      updateType: "requestPostData",
 +      dataSize: aPostData.length,
++      discardRequestBody: this._discardRequestBody,
 +    };
 +
 +    this.conn.send(packet);
@@ -1705,6 +2688,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      type: "networkEventUpdate",
 +      updateType: "responseHeaders",
 +      headers: aHeaders.length,
++      headersSize: this._response.headersSize,
 +    };
 +
 +    this.conn.send(packet);
@@ -1724,7 +2708,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    this.conn.send(packet);
 +  },
 +
-+  addResponseContent: function NEA_addResponseContent(aContent)
++  addResponseContent:
++  function NEA_addResponseContent(aContent, aDiscardedResponseBody)
 +  {
 +    this._response.content = aContent;
 +
@@ -1732,13 +2717,15 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +      from: this.actorID,
 +      type: "networkEventUpdate",
 +      updateType: "responseContent",
-+      contentSize: aContent.length,
++      mimeType: aContent.mimeType,
++      contentSize: aContent.text.length,
++      discardResponseBody: aDiscardedResponseBody,
 +    };
 +
 +    this.conn.send(packet);
 +  },
 +
-+  addResponseTimings: function NEA_addResponseTimings(aTotal, aTimings)
++  addEventTimings: function NEA_addEventTimings(aTotal, aTimings)
 +  {
 +    this._totalTime = aTotal;
 +    this._timings = aTimings;
@@ -1746,7 +2733,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit
 +    let packet = {
 +      from: this.actorID,
 +      type: "networkEventUpdate",
-+      updateType: "responseTimings",
++      updateType: "eventTimings",
 +      totalTime: aTotal,
 +    };
 +
@@ -1843,7 +2830,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  // function foobar2(a) { ...
  // function() { ...
  const REGEX_MATCH_FUNCTION_NAME = /^\(?function\s+([^(\s]+)\s*\(/;
-@@ -1854,8 +1866,1132 @@ function JSTermHelpers(aOwner)
+@@ -1854,8 +1866,1130 @@ function JSTermHelpers(aOwner)
     * @return void
     */
    aOwner.sandbox.print = function JSTH_print(aString)
@@ -2092,28 +3079,26 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   */
 +  _onComplete: function NRL__onComplete(aData)
 +  {
-+    let response = {};
++    let response = {
++      mimeType: "",
++      text: aData || "",
++    };
 +
 +    // TODO: Bug 787981 - use LongStringActor for strings that are too long.
 +
 +    try {
 +      response.mimeType = this.request.contentType;
 +    }
-+    catch (ex) {
-+      response.mimeType = "";
-+    }
++    catch (ex) { }
 +
-+    if (response.content.mimeType && this.request.contentCharset) {
++    if (response.mimeType && this.request.contentCharset) {
 +      response.mimeType += "; charset=" + this.request.contentCharset;
-+    }
-+
-+    if (aData) {
-+      response.text = aData;
 +    }
 +
 +    this.receivedData = "";
 +
-+    this.httpActivity.owner.addResponseContent(response);
++    this.httpActivity.owner.
++      addResponseContent(response, this.httpActivity.discardResponseBody);
 +
 +    this.httpActivity.channel = null;
 +    this.httpActivity.owner = null;
@@ -2636,7 +3621,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +  _onTransactionClose: function NM__onTransactionClose(aHttpActivity)
 +  {
 +    let result = this._setupHarTimings(aHttpActivity);
-+    aHttpActivity.owner.addResponseTimings(result.total, result.timings);
++    aHttpActivity.owner.addEventTimings(result.total, result.timings);
 +    delete this.openRequests[aHttpActivity.id];
 +  },
 +
