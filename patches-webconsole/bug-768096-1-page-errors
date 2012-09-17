@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent f7c89de3ab43bce5090ec385c9af446309b34d16
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1347897403 -10800
+# Date 1347904868 -10800
 
 Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
@@ -1206,19 +1206,7 @@ diff --git a/toolkit/devtools/Makefile.in b/toolkit/devtools/Makefile.in
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
-@@ -7,17 +7,18 @@
- "use strict";
- const Ci = Components.interfaces;
- const Cc = Components.classes;
- const Cu = Components.utils;
- const Cr = Components.results;
- 
- var EXPORTED_SYMBOLS = ["DebuggerTransport",
-                         "DebuggerClient",
--                        "debuggerSocketConnect"];
-+                        "debuggerSocketConnect",
-+                        "WebConsoleClient"];
- 
+@@ -17,16 +17,19 @@ var EXPORTED_SYMBOLS = ["DebuggerTranspo
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
  Cu.import("resource://gre/modules/NetUtil.jsm");
  Cu.import("resource://gre/modules/Services.jsm");
@@ -1226,7 +1214,19 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  XPCOMUtils.defineLazyServiceGetter(this, "socketTransportService",
                                     "@mozilla.org/network/socket-transport-service;1",
                                     "nsISocketTransportService");
-@@ -160,16 +161,17 @@ const ThreadStateTypes = {
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleClient",
++                                  "resource://gre/modules/devtools/WebConsoleClient.jsm");
++
+ let wantLogging = Services.prefs.getBoolPref("devtools.debugger.log");
+ 
+ function dumpn(str)
+ {
+   if (wantLogging) {
+     dump("DBG-CLIENT: " + str + "\n");
+   }
+ }
+@@ -160,16 +163,17 @@ const ThreadStateTypes = {
  };
  
  /**
@@ -1244,7 +1244,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
   * Set of pause types that are sent by the server and not as an immediate
   * response to a client request.
   */
-@@ -188,16 +190,17 @@ const ROOT_ACTOR_NAME = "root";
+@@ -188,16 +192,17 @@ const ROOT_ACTOR_NAME = "root";
   * required by the protocol in a traditional JavaScript API.
   */
  function DebuggerClient(aTransport)
@@ -1262,7 +1262,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  
  DebuggerClient.prototype = {
    /**
-@@ -243,20 +246,42 @@ DebuggerClient.prototype = {
+@@ -243,20 +248,42 @@ DebuggerClient.prototype = {
      let detachTab = function _detachTab() {
        if (this.activeTab) {
          this.activeTab.detach(closeTransport);
@@ -1309,7 +1309,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *
     * @param function aOnResponse
     *        Called with the response packet.
-@@ -276,26 +301,57 @@ DebuggerClient.prototype = {
+@@ -276,26 +303,57 @@ DebuggerClient.prototype = {
     * @param function aOnResponse
     *        Called with the response packet and a TabClient
     *        (which will be undefined on error).
@@ -1333,7 +1333,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 +   * Attach to a Web Console actor.
 +   *
 +   * @param string aConsoleActor
-+   *        The actor ID for the console actor to attach to.
++   *        The ID for the console actor to attach to.
 +   * @param array aListeners
 +   *        The console listeners you want to start.
 +   * @param function aOnResponse
@@ -1368,114 +1368,10 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *        Called with the response packet and a ThreadClient
     *        (which will be undefined on error).
     */
-@@ -464,16 +520,103 @@ TabClient.prototype = {
-       }
-     });
-   }
- };
- 
- eventSource(TabClient.prototype);
- 
- /**
-+ * A WebConsoleClient is used as a front end for the WebConsoleActor that is
-+ * created on the server, hiding implementation details.
-+ *
-+ * @param object aDebuggerClient
-+ *        The DebuggerClient instance we live for.
-+ * @param string aActor
-+ *        The WebConsoleActor ID.
-+ */
-+function WebConsoleClient(aDebuggerClient, aActor) {
-+  this._actor = aActor;
-+  this._client = aDebuggerClient;
-+}
-+
-+WebConsoleClient.prototype = {
-+  /**
-+   * Retrieve the cached messages from the server.
-+   *
-+   * @see this.CACHED_MESSAGES
-+   * @param array aTypes
-+   *        The array of message types you want from the server. See
-+   *        this.CACHED_MESSAGES for known types.
-+   * @param function aOnResponse
-+   *        The function invoked when the response is received.
-+   */
-+  getCachedMessages:
-+  function WCC_getCachedMessages(aTypes, aOnResponse) {
-+    let packet = {
-+      to: this._actor,
-+      type: "getCachedMessages",
-+      messageTypes: aTypes,
-+    };
-+    this._client.request(packet, aOnResponse);
-+  },
-+
-+  /**
-+   * Start the given Web Console listeners.
-+   *
-+   * @see this.LISTENERS
-+   * @param array aListeners
-+   *        Array of listeners you want to start. See this.LISTENERS for
-+   *        known listeners.
-+   * @param function aOnResponse
-+   *        Function to invoke when the server response is received.
-+   */
-+  startListeners:
-+  function WCC_startListeners(aListeners, aOnResponse) {
-+    let packet = {
-+      to: this._actor,
-+      type: "startListeners",
-+      listeners: aListeners,
-+    };
-+    this._client.request(packet, aOnResponse);
-+  },
-+
-+  /**
-+   * Stop the given Web Console listeners.
-+   *
-+   * @see this.LISTENERS
-+   * @param array aListeners
-+   *        Array of listeners you want to stop. See this.LISTENERS for
-+   *        known listeners.
-+   * @param function aOnResponse
-+   *        Function to invoke when the server response is received.
-+   */
-+  stopListeners:
-+  function WCC_stopListeners(aListeners, aOnResponse) {
-+    let packet = {
-+      to: this._actor,
-+      type: "stopListeners",
-+      listeners: aListeners,
-+    };
-+    this._client.request(packet, aOnResponse);
-+  },
-+
-+  /**
-+   * Close the WebConsoleClient. This stops all the listeners on the server and
-+   * detaches from the console actor.
-+   *
-+   * @param function aOnResponse
-+   *        Function to invoke when the server response is received.
-+   */
-+  close: function WCC_close(aOnResponse) {
-+    this.stopListeners(null, aOnResponse);
-+  },
-+};
-+
-+/**
-  * Creates a thread client for the remote debugging protocol server. This client
-  * is a front to the thread actor created in the server side, hiding the
-  * protocol details in a traditional JavaScript API.
-  *
-  * @param aClient DebuggerClient
-  *        The debugger client parent.
-  * @param aActor string
-  *        The actor ID for this thread.
 diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/devtools/debugger/server/dbg-browser-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-browser-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-browser-actors.js
-@@ -247,27 +247,36 @@ BrowserTabActor.prototype = {
+@@ -247,67 +247,113 @@ BrowserTabActor.prototype = {
  
    actorPrefix: "tab",
  
@@ -1501,6 +1397,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
    disconnect: function BTA_disconnect() {
      this._detach();
  
++    this._exitConsole();
++
 +    // Shut down actors that belong to this tab's pool.
 +    this._removeTabActorPool();
 +
@@ -1512,9 +1410,13 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
    /**
     * Called by the root actor when the underlying tab is closed.
     */
-@@ -277,37 +286,59 @@ BrowserTabActor.prototype = {
+   exit: function BTA_exit() {
+     if (this.exited) {
+       return;
      }
  
++    this._exitConsole();
++
      if (this.attached) {
        this._detach();
        this.conn.send({ from: this.actorID,
@@ -1532,6 +1434,17 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
    },
  
    /**
++   * Disconnect the console actor.
++   */
++  _exitConsole: function BTA_exitConsole() {
++    if (this.consoleActor) {
++      this._tabPool && this._tabPool.removeActor(this.consoleActor.actorID);
++      this.consoleActor.disconnect();
++      this.consoleActor = null;
++    }
++  },
++
++  /**
 +   * Create a pool for tab-lifetime actors.
 +   */
 +  _createTabActorPool: function BTA_createTabActorPool() {
@@ -1577,7 +1490,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
      if (this._tabbrowser) {
        this._progressListener = new DebuggerProgressListener(this);
      }
-@@ -362,20 +393,16 @@ BrowserTabActor.prototype = {
+@@ -362,20 +408,16 @@ BrowserTabActor.prototype = {
        return;
      }
  
@@ -1619,196 +1532,6 @@ diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/d
     * @param aPort int
     *        The port to listen on.
     */
-diff --git a/toolkit/devtools/debugger/server/dbg-webconsole-actors.js b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
-new file mode 100644
---- /dev/null
-+++ b/toolkit/devtools/debugger/server/dbg-webconsole-actors.js
-@@ -0,0 +1,185 @@
-+/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
-+/* vim: set ts=2 et sw=2 tw=80: */
-+/* This Source Code Form is subject to the terms of the Mozilla Public
-+ * License, v. 2.0. If a copy of the MPL was not distributed with this
-+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-+
-+"use strict";
-+
-+const Cc = Components.classes;
-+const Ci = Components.interfaces;
-+const Cu = Components.utils;
-+
-+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-+
-+XPCOMUtils.defineLazyModuleGetter(this, "Services",
-+                                  "resource://gre/modules/Services.jsm");
-+
-+XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
-+                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
-+
-+XPCOMUtils.defineLazyModuleGetter(this, "PageErrorListener",
-+                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
-+
-+/**
-+ * The WebConsoleActor implements capabilities needed for the Web Console
-+ * feature.
-+ *
-+ * @constructor
-+ * @param object aConnection
-+ *        The connection to the client, DebuggerServerConnection.
-+ * @param nsIDOMElement aBrowser
-+ *        The xul:browser we work with.
-+ */
-+function WebConsoleActor(aConnection, aBrowser)
-+{
-+  this.conn = aConnection;
-+  this._browser = aBrowser;
-+}
-+
-+WebConsoleActor.prototype =
-+{
-+  /**
-+   * The xul:browser we work with.
-+   * @private
-+   * @type nsIDOMElement
-+   */
-+  _browser: null,
-+
-+  /**
-+   * The debugger server connection instance.
-+   * @type object
-+   */
-+  conn: null,
-+
-+  /**
-+   * The content window we work with.
-+   * @type nsIDOMWindow
-+   */
-+  get window() this._browser.contentWindow,
-+
-+  actorPrefix: "console",
-+
-+  grip: function WCA_grip()
-+  {
-+    return { actor: this.actorID };
-+  },
-+
-+  /**
-+   * Destroy the current WebConsoleActor instance.
-+   */
-+  disconnect: function WCA_disconnect()
-+  {
-+    if (this.pageErrorListener) {
-+      this.pageErrorListener.destroy();
-+      this.pageErrorListener = null;
-+    }
-+    this.conn = this._browser = null;
-+  },
-+
-+  /**
-+   * Handler for the "startListeners" request.
-+   *
-+   * @param object aRequest
-+   *        The JSON request object received from the Web Console client.
-+   */
-+  onStartListeners: function WCA_onStartListeners(aRequest)
-+  {
-+    let startedListeners = [];
-+
-+    while (aRequest.listeners.length > 0) {
-+      let listener = aRequest.listeners.shift();
-+      switch (listener) {
-+        case "PageError":
-+          if (!this.pageErrorListener) {
-+            this.pageErrorListener =
-+              new PageErrorListener(this.window, this);
-+            this.pageErrorListener.init();
-+          }
-+          startedListeners.push(listener);
-+          break;
-+      }
-+    }
-+    return { startedListeners: startedListeners };
-+  },
-+
-+  /**
-+   * Handler for the "stopListeners" request.
-+   *
-+   * @param object aRequest
-+   *        The JSON request object received from the Web Console client.
-+   */
-+  onStopListeners: function WCA_onStopListeners(aRequest)
-+  {
-+    let stoppedListeners = [];
-+
-+    // If no specific listeners are requested to be detached, we stop all
-+    // listeners.
-+    let toDetach = aRequest.listeners || ["PageError"];
-+
-+    while (toDetach.length > 0) {
-+      let listener = toDetach.shift();
-+      switch (listener) {
-+        case "PageError":
-+          if (this.pageErrorListener) {
-+            this.pageErrorListener.destroy();
-+            this.pageErrorListener = null;
-+          }
-+          stoppedListeners.push(listener);
-+          break;
-+      }
-+    }
-+
-+    return { stoppedListeners: stoppedListeners };
-+  },
-+
-+  /**
-+   * Handler for page errors received from the PageErrorListener. This method
-+   * sends the nsIScriptError to the remote Web Console client.
-+   *
-+   * @param nsIScriptError aPageError
-+   *        The page error we need to send to the client.
-+   */
-+  onPageError: function WCA_onPageError(aPageError)
-+  {
-+    let packet = {
-+      from: this.actorID,
-+      type: "pageError",
-+      pageError: this.preparePageErrorForRemote(aPageError),
-+    };
-+    this.conn.send(packet);
-+  },
-+
-+  /**
-+   * Prepare an nsIScriptError to be sent to the client.
-+   *
-+   * @param nsIScriptError aPageError
-+   *        The page error we need to send to the client.
-+   * @return object
-+   *         The object you can send to the remote client.
-+   */
-+  preparePageErrorForRemote: function WCA_preparePageErrorForRemote(aPageError)
-+  {
-+    return {
-+      message: aPageError.message,
-+      errorMessage: aPageError.errorMessage,
-+      sourceName: aPageError.sourceName,
-+      lineText: aPageError.sourceLine,
-+      lineNumber: aPageError.lineNumber,
-+      columnNumber: aPageError.columnNumber,
-+      category: aPageError.category,
-+      timeStamp: aPageError.timeStamp,
-+      warning: !!(aPageError.flags & aPageError.warningFlag),
-+      error: !!(aPageError.flags & aPageError.errorFlag),
-+      exception: !!(aPageError.flags & aPageError.exceptionFlag),
-+      strict: !!(aPageError.flags & aPageError.strictFlag),
-+    };
-+  },
-+};
-+
-+WebConsoleActor.prototype.requestTypes =
-+{
-+  startListeners: WebConsoleActor.prototype.onStartListeners,
-+  stopListeners: WebConsoleActor.prototype.onStopListeners,
-+};
-+
 diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
 --- a/toolkit/devtools/jar.mn
 +++ b/toolkit/devtools/jar.mn
@@ -1821,7 +1544,7 @@ diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
    content/global/devtools/dbg-server.js        		(debugger/server/dbg-server.js)
    content/global/devtools/dbg-script-actors.js    (debugger/server/dbg-script-actors.js)
    content/global/devtools/dbg-browser-actors.js   (debugger/server/dbg-browser-actors.js)
-+  content/global/devtools/dbg-webconsole-actors.js   (debugger/server/dbg-webconsole-actors.js)
++  content/global/devtools/dbg-webconsole-actors.js (webconsole/dbg-webconsole-actors.js)
 diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
 new file mode 100644
 --- /dev/null
@@ -1844,6 +1567,113 @@ new file mode 100644
 +
 +libs::
 +	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
+diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools/webconsole/WebConsoleClient.jsm
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/WebConsoleClient.jsm
+@@ -0,0 +1,102 @@
++/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
++/* vim: set ts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++"use strict";
++
++const Cc = Components.classes;
++const Ci = Components.interfaces;
++const Cu = Components.utils;
++
++var EXPORTED_SYMBOLS = ["WebConsoleClient"];
++
++/**
++ * A WebConsoleClient is used as a front end for the WebConsoleActor that is
++ * created on the server, hiding implementation details.
++ *
++ * @param object aDebuggerClient
++ *        The DebuggerClient instance we live for.
++ * @param string aActor
++ *        The WebConsoleActor ID.
++ */
++function WebConsoleClient(aDebuggerClient, aActor)
++{
++  this._actor = aActor;
++  this._client = aDebuggerClient;
++}
++
++WebConsoleClient.prototype = {
++  /**
++   * Retrieve the cached messages from the server.
++   *
++   * @see this.CACHED_MESSAGES
++   * @param array aTypes
++   *        The array of message types you want from the server. See
++   *        this.CACHED_MESSAGES for known types.
++   * @param function aOnResponse
++   *        The function invoked when the response is received.
++   */
++  getCachedMessages: function WCC_getCachedMessages(aTypes, aOnResponse)
++  {
++    let packet = {
++      to: this._actor,
++      type: "getCachedMessages",
++      messageTypes: aTypes,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Start the given Web Console listeners.
++   *
++   * @see this.LISTENERS
++   * @param array aListeners
++   *        Array of listeners you want to start. See this.LISTENERS for
++   *        known listeners.
++   * @param function aOnResponse
++   *        Function to invoke when the server response is received.
++   */
++  startListeners: function WCC_startListeners(aListeners, aOnResponse)
++  {
++    let packet = {
++      to: this._actor,
++      type: "startListeners",
++      listeners: aListeners,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Stop the given Web Console listeners.
++   *
++   * @see this.LISTENERS
++   * @param array aListeners
++   *        Array of listeners you want to stop. See this.LISTENERS for
++   *        known listeners.
++   * @param function aOnResponse
++   *        Function to invoke when the server response is received.
++   */
++  stopListeners: function WCC_stopListeners(aListeners, aOnResponse)
++  {
++    let packet = {
++      to: this._actor,
++      type: "stopListeners",
++      listeners: aListeners,
++    };
++    this._client.request(packet, aOnResponse);
++  },
++
++  /**
++   * Close the WebConsoleClient. This stops all the listeners on the server and
++   * detaches from the console actor.
++   *
++   * @param function aOnResponse
++   *        Function to invoke when the server response is received.
++   */
++  close: function WCC_close(aOnResponse)
++  {
++    this.stopListeners(null, aOnResponse);
++  },
++};
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 rename from browser/devtools/webconsole/WebConsoleUtils.jsm
 rename to toolkit/devtools/webconsole/WebConsoleUtils.jsm
@@ -2076,3 +1906,193 @@ rename to toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +    this.listener = this.window = null;
 +  },
 +};
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -0,0 +1,185 @@
++/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
++/* vim: set ts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++"use strict";
++
++const Cc = Components.classes;
++const Ci = Components.interfaces;
++const Cu = Components.utils;
++
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "Services",
++                                  "resource://gre/modules/Services.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "PageErrorListener",
++                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
++
++/**
++ * The WebConsoleActor implements capabilities needed for the Web Console
++ * feature.
++ *
++ * @constructor
++ * @param object aConnection
++ *        The connection to the client, DebuggerServerConnection.
++ * @param nsIDOMElement aBrowser
++ *        The xul:browser we work with.
++ */
++function WebConsoleActor(aConnection, aBrowser)
++{
++  this.conn = aConnection;
++  this._browser = aBrowser;
++}
++
++WebConsoleActor.prototype =
++{
++  /**
++   * The xul:browser we work with.
++   * @private
++   * @type nsIDOMElement
++   */
++  _browser: null,
++
++  /**
++   * The debugger server connection instance.
++   * @type object
++   */
++  conn: null,
++
++  /**
++   * The content window we work with.
++   * @type nsIDOMWindow
++   */
++  get window() this._browser.contentWindow,
++
++  actorPrefix: "console",
++
++  grip: function WCA_grip()
++  {
++    return { actor: this.actorID };
++  },
++
++  /**
++   * Destroy the current WebConsoleActor instance.
++   */
++  disconnect: function WCA_disconnect()
++  {
++    if (this.pageErrorListener) {
++      this.pageErrorListener.destroy();
++      this.pageErrorListener = null;
++    }
++    this.conn = this._browser = null;
++  },
++
++  /**
++   * Handler for the "startListeners" request.
++   *
++   * @param object aRequest
++   *        The JSON request object received from the Web Console client.
++   */
++  onStartListeners: function WCA_onStartListeners(aRequest)
++  {
++    let startedListeners = [];
++
++    while (aRequest.listeners.length > 0) {
++      let listener = aRequest.listeners.shift();
++      switch (listener) {
++        case "PageError":
++          if (!this.pageErrorListener) {
++            this.pageErrorListener =
++              new PageErrorListener(this.window, this);
++            this.pageErrorListener.init();
++          }
++          startedListeners.push(listener);
++          break;
++      }
++    }
++    return { startedListeners: startedListeners };
++  },
++
++  /**
++   * Handler for the "stopListeners" request.
++   *
++   * @param object aRequest
++   *        The JSON request object received from the Web Console client.
++   */
++  onStopListeners: function WCA_onStopListeners(aRequest)
++  {
++    let stoppedListeners = [];
++
++    // If no specific listeners are requested to be detached, we stop all
++    // listeners.
++    let toDetach = aRequest.listeners || ["PageError"];
++
++    while (toDetach.length > 0) {
++      let listener = toDetach.shift();
++      switch (listener) {
++        case "PageError":
++          if (this.pageErrorListener) {
++            this.pageErrorListener.destroy();
++            this.pageErrorListener = null;
++          }
++          stoppedListeners.push(listener);
++          break;
++      }
++    }
++
++    return { stoppedListeners: stoppedListeners };
++  },
++
++  /**
++   * Handler for page errors received from the PageErrorListener. This method
++   * sends the nsIScriptError to the remote Web Console client.
++   *
++   * @param nsIScriptError aPageError
++   *        The page error we need to send to the client.
++   */
++  onPageError: function WCA_onPageError(aPageError)
++  {
++    let packet = {
++      from: this.actorID,
++      type: "pageError",
++      pageError: this.preparePageErrorForRemote(aPageError),
++    };
++    this.conn.send(packet);
++  },
++
++  /**
++   * Prepare an nsIScriptError to be sent to the client.
++   *
++   * @param nsIScriptError aPageError
++   *        The page error we need to send to the client.
++   * @return object
++   *         The object you can send to the remote client.
++   */
++  preparePageErrorForRemote: function WCA_preparePageErrorForRemote(aPageError)
++  {
++    return {
++      message: aPageError.message,
++      errorMessage: aPageError.errorMessage,
++      sourceName: aPageError.sourceName,
++      lineText: aPageError.sourceLine,
++      lineNumber: aPageError.lineNumber,
++      columnNumber: aPageError.columnNumber,
++      category: aPageError.category,
++      timeStamp: aPageError.timeStamp,
++      warning: !!(aPageError.flags & aPageError.warningFlag),
++      error: !!(aPageError.flags & aPageError.errorFlag),
++      exception: !!(aPageError.flags & aPageError.exceptionFlag),
++      strict: !!(aPageError.flags & aPageError.strictFlag),
++    };
++  },
++};
++
++WebConsoleActor.prototype.requestTypes =
++{
++  startListeners: WebConsoleActor.prototype.onStartListeners,
++  stopListeners: WebConsoleActor.prototype.onStopListeners,
++};
++
