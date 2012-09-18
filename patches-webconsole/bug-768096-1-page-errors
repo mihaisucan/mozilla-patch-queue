@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent f7c89de3ab43bce5090ec385c9af446309b34d16
+# Parent 9b77800059a12fb5447054b76df7efe97b052879
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1347904868 -10800
 
-Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
+Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors; try: -b do -p linux,linuxqt,linux64,macosx64,win32,win64,macosx -u mochitest-o -t none
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
@@ -90,6 +90,48 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
    function log(aMessage) {
      var _msg = aMessagePrefix + " " + aMessage + "\n";
      dump(_msg);
+@@ -167,17 +165,20 @@ HUD_SERVICE.prototype =
+ 
+     if (!aAnimated) {
+       this.storeHeight(hudId);
+     }
+ 
+     let hud = this.getHudReferenceById(hudId);
+     let document = hud.chromeDocument;
+ 
+-    hud.destroy();
++    hud.destroy(function() {
++      let id = WebConsoleUtils.supportsString(hudId);
++      Services.obs.notifyObservers(id, "web-console-destroyed", null);
++    });
+ 
+     delete this.hudReferences[hudId];
+ 
+     if (Object.keys(this.hudReferences).length == 0) {
+       let autocompletePopup = document.
+                               getElementById("webConsole_autocompletePopup");
+       if (autocompletePopup) {
+         autocompletePopup.parentNode.removeChild(autocompletePopup);
+@@ -194,19 +195,16 @@ HUD_SERVICE.prototype =
+ 
+       this.suspend();
+     }
+ 
+     let contentWindow = aTab.linkedBrowser.contentWindow;
+     contentWindow.focus();
+ 
+     HeadsUpDisplayUICommands.refreshCommand();
+-
+-    let id = WebConsoleUtils.supportsString(hudId);
+-    Services.obs.notifyObservers(id, "web-console-destroyed", null);
+   },
+ 
+   /**
+    * get a unique ID from the sequence generator
+    *
+    * @returns integer
+    */
+   sequenceId: function HS_sequencerId()
 @@ -534,17 +532,17 @@ WebConsole.prototype = {
    /**
     * Message names that the HUD listens for. These messages come from the remote
@@ -155,6 +197,88 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @see this.sendMessageToContent
     * @private
     * @param object aResponse
+@@ -1046,18 +1030,22 @@ WebConsole.prototype = {
+   openLink: function WC_openLink(aLink)
+   {
+     this.chromeWindow.openUILinkIn(aLink, "tab");
+   },
+ 
+   /**
+    * Destroy the object. Call this method to avoid memory leaks when the Web
+    * Console is closed.
++   *
++   * @param function [aOnDestroy]
++   *        Optional function to invoke when the Web Console instance is
++   *        destroyed.
+    */
+-  destroy: function WC_destroy()
++  destroy: function WC_destroy(aOnDestroy)
+   {
+     this.sendMessageToContent("WebConsole:Destroy", {});
+ 
+     this._messageListeners.forEach(function(aName) {
+       this.messageManager.removeMessageListener(aName, this.ui);
+     }, this);
+ 
+     // Make sure that the console panel does not try to call
+@@ -1067,34 +1055,41 @@ WebConsole.prototype = {
+     let popupset = this.mainPopupSet;
+     let panels = popupset.querySelectorAll("panel[hudId=" + this.hudId + "]");
+     for (let panel of panels) {
+       if (panel != this.consolePanel) {
+         panel.hidePopup();
+       }
+     }
+ 
++    let onDestroy = function WC_onDestroyUI() {
++      // Remove the iframe and the consolePanel if the Web Console is inside a
++      // floating panel.
++      if (this.consolePanel && this.consolePanel.parentNode) {
++        this.consolePanel.hidePopup();
++        this.consolePanel.parentNode.removeChild(this.consolePanel);
++        this.consolePanel = null;
++      }
++
++      if (this.iframe.parentNode) {
++        this.iframe.parentNode.removeChild(this.iframe);
++      }
++
++      if (this.splitter.parentNode) {
++        this.splitter.parentNode.removeChild(this.splitter);
++      }
++
++      aOnDestroy && aOnDestroy();
++    }.bind(this);
++
+     if (this.ui) {
+-      this.ui.destroy();
++      this.ui.destroy(onDestroy);
+     }
+-
+-    // Remove the iframe and the consolePanel if the Web Console is inside a
+-    // floating panel.
+-    if (this.consolePanel && this.consolePanel.parentNode) {
+-      this.consolePanel.hidePopup();
+-      this.consolePanel.parentNode.removeChild(this.consolePanel);
+-      this.consolePanel = null;
+-    }
+-
+-    if (this.iframe.parentNode) {
+-      this.iframe.parentNode.removeChild(this.iframe);
+-    }
+-
+-    if (this.splitter.parentNode) {
+-      this.splitter.parentNode.removeChild(this.splitter);
++    else {
++      onDestroy();
+     }
+   },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // HeadsUpDisplayUICommands
+ //////////////////////////////////////////////////////////////////////////
+ 
 diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
 --- a/browser/devtools/webconsole/Makefile.in
 +++ b/browser/devtools/webconsole/Makefile.in
@@ -1013,17 +1137,25 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *         The message element to display in the Web Console output.
     */
    logNetActivity: function WCF_logNetActivity(aConnectionId)
-@@ -2307,16 +2380,20 @@ WebConsoleFrame.prototype = {
+@@ -2304,19 +2377,27 @@ WebConsoleFrame.prototype = {
+     }
+ 
+     clipboardHelper.copyString(strings.join("\n"), this.document);
    },
  
    /**
     * Destroy the HUD object. Call this method to avoid memory leaks when the Web
     * Console is closed.
++   *
++   * @param function [aOnDestroy]
++   *        Optional function to invoke when the Web Console instance is
++   *        destroyed.
     */
-   destroy: function WCF_destroy()
+-  destroy: function WCF_destroy()
++  destroy: function WCF_destroy(aOnDestroy)
    {
 +    if (this.proxy) {
-+      this.proxy.disconnect();
++      this.proxy.disconnect(aOnDestroy);
 +    }
 +
      if (this.jsterm) {
@@ -1034,7 +1166,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
  /**
   * Create a JSTerminal (a JavaScript command line). This is attached to an
-@@ -3477,14 +3554,149 @@ CommandController.prototype = {
+@@ -3477,14 +3558,153 @@ CommandController.prototype = {
          break;
        case "cmd_fontSizeReset":
          this.owner.changeFontSize("");
@@ -1162,15 +1294,19 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +  /**
 +   * Disconnect the Web Console from the remote server.
++   *
++   * @param function [aOnDisconnect]
++   *        Optional function to invoke when the connection is dropped.
 +   */
-+  disconnect: function WCCP_disconnect()
++  disconnect: function WCCP_disconnect(aOnDisconnect)
 +  {
 +    if (!this.client) {
++      aOnDisconnect && aOnDisconnect();
 +      return;
 +    }
 +
 +    this.client.removeListener("pageError", this._onPageError);
-+    this.client.close();
++    this.client.close(aOnDisconnect);
 +
 +    this.client = null;
 +    this.webConsoleClient = null;
@@ -1571,7 +1707,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/WebConsoleClient.jsm
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,103 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -1672,6 +1808,7 @@ new file mode 100644
 +  close: function WCC_close(aOnResponse)
 +  {
 +    this.stopListeners(null, aOnResponse);
++    this._client = null;
 +  },
 +};
 diff --git a/browser/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
@@ -1910,7 +2047,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -0,0 +1,185 @@
+@@ -0,0 +1,182 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -1927,9 +2064,6 @@ new file mode 100644
 +
 +XPCOMUtils.defineLazyModuleGetter(this, "Services",
 +                                  "resource://gre/modules/Services.jsm");
-+
-+XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
-+                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
 +
 +XPCOMUtils.defineLazyModuleGetter(this, "PageErrorListener",
 +                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");

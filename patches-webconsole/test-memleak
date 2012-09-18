@@ -1,0 +1,76 @@
+# HG changeset patch
+# Parent 7907bdc1be3cfe836b799cbe47ea7d99d0b7f795
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1347989597 -10800
+test memleak; try: -b d -p linux64 -u mochitest-o -t none
+
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -33,16 +33,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+                                   "resource:///modules/WebConsoleUtils.jsm");
+ 
+ XPCOMUtils.defineLazyGetter(this, "l10n", function() {
+   return WebConsoleUtils.l10n;
+ });
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
++                                  "resource://gre/modules/devtools/dbg-server.jsm");
++
+ 
+ // The XUL namespace.
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ 
+ const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/en/Security/MixedContent";
+ 
+ // The amount of time in milliseconds that must pass between messages to
+ // trigger the display of a new group.
+@@ -182,16 +185,17 @@ function WebConsoleFrame(aWebConsoleOwne
+   this._onPositionConsoleCommand = this._onPositionConsoleCommand.bind(this);
+ 
+   this._initDefaultFilterPrefs();
+   this._commandController = new CommandController(this);
+   this.positionConsole(aPosition, window);
+ 
+   this.jsterm = new JSTerm(this);
+   this.jsterm.inputNode.focus();
++  this.initServer();
+ }
+ 
+ WebConsoleFrame.prototype = {
+   /**
+    * The WebConsole instance that owns this frame.
+    * @see HUDService.jsm::WebConsole
+    * @type object
+    */
+@@ -307,16 +311,28 @@ WebConsoleFrame.prototype = {
+           this._saveRequestAndResponseBodies,
+       },
+     };
+ 
+     this.owner.sendMessageToContent("WebConsole:SetPreferences", message);
+   },
+ 
+   /**
++   * Initialize the debugger server.
++   */
++  initServer: function WCCP_initServer()
++  {
++    if (!DebuggerServer.initialized) {
++      // Always allow connections from nsIPipe transports.
++      DebuggerServer.init(function () { return true; });
++      DebuggerServer.addBrowserActors();
++    }
++  },
++
++  /**
+    * Find the Web Console UI elements and setup event listeners as needed.
+    * @private
+    */
+   _initUI: function WCF__initUI()
+   {
+     let doc = this.document;
+ 
+     this.filterBox = doc.querySelector(".hud-filter-box");
