@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 9b77800059a12fb5447054b76df7efe97b052879
+# Parent 80499f04e875f18710102fefbfb97dc7bbf4cad0
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1347904868 -10800
+# Date 1348077405 -10800
 
-Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors; try: -b do -p linux,linuxqt,linux64,macosx64,win32,win64,macosx -u mochitest-o -t none
+Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
@@ -1137,10 +1137,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *         The message element to display in the Web Console output.
     */
    logNetActivity: function WCF_logNetActivity(aConnectionId)
-@@ -2304,19 +2377,27 @@ WebConsoleFrame.prototype = {
+@@ -2319,19 +2392,27 @@ WebConsoleFrame.prototype = {
      }
  
-     clipboardHelper.copyString(strings.join("\n"), this.document);
+     this.owner.openLink(item.url);
    },
  
    /**
@@ -1166,7 +1166,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
  /**
   * Create a JSTerminal (a JavaScript command line). This is attached to an
-@@ -3477,14 +3558,153 @@ CommandController.prototype = {
+@@ -3508,16 +3589,168 @@ CommandController.prototype = {
          break;
        case "cmd_fontSizeReset":
          this.owner.changeFontSize("");
@@ -1204,6 +1204,14 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  owner: null,
 +
 +  /**
++   * The DebuggerClient object.
++   *
++   * @see DebuggerClient
++   * @type object
++   */
++  client: null,
++
++  /**
 +   * Tells if the connection was established.
 +   * @type boolean
 +   */
@@ -1223,8 +1231,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  initServer: function WCCP_initServer()
 +  {
 +    if (!DebuggerServer.initialized) {
-+      // Always allow connections from nsIPipe transports.
-+      DebuggerServer.init(function () { return true; });
++      DebuggerServer.init(DebuggerServer.alwaysAllowCallback);
 +      DebuggerServer.addBrowserActors();
 +    }
 +  },
@@ -1284,6 +1291,12 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  /**
 +   * The "pageError" message type handler. We redirect any page errors to the UI
 +   * for displaying.
++   *
++   * @private
++   * @param string aType
++   *        Message type.
++   * @param object aPacket
++   *        The message received from the server.
 +   */
 +  _onPageError: function WCCP__onPageError(aType, aPacket)
 +  {
@@ -1320,6 +1333,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  }
  gSequenceId.n = 0;
  
+ 
+ function goUpdateConsoleCommands() {
 diff --git a/toolkit/devtools/Makefile.in b/toolkit/devtools/Makefile.in
 --- a/toolkit/devtools/Makefile.in
 +++ b/toolkit/devtools/Makefile.in
@@ -1650,7 +1665,32 @@ diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/de
 diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
 --- a/toolkit/devtools/debugger/server/dbg-server.js
 +++ b/toolkit/devtools/debugger/server/dbg-server.js
-@@ -114,16 +114,17 @@ var DebuggerServer = {
+@@ -77,16 +77,24 @@ var DebuggerServer = {
+     }
+ 
+     this.xpcInspector = Cc["@mozilla.org/jsinspector;1"].getService(Ci.nsIJSInspector);
+     this.initTransport(aAllowConnectionCallback);
+     this.addActors("chrome://global/content/devtools/dbg-script-actors.js");
+   },
+ 
+   /**
++   * Always allow connections - function you can use when you initialize the
++   * server.
++   */
++  alwaysAllowCallback: function DH_alwaysAllowCallback() {
++    return true;
++  },
++
++  /**
+    * Initialize the debugger server's transport variables.  This can be
+    * in place of init() for cases where the jsdebugger isn't needed.
+    *
+    * @param function aAllowConnectionCallback
+    *        The embedder-provider callback, that decides whether an incoming
+    *        remote protocol conection should be allowed or refused.
+    */
+   initTransport: function DH_initTransport(aAllowConnectionCallback) {
+@@ -114,16 +122,17 @@ var DebuggerServer = {
      loadSubScript.call(this, aURL);
    },
  
@@ -2047,7 +2087,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,193 @@
 +/* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
@@ -2105,6 +2145,12 @@ new file mode 100644
 +   */
 +  get window() this._browser.contentWindow,
 +
++  /**
++   * The PageErrorListener instance.
++   * @type object
++   */
++  pageErrorListener: null,
++
 +  actorPrefix: "console",
 +
 +  grip: function WCA_grip()
@@ -2129,6 +2175,8 @@ new file mode 100644
 +   *
 +   * @param object aRequest
 +   *        The JSON request object received from the Web Console client.
++   * @return object
++   *         The response object which holds the startedListeners array.
 +   */
 +  onStartListeners: function WCA_onStartListeners(aRequest)
 +  {
@@ -2155,6 +2203,9 @@ new file mode 100644
 +   *
 +   * @param object aRequest
 +   *        The JSON request object received from the Web Console client.
++   * @return object
++   *         The response packet to send to the client: holds the
++   *         stoppedListeners array.
 +   */
 +  onStopListeners: function WCA_onStopListeners(aRequest)
 +  {

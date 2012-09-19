@@ -1,8 +1,8 @@
 # HG changeset patch
-# Parent b8ce81f8c2b241a722403dc3e98d130bbe03a2f5
+# Parent dfef0400e53199e246cd0fe3e33d2371f287303e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1347907094 -10800
-Bug 768096 - Web Console remote debugging protocol support - Part 4: cleanups
+# Date 1348081998 -10800
+Bug 768096 - Web Console remote debugging protocol support - Part 4: cleanups; try: -b do -p linux,linuxqt,linux64,macosx64,win32,win64,macosx -u mochitest-o -t none
 
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 --- a/browser/devtools/jar.mn
@@ -3255,7 +3255,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Preferences for filtering messages by type.
-@@ -1718,58 +1730,58 @@ WebConsoleFrame.prototype = {
+@@ -1719,58 +1731,58 @@ WebConsoleFrame.prototype = {
      if (!this._outputQueue.length) {
        // If the queue is empty we consider that now was the last output flush.
        // This avoid an immediate output flush when the timer executes.
@@ -3323,7 +3323,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      let scrolledToBottom = Utils.isOutputScrolledToBottom(outputNode);
      let scrollBox = outputNode.scrollBoxObject.element;
  
-@@ -1817,29 +1829,43 @@ WebConsoleFrame.prototype = {
+@@ -1818,29 +1830,43 @@ WebConsoleFrame.prototype = {
               oldScrollHeight != scrollBox.scrollHeight) {
        // If there were pruned messages and if scroll is not at the bottom, then
        // we need to adjust the scroll location.
@@ -3371,7 +3371,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param array aItem
     *        An item from the output queue - this item represents a message.
     * @return nsIDOMElement|undefined
-@@ -2524,32 +2550,50 @@ WebConsoleFrame.prototype = {
+@@ -2525,17 +2551,19 @@ WebConsoleFrame.prototype = {
     * Release an actor.
     *
     * @private
@@ -3387,10 +3387,19 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-    * Destroy the HUD object. Call this method to avoid memory leaks when the Web
-    * Console is closed.
+    * Open the selected item's URL in a new tab.
     */
-   destroy: function WCF_destroy()
+   openSelectedItemInTab: function WCF_openSelectedItemInTab()
+   {
+     let item = this.outputNode.selectedItem;
+@@ -2552,23 +2580,38 @@ WebConsoleFrame.prototype = {
+    * Console is closed.
+    *
+    * @param function [aOnDestroy]
+    *        Optional function to invoke when the Web Console instance is
+    *        destroyed.
+    */
+   destroy: function WCF_destroy(aOnDestroy)
    {
 +    this._cssNodes = {};
 +    this._outputQueue = [];
@@ -3404,7 +3413,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    this._outputTimer = null;
 +
      if (this.proxy) {
-       this.proxy.disconnect();
+       this.proxy.disconnect(aOnDestroy);
 +      this.proxy = null;
      }
  
@@ -3414,7 +3423,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
 +
 +    this._commandController = null;
-+    this.owner = null;
    },
  };
  
@@ -3423,7 +3431,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
   * existing HeadsUpDisplay (a Web Console instance). This code is responsible
   * with handling command line input, code evaluation and result output.
   *
-@@ -2637,16 +2681,20 @@ JSTerm.prototype = {
+@@ -2655,16 +2698,20 @@ JSTerm.prototype = {
     *        Optional function to invoke when the evaluation result is added to
     *        the output.
     * @param object aResponse
@@ -3444,7 +3452,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      let resultString =
        WebConsoleUtils.objectActorGripToString(result, !helperRawOutput);
  
-@@ -3552,20 +3600,23 @@ JSTerm.prototype = {
+@@ -3570,20 +3617,23 @@ JSTerm.prototype = {
     * Destroy the JSTerm object. Call this method to avoid memory leaks.
     */
    destroy: function JST_destroy()
@@ -3468,7 +3476,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
   */
  var Utils = {
    /**
-@@ -3771,16 +3822,24 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3805,16 +3855,24 @@ WebConsoleConnectionProxy.prototype = {
     * The DebuggerClient object.
     *
     * @see DebuggerClient
@@ -3493,11 +3501,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * The WebConsoleActor ID.
     *
-@@ -4034,16 +4093,17 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4071,16 +4129,17 @@ WebConsoleConnectionProxy.prototype = {
      this.client.removeListener("networkEventUpdate", this._onNetworkEventUpdate);
      this.client.removeListener("fileActivity", this._onFileActivity);
      this.client.removeListener("locationChange", this._onLocationChange);
-     this.client.close();
+     this.client.close(aOnDisconnect);
  
      this.client = null;
      this.webConsoleClient = null;
@@ -3796,91 +3804,3 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        }
        // If it is an array index, we can't take it.
        // This uses a trick: converting a string to a number yields NaN if
-@@ -2746,16 +2546,17 @@ NetworkMonitor.prototype = {
-     Services.obs.removeObserver(this._httpResponseExaminer,
-                                 "http-on-examine-response");
- 
-     gActivityDistributor.removeObserver(this);
- 
-     this.openRequests = {};
-     this.openResponses = {};
-     this.owner = null;
-+    this.window = null;
-   },
- };
- 
- _global.NetworkMonitor = NetworkMonitor;
- _global.NetworkResponseListener = NetworkResponseListener;
- })(this, WebConsoleUtils);
- 
- 
-diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
---- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-+++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -94,16 +94,30 @@ WebConsoleActor.prototype =
-   /**
-    * Web Console-related preferences.
-    * @private
-    * @type object
-    */
-   _prefs: null,
- 
-   /**
-+   * Tells the current page location associated to the sandbox. When the page
-+   * location is changed, we recreate the sandbox.
-+   * @private
-+   * @type object
-+   */
-+  _sandboxLocation: null,
-+
-+  /**
-+   * The JavaScript Sandbox where code is evaluated.
-+   * @type object
-+   */
-+  sandbox: null,
-+
-+  /**
-    * The debugger server connection instance.
-    * @type object
-    */
-   conn: null,
- 
-   /**
-    * The content window we work with.
-    * @type nsIDOMWindow
-@@ -183,16 +197,17 @@ WebConsoleActor.prototype =
-     if (this.consoleProgressListener) {
-       this.consoleProgressListener.destroy();
-       this.consoleProgressListener = null;
-     }
-     this.conn.removeActorPool(this._objectActorsPool);
-     this.conn.removeActorPool(this._networkEventActorsPool);
-     this._objectActorsPool = null;
-     this._networkEventActorsPool = null;
-+    this._sandboxLocation = this.sandbox = null;
-     this.conn = this._browser = null;
-   },
- 
-   /**
-    * Create a grip for the given value. If the value is an object,
-    * a WebConsoleObjectActor will be created.
-    *
-    * @param mixed aValue
-@@ -843,16 +858,17 @@ WebConsoleObjectActor.prototype =
-   },
- 
-   /**
-    * Releases this actor from the pool.
-    */
-   release: function WCOA_release()
-   {
-     this.parent.releaseObject(this);
-+    this.parent = this.obj = null;
-   },
- 
-   /**
-    * Handle a protocol request to inspect the properties of the object.
-    *
-    * @return object
-    *         Message to send to the client. This holds the 'properties' property
-    *         - an array with a descriptor for each property in the object.
