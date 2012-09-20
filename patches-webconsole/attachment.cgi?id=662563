@@ -1,0 +1,87 @@
+# HG changeset patch
+# User Panos Astithas <past@mozilla.com>
+# Date 1348065741 -10800
+# Node ID 5d6cf8579844e6e365707f5ca12fcbc3ff4dca4b
+# Parent 2208b83cc81d7ea02fa30f27a03c9f3f5b766155
+Bug 790952 - Debugger server always creates new actor instances
+
+diff --git a/browser/devtools/debugger/test/browser_dbg_globalactor-01.js b/browser/devtools/debugger/test/browser_dbg_globalactor-01.js
+--- a/browser/devtools/debugger/test/browser_dbg_globalactor-01.js
++++ b/browser/devtools/debugger/test/browser_dbg_globalactor-01.js
+@@ -17,17 +17,49 @@ function test()
+     is(aType, "browser", "Root actor should identify itself as a browser.");
+     gClient.listTabs(function(aResponse) {
+       let globalActor = aResponse.testGlobalActor1;
+       ok(globalActor, "Found the test tab actor.")
+       ok(globalActor.indexOf("testone") >= 0,
+          "testTabActor's actorPrefix should be used.");
+       gClient.request({ to: globalActor, type: "ping" }, function(aResponse) {
+         is(aResponse.pong, "pong", "Actor should respond to requests.");
+-        finish_test();
++        // Send another ping to see if the same actor is used.
++        gClient.request({ to: globalActor, type: "ping" }, function(aResponse) {
++          is(aResponse.pong, "pong", "Actor should respond to requests.");
++
++          // Make sure that lazily-created actors are created only once.
++          let connections = Object.keys(DebuggerServer._connections);
++          is(connections.length, 1, "Only one connection is established.");
++          let connPrefix = connections[0];
++          ok(DebuggerServer._connections[connPrefix],
++             connPrefix + " is the only connection.");
++          // First we look for the pool of global actors.
++          let extraPools = DebuggerServer._connections[connPrefix]._extraPools;
++          let globalPool;
++          for (let pool of extraPools) {
++            if (Object.keys(pool._actors).some(function(elem) {
++              // Tab actors are in the global pool.
++              let re = new RegExp(connPrefix + "tab", "g");
++              return elem.match(re) !== null;
++            })) {
++              globalPool = pool;
++              break;
++            }
++          }
++          // Then we look if the global pool contains only one test actor.
++          let actorPrefix = connPrefix + "testone";
++          let actors = Object.keys(globalPool._actors).join();
++          info("Global actors: " + actors);
++          isnot(actors.indexOf(actorPrefix), -1, "The test actor exists in the pool.");
++          is(actors.indexOf(actorPrefix), actors.lastIndexOf(actorPrefix),
++             "Only one actor exists in the pool.");
++
++          finish_test();
++        });
+       });
+     });
+   });
+ }
+ 
+ function finish_test()
+ {
+   gClient.close(function() {
+diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
+--- a/toolkit/devtools/debugger/server/dbg-server.js
++++ b/toolkit/devtools/debugger/server/dbg-server.js
+@@ -524,18 +524,21 @@ DebuggerServerConnection.prototype = {
+       } catch (e) {
+         Cu.reportError(e);
+         this.transport.send({
+           error: "unknownError",
+           message: ("error occurred while creating actor '" + actor.name +
+                     "': " + safeErrorString(e))
+         });
+       }
++      // We want the newly-constructed actor to completely replace the factory
++      // actor. Reusing the existing actor ID will make sure ActorPool.addActor
++      // does the right thing.
++      instance.actorID = actor.actorID;
+       actor.registeredPool.addActor(instance);
+-      actor.registeredPool.removeActor(actor);
+       actor = instance;
+     }
+ 
+     var ret = null;
+ 
+     // Dispatch the request to the actor.
+     if (actor.requestTypes && actor.requestTypes[aPacket.type]) {
+       try {

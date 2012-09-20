@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 80499f04e875f18710102fefbfb97dc7bbf4cad0
+# Parent 581cfaf32ac5c76fd83a470ccfa97188e6560550
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1348077405 -10800
+# Date 1348143960 -10800
 
-Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors
+Bug 768096 - Web Console remote debugging protocol support - Part 1: page errors; try: -b d -p linux64 -u mochitest-o -t none
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
 --- a/browser/devtools/webconsole/HUDService-content.js
@@ -1231,7 +1231,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  initServer: function WCCP_initServer()
 +  {
 +    if (!DebuggerServer.initialized) {
-+      DebuggerServer.init(DebuggerServer.alwaysAllowCallback);
++      DebuggerServer.init();
 +      DebuggerServer.addBrowserActors();
 +    }
 +  },
@@ -1377,25 +1377,25 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
      dump("DBG-CLIENT: " + str + "\n");
    }
  }
-@@ -160,16 +163,17 @@ const ThreadStateTypes = {
- };
- 
+@@ -162,16 +165,17 @@ const ThreadStateTypes = {
  /**
   * Set of protocol messages that are sent by the server without a prior request
   * by the client.
   */
  const UnsolicitedNotifications = {
    "newScript": "newScript",
-+  "pageError": "pageError",
    "tabDetached": "tabDetached",
-   "tabNavigated": "tabNavigated"
+   "tabNavigated": "tabNavigated",
++  "pageError": "pageError",
+   "profilerStateChanged": "profilerStateChanged"
  };
  
  /**
   * Set of pause types that are sent by the server and not as an immediate
   * response to a client request.
   */
-@@ -188,16 +192,17 @@ const ROOT_ACTOR_NAME = "root";
+ const UnsolicitedPauses = {
+@@ -189,16 +193,17 @@ const ROOT_ACTOR_NAME = "root";
   * required by the protocol in a traditional JavaScript API.
   */
  function DebuggerClient(aTransport)
@@ -1413,7 +1413,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  
  DebuggerClient.prototype = {
    /**
-@@ -243,20 +248,42 @@ DebuggerClient.prototype = {
+@@ -244,20 +249,42 @@ DebuggerClient.prototype = {
      let detachTab = function _detachTab() {
        if (this.activeTab) {
          this.activeTab.detach(closeTransport);
@@ -1460,7 +1460,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
     *
     * @param function aOnResponse
     *        Called with the response packet.
-@@ -276,26 +303,57 @@ DebuggerClient.prototype = {
+@@ -277,26 +304,57 @@ DebuggerClient.prototype = {
     * @param function aOnResponse
     *        Called with the response packet and a TabClient
     *        (which will be undefined on error).
@@ -1522,175 +1522,29 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/devtools/debugger/server/dbg-browser-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-browser-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-browser-actors.js
-@@ -247,67 +247,113 @@ BrowserTabActor.prototype = {
- 
-   actorPrefix: "tab",
- 
-   grip: function BTA_grip() {
-     dbg_assert(!this.exited,
-                "grip() shouldn't be called on exited browser actor.");
-     dbg_assert(this.actorID,
-                "tab should have an actorID.");
-+
-+    this.consoleActor = new WebConsoleActor(this.conn, this.browser);
-+    this._createTabActorPool();
-+    this._tabPool.addActor(this.consoleActor);
-+
-     return { actor: this.actorID,
-+             consoleActor: this.consoleActor.actorID,
-              title: this.browser.contentTitle,
-              url: this.browser.currentURI.spec }
-   },
- 
+@@ -136,17 +136,17 @@ BrowserRootActor.prototype = {
    /**
-    * Called when the actor is removed from the connection.
+    * Adds dynamically-added actors from add-ons to the provided pool.
     */
-   disconnect: function BTA_disconnect() {
-     this._detach();
- 
-+    this._exitConsole();
-+
-+    // Shut down actors that belong to this tab's pool.
-+    this._removeTabActorPool();
-+
-     if (this._progressListener) {
-       this._progressListener.destroy();
+   _createExtraActors: function BRA_createExtraActors(aFactories, aPool) {
+     // Walk over global actors added by extensions.
+     for (let name in aFactories) {
+       let actor = this._extraActors[name];
+       if (!actor) {
+-        actor = aFactories[name].bind(null, this.conn);
++        actor = aFactories[name].bind(null, this.conn, this.actorID);
+         actor.prototype = aFactories[name].prototype;
+         actor.parentID = this.actorID;
+         this._extraActors[name] = actor;
+       }
+       aPool.addActor(actor);
      }
    },
  
-   /**
-    * Called by the root actor when the underlying tab is closed.
-    */
-   exit: function BTA_exit() {
-     if (this.exited) {
-       return;
-     }
- 
-+    this._exitConsole();
-+
-     if (this.attached) {
-       this._detach();
-       this.conn.send({ from: this.actorID,
-                        type: "tabDetached" });
-     }
- 
-+    // Shut down actors that belong to this tab's pool.
-+    this._removeTabActorPool();
-+
-     if (this._progressListener) {
-       this._progressListener.destroy();
-     }
-     this._browser = null;
-     this._tabbrowser = null;
-   },
- 
-   /**
-+   * Disconnect the console actor.
-+   */
-+  _exitConsole: function BTA_exitConsole() {
-+    if (this.consoleActor) {
-+      this._tabPool && this._tabPool.removeActor(this.consoleActor.actorID);
-+      this.consoleActor.disconnect();
-+      this.consoleActor = null;
-+    }
-+  },
-+
-+  /**
-+   * Create a pool for tab-lifetime actors.
-+   */
-+  _createTabActorPool: function BTA_createTabActorPool() {
-+    if (this._tabPool) {
-+      return;
-+    }
-+
-+    this._tabPool = new ActorPool(this.conn);
-+    this.conn.addActorPool(this._tabPool);
-+  },
-+
-+  /**
-+   * Remove the pool of tab actors.
-+   */
-+  _removeTabActorPool: function BTA_removeTabActorPool() {
-+    if (this._tabPool) {
-+      this.conn.removeActorPool(this._tabPool);
-+      this._tabPool = null;
-+    }
-+  },
-+
-+  /**
-    * Does the actual work of attching to a tab.
-    */
-   _attach: function BTA_attach() {
-     if (this._attached) {
-       return;
-     }
- 
--    // Create a pool for tab-lifetime actors.
--    dbg_assert(!this._tabPool, "Shouldn't have a tab pool if we weren't attached.");
--    this._tabPool = new ActorPool(this.conn);
--    this.conn.addActorPool(this._tabPool);
-+    this._createTabActorPool();
- 
--    // ... and a pool for context-lifetime actors.
-+    // Create a pool for context-lifetime actors.
-     this._pushContext();
- 
-     // Watch for globals being created in this tab.
-     this.browser.addEventListener("DOMWindowCreated", this._onWindowCreated, true);
-     this.browser.addEventListener("pageshow", this._onWindowCreated, true);
-     if (this._tabbrowser) {
-       this._progressListener = new DebuggerProgressListener(this);
-     }
-@@ -362,20 +408,16 @@ BrowserTabActor.prototype = {
-       return;
-     }
- 
-     this.browser.removeEventListener("DOMWindowCreated", this._onWindowCreated, true);
-     this.browser.removeEventListener("pageshow", this._onWindowCreated, true);
- 
-     this._popContext();
- 
--    // Shut down actors that belong to this tab's pool.
--    this.conn.removeActorPool(this._tabPool);
--    this._tabPool = null;
--
-     this._attached = false;
-   },
- 
-   // Protocol Request Handlers
- 
-   onAttach: function BTA_onAttach(aRequest) {
-     if (this.exited) {
-       return { type: "exited" };
 diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
 --- a/toolkit/devtools/debugger/server/dbg-server.js
 +++ b/toolkit/devtools/debugger/server/dbg-server.js
-@@ -77,16 +77,24 @@ var DebuggerServer = {
-     }
- 
-     this.xpcInspector = Cc["@mozilla.org/jsinspector;1"].getService(Ci.nsIJSInspector);
-     this.initTransport(aAllowConnectionCallback);
-     this.addActors("chrome://global/content/devtools/dbg-script-actors.js");
-   },
- 
-   /**
-+   * Always allow connections - function you can use when you initialize the
-+   * server.
-+   */
-+  alwaysAllowCallback: function DH_alwaysAllowCallback() {
-+    return true;
-+  },
-+
-+  /**
-    * Initialize the debugger server's transport variables.  This can be
-    * in place of init() for cases where the jsdebugger isn't needed.
-    *
-    * @param function aAllowConnectionCallback
-    *        The embedder-provider callback, that decides whether an incoming
-    *        remote protocol conection should be allowed or refused.
-    */
-   initTransport: function DH_initTransport(aAllowConnectionCallback) {
-@@ -114,16 +122,17 @@ var DebuggerServer = {
+@@ -167,16 +167,18 @@ var DebuggerServer = {
      loadSubScript.call(this, aURL);
    },
  
@@ -1700,18 +1554,19 @@ diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/d
    addBrowserActors: function DH_addBrowserActors() {
      this.addActors("chrome://global/content/devtools/dbg-browser-actors.js");
 +    this.addActors("chrome://global/content/devtools/dbg-webconsole-actors.js");
++    this.addTabActor(this.WebConsoleActor, "consoleActor");
+     if ("nsIProfiler" in Ci)
+       this.addActors("chrome://global/content/devtools/dbg-profiler-actors.js");
    },
  
    /**
     * Listens on the given port for remote debugger connections.
     *
     * @param aPort int
-    *        The port to listen on.
-    */
 diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
 --- a/toolkit/devtools/jar.mn
 +++ b/toolkit/devtools/jar.mn
-@@ -2,8 +2,9 @@
+@@ -2,9 +2,10 @@
  # License, v. 2.0. If a copy of the MPL was not distributed with this
  # file, You can obtain one at http://mozilla.org/MPL/2.0/.
  
@@ -1721,6 +1576,7 @@ diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
    content/global/devtools/dbg-script-actors.js    (debugger/server/dbg-script-actors.js)
    content/global/devtools/dbg-browser-actors.js   (debugger/server/dbg-browser-actors.js)
 +  content/global/devtools/dbg-webconsole-actors.js (webconsole/dbg-webconsole-actors.js)
+   content/global/devtools/dbg-profiler-actors.js  (debugger/server/dbg-profiler-actors.js)
 diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
 new file mode 100644
 --- /dev/null
@@ -2096,9 +1952,9 @@ new file mode 100644
 +
 +"use strict";
 +
-+const Cc = Components.classes;
-+const Ci = Components.interfaces;
-+const Cu = Components.utils;
++let Cc = Components.classes;
++let Ci = Components.interfaces;
++let Cu = Components.utils;
 +
 +Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 +
@@ -2115,13 +1971,13 @@ new file mode 100644
 + * @constructor
 + * @param object aConnection
 + *        The connection to the client, DebuggerServerConnection.
-+ * @param nsIDOMElement aBrowser
-+ *        The xul:browser we work with.
++ * @param string aTabActorID
++ *        The parent tab actor ID.
 + */
-+function WebConsoleActor(aConnection, aBrowser)
++function WebConsoleActor(aConnection, aTabActorID)
 +{
 +  this.conn = aConnection;
-+  this._browser = aBrowser;
++  this._browser = this.conn.getActor(aTabActorID).browser;
 +}
 +
 +WebConsoleActor.prototype =

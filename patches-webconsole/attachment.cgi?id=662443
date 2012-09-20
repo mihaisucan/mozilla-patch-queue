@@ -1,32 +1,14 @@
 # HG changeset patch
 # User Panos Astithas <past@mozilla.com>
-# Date 1347633341 -10800
-# Node ID 5629a8b28c97fd0cd9def1f7792a64915aa47405
-# Parent  11598ad9d1b9fb18db79bbac6966127dd0698c2e
-Bug 790202 - Protocol layer performance overhead is too much for local transports
+# Date 1348145888 -10800
+# Node ID f8f0bd8f0c82efa60614aa3c9903a20f59d7fdbe
+# Parent 581cfaf32ac5c76fd83a470ccfa97188e6560550
+Bug 790202 - Protocol layer performance overhead is too much for local transports. f=msucan
 
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
-@@ -29,16 +29,17 @@ function dumpn(str)
-   if (wantLogging) {
-     dump("DBG-CLIENT: " + str + "\n");
-   }
- }
- 
- let loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
-   .getService(Ci.mozIJSSubScriptLoader);
- loader.loadSubScript("chrome://global/content/devtools/dbg-transport.js");
-+loader.loadSubScript("chrome://global/content/devtools/dbg-transport-local.js");
- 
- /**
-  * Add simple event notification to a prototype object. Any object that has
-  * some use for event notifications or the observer pattern in general can be
-  * augmented with the necessary facilities by passing its prototype to this
-  * function.
-  *
-  * @param aProto object
-@@ -369,18 +370,20 @@ DebuggerClient.prototype = {
+@@ -370,18 +370,20 @@ DebuggerClient.prototype = {
        this.notify("connected",
                    aPacket.applicationType,
                    aPacket.traits);
@@ -49,18 +31,19 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
        if (aPacket.from in this._activeRequests &&
            !(aPacket.type in UnsolicitedNotifications) &&
            !(aPacket.type == ThreadStateTypes.paused &&
-diff --git a/toolkit/devtools/debugger/dbg-transport-local.js b/toolkit/devtools/debugger/dbg-transport-local.js
-new file mode 100644
---- /dev/null
-+++ b/toolkit/devtools/debugger/dbg-transport-local.js
-@@ -0,0 +1,67 @@
-+/* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-+/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
-+/* This Source Code Form is subject to the terms of the Mozilla Public
-+ * License, v. 2.0. If a copy of the MPL was not distributed with this
-+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+diff --git a/toolkit/devtools/debugger/dbg-transport.js b/toolkit/devtools/debugger/dbg-transport.js
+--- a/toolkit/devtools/debugger/dbg-transport.js
++++ b/toolkit/devtools/debugger/dbg-transport.js
+@@ -172,8 +172,88 @@ DebuggerTransport.prototype = {
+     } catch(e) {
+       dumpn("Error handling incoming packet: " + e + " - " + e.stack);
+       dumpn("Packet was: " + packet);
+     }
+ 
+     return true;
+   }
+ }
 +
-+"use strict";
 +
 +/**
 + * An adapter that handles data transfers between the debugger client and
@@ -71,7 +54,7 @@ new file mode 100644
 + * @param aOther LocalDebuggerTransport
 + *        The other endpoint for this debugger connection.
 + *
-+ * @see DebuggerTransport in toolkit/devtools/debugger/dbg-transport.js
++ * @see DebuggerTransport
 + */
 +function LocalDebuggerTransport(aOther)
 +{
@@ -90,6 +73,7 @@ new file mode 100644
 +      if (wantLogging) {
 +        dumpn("Got: " + uneval(aPacket));
 +      }
++      this._deepFreeze(aPacket);
 +      let thr = Cc["@mozilla.org/thread-manager;1"].getService().currentThread;
 +      let self = this;
 +      thr.dispatch({run: function() {
@@ -118,34 +102,34 @@ new file mode 100644
 +  /**
 +   * An empty method for emulating the DebuggerTransport API.
 +   */
-+  ready: function LDT_ready() {}
++  ready: function LDT_ready() {},
++
++  /**
++   * Helper function that makes an object fully immutable.
++   */
++  _deepFreeze: function LDT_deepFreeze(aObject) {
++    Object.freeze(aObject);
++    for (let prop in aObject) {
++      // Freeze the properties that are objects, not on the prototype, and not
++      // already frozen. Note that this might leave an unfrozen reference
++      // somewhere in the object if there is an already frozen object containing
++      // an unfrozen object.
++      if (aObject.hasOwnProperty(prop) && typeof aObject === "object" &&
++          !Object.isFrozen(aObject)) {
++        deepFreeze(o[prop]);
++      }
++    }
++  }
 +
 +}
++
 diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
 --- a/toolkit/devtools/debugger/server/dbg-server.js
 +++ b/toolkit/devtools/debugger/server/dbg-server.js
-@@ -41,16 +41,17 @@ function safeErrorString(aError) {
-     if (typeof s === "string")
-       return s;
-   } catch (ee) { }
- 
-   return "<failed trying to find error description>";
- }
- 
- loadSubScript.call(this, "chrome://global/content/devtools/dbg-transport.js");
-+loadSubScript.call(this, "chrome://global/content/devtools/dbg-transport-local.js");
- 
- // XPCOM constructors
- const ServerSocket = CC("@mozilla.org/network/server-socket;1",
-                         "nsIServerSocket",
-                         "init");
- 
- /***
-  * Public API
-@@ -167,35 +168,32 @@ var DebuggerServer = {
- 
-     this._listener.close();
-     this._listener = null;
+@@ -233,35 +233,32 @@ var DebuggerServer = {
+       this._listener = null;
+       this._socketConnections = 0;
+     }
  
      return true;
    },
@@ -183,19 +167,5 @@ diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/d
    // nsIServerSocketListener implementation
  
    onSocketAccepted: function DH_onSocketAccepted(aSocket, aTransport) {
-     dumpn("New debugging connection on " + aTransport.host + ":" + aTransport.port);
- 
-diff --git a/toolkit/devtools/jar.mn b/toolkit/devtools/jar.mn
---- a/toolkit/devtools/jar.mn
-+++ b/toolkit/devtools/jar.mn
-@@ -1,9 +1,10 @@
- # This Source Code Form is subject to the terms of the Mozilla Public
- # License, v. 2.0. If a copy of the MPL was not distributed with this
- # file, You can obtain one at http://mozilla.org/MPL/2.0/.
- 
- toolkit.jar:
-   content/global/devtools/dbg-transport.js        (debugger/dbg-transport.js)
-+  content/global/devtools/dbg-transport-local.js  (debugger/dbg-transport-local.js)
-   content/global/devtools/dbg-server.js        		(debugger/server/dbg-server.js)
-   content/global/devtools/dbg-script-actors.js    (debugger/server/dbg-script-actors.js)
-   content/global/devtools/dbg-browser-actors.js   (debugger/server/dbg-browser-actors.js)
+     if (!this._allowConnection()) {
+       return;

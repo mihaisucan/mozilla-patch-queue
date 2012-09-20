@@ -1,0 +1,186 @@
+# HG changeset patch
+# Parent da59fa51cb3d2f72b6329aa054dd37b45be4af09
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1348178212 -10800
+Bug 768096 - Web Console remote debugging protocol support - Part 5: tests
+
+diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
+--- a/toolkit/devtools/webconsole/Makefile.in
++++ b/toolkit/devtools/webconsole/Makefile.in
+@@ -4,14 +4,14 @@
+ 
+ DEPTH = ../../..
+ topsrcdir = @top_srcdir@
+ srcdir = @srcdir@
+ VPATH = @srcdir@
+ 
+ include $(DEPTH)/config/autoconf.mk
+ 
+-#TEST_DIRS += tests
++TEST_DIRS += test
+ 
+ include $(topsrcdir)/config/rules.mk
+ 
+ libs::
+ 	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
+diff --git a/toolkit/devtools/webconsole/test/Makefile.in b/toolkit/devtools/webconsole/test/Makefile.in
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/Makefile.in
+@@ -0,0 +1,19 @@
++# This Source Code Form is subject to the terms of the Mozilla Public
++# License, v. 2.0. If a copy of the MPL was not distributed with this
++# file, You can obtain one at http://mozilla.org/MPL/2.0/.
++
++DEPTH          = @DEPTH@
++topsrcdir      = @top_srcdir@
++srcdir         = @srcdir@
++VPATH          = @srcdir@
++relativesrcdir = @relativesrcdir@
++
++include $(DEPTH)/config/autoconf.mk
++
++# Mochitest tests
++MOCHITEST_FILES = \
++    test_basics.html \
++    common.js \
++    $(NULL)
++
++include $(topsrcdir)/config/rules.mk
+diff --git a/toolkit/devtools/webconsole/test/common.js b/toolkit/devtools/webconsole/test/common.js
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/common.js
+@@ -0,0 +1,73 @@
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++
++const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
++
++Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
++Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
++
++function initCommon()
++{
++  // Always log packets when running tests.
++  Services.prefs.setBoolPref("devtools.debugger.log", true);
++  // Enable remote debugging for the relevant tests.
++  Services.prefs.setBoolPref("devtools.debugger.remote-enabled", true);
++}
++
++function initDebuggerServer()
++{
++  if (!DebuggerServer.initialized) {
++    DebuggerServer.init();
++    DebuggerServer.addBrowserActors();
++  }
++}
++
++function connectToDebugger(aCallback)
++{
++  initDebuggerServer();
++
++  let transport = DebuggerServer.connectPipe();
++  let client = new DebuggerClient(transport);
++
++  let dbgState = { client: client };
++  client.connect(aCallback.bind(null, dbgState));
++}
++
++function attachConsole(aListeners, aCallback)
++{
++  function _onAttachConsole(aState, aResponse, aWebConsoleClient)
++  {
++    if (aResponse.error) {
++      Cu.reportError("attachConsole failed: " + aResponse.error + " " +
++                     aResponse.message);
++    }
++
++    aState.webConsoleClient = aWebConsoleClient;
++
++    aCallback(aState, aResponse);
++  }
++
++  connectToDebugger(function _onConnect(aState) {
++    aState.client.listTabs(function _onListTabs(aResponse) {
++      if (aResponse.error) {
++        Cu.reportError("listTabs failed: " + aResponse.error + " " +
++                       aResponse.message);
++        aCallback(aState, aResponse);
++        return;
++      }
++      let tab = aResponse.tabs[aResponse.selected];
++      aState.consoleActor = tab.consoleActor;
++      aState.client.attachConsole(tab.consoleActor, aListeners,
++                                  _onAttachConsole.bind(null, aState));
++    });
++  });
++}
++
++function closeDebugger(aState, aCallback)
++{
++  aState.client.close(aCallback);
++}
++
+diff --git a/toolkit/devtools/webconsole/test/test_basics.html b/toolkit/devtools/webconsole/test/test_basics.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/test_basics.html
+@@ -0,0 +1,54 @@
++<!DOCTYPE HTML>
++<html lang="en">
++<head>
++  <meta charset="utf8">
++  <title>Basic Web Console Actor tests</title>
++  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript;version=1.8" src="common.js"></script>
++  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css" />
++  <!-- Any copyright is dedicated to the Public Domain.
++     - http://creativecommons.org/publicdomain/zero/1.0/ -->
++</head>
++<body>
++<p>Basic Web Console Actor tests</p>
++<p id="display"></p>
++
++<div id="content" style="display: none">
++  <iframe id="iframe"></iframe>
++</div>
++
++<pre id="test">
++<script class="testbody" type="text/javascript;version=1.8">
++
++netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++SimpleTest.waitForExplicitFinish();
++
++function startTest()
++{
++  removeEventListener("load", startTest);
++
++  attachConsole(["PageError"], onStartPageError);
++}
++
++function onStartPageError(aState, aResponse)
++{
++  is(aResponse.startedListeners.length, 1, "startedListeners.length");
++  is(aResponse.startedListeners[0], "PageError", "startedListeners: PageError");
++
++  closeDebugger(aState, function() {
++    attachConsole(["PageError", "ConsoleAPI"], onStartPageErrorAndConsoleAPI);
++  });
++}
++
++function onStartPageErrorAndConsoleAPI(aState, aResponse)
++{
++  closeDebugger(aState, function() {
++    SimpleTest.finish();
++  });
++}
++
++addEventListener("load", startTest);
++</script>
++</pre>
++</body>
++</html>
