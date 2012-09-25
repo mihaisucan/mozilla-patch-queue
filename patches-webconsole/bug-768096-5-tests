@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 8296e94204796c0e0f4242fef307587d2d806fde
+# Parent bf400964226bbd81ad24eea625efc4ef10b68a28
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1348519592 -3600
+# Date 1348614740 -3600
 Bug 768096 - Web Console remote debugging protocol support - Part 5: tests
 
 diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
@@ -27,7 +27,7 @@ diff --git a/toolkit/devtools/webconsole/test/Makefile.in b/toolkit/devtools/web
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/Makefile.in
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,24 @@
 +# This Source Code Form is subject to the terms of the Mozilla Public
 +# License, v. 2.0. If a copy of the MPL was not distributed with this
 +# file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -46,6 +46,8 @@ new file mode 100644
 +    test_cached_messages.html \
 +    test_page_errors.html \
 +    test_consoleapi.html \
++    test_jsterm.html \
++    test_object_actor.html \
 +    common.js \
 +    $(NULL)
 +
@@ -54,7 +56,7 @@ diff --git a/toolkit/devtools/webconsole/test/common.js b/toolkit/devtools/webco
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/common.js
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,108 @@
 +/* Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -126,51 +128,43 @@ new file mode 100644
 +function closeDebugger(aState, aCallback)
 +{
 +  aState.dbgClient.close(aCallback);
++  aState.dbgClient = null;
++  aState.client = null;
 +}
 +
 +function checkConsoleAPICall(aCall, aExpected)
 +{
-+  let args = aExpected.arguments;
-+  if (args) {
-+    delete aExpected.arguments;
++  if (aExpected.level != "trace" && aExpected.arguments) {
++    is(aCall.arguments.length, aExpected.arguments.length,
++       "number of arguments");
 +  }
 +
 +  checkObject(aCall, aExpected);
-+
-+  aExpected.arguments = args;
-+
-+  if (!args) {
-+    return;
-+  }
-+
-+  is(aCall.arguments.length, args.length, "number of arguments");
-+
-+  args.forEach(function(aValue, aIndex) {
-+    if (typeof aValue == "object") {
-+      info("checking object at arg #" + aIndex);
-+      checkObject(aCall.arguments[aIndex], aValue);
-+    }
-+    else {
-+      is(aCall.arguments[aIndex], aValue, "value of arg #" + aIndex);
-+    }
-+  });
 +}
 +
 +function checkObject(aObject, aExpected)
 +{
-+  for (let name in aExpected)
++  for (let name of Object.keys(aExpected))
 +  {
 +    let value = aObject[name];
 +    let expected = aExpected[name];
-+    if (typeof expected == "string") {
-+      is(value, expected, name);
++    if (typeof expected == "string" ||
++        typeof expected == "number") {
++      is(value, expected, "key " + name);
 +    }
 +    else if (expected instanceof RegExp) {
-+      ok(expected.test(value), name);
++      ok(expected.test(value), name + ": " + expected);
++    }
++    else if (Array.isArray(expected)) {
++      info("checking array for key " + name);
++      checkObject(value, expected);
++    }
++    else if (typeof expected == "object") {
++      info("checking object for key " + name);
++      checkObject(value, expected);
 +    }
 +  }
 +}
-+
 diff --git a/toolkit/devtools/webconsole/test/test_basics.html b/toolkit/devtools/webconsole/test/test_basics.html
 new file mode 100644
 --- /dev/null
@@ -428,7 +422,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_consoleapi.html b/toolkit/dev
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/test_consoleapi.html
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,142 @@
 +<!DOCTYPE HTML>
 +<html lang="en">
 +<head>
@@ -448,7 +442,7 @@ new file mode 100644
 +
 +let expectedConsoleCalls = [];
 +
-+function doConsoleCalls()
++function doConsoleCalls(aState)
 +{
 +  console.log("foobarBaz-log", undefined);
 +  console.info("foobarBaz-info", null);
@@ -486,7 +480,43 @@ new file mode 100644
 +      level: "trace",
 +      filename: /test_consoleapi/,
 +      functionName: "doConsoleCalls",
-+      arguments: [{ type: "null" }],
++      arguments: [
++        {
++          filename: /test_consoleapi/,
++          functionName: "doConsoleCalls",
++        },
++        {
++          filename: /test_consoleapi/,
++          functionName: "onAttach",
++        },
++      ],
++    },
++    {
++      level: "dir",
++      filename: /test_consoleapi/,
++      functionName: "doConsoleCalls",
++      arguments: [
++        {
++          type: "object",
++          actor: /[a-z]/,
++          className: "HTMLDocument",
++        },
++        {
++          type: "object",
++          actor: /[a-z]/,
++          className: "Window",
++        }
++      ],
++      objectProperties: [
++        {
++          name: "ATTRIBUTE_NODE",
++          value: 2,
++        },
++        {
++          name: "CDATA_SECTION_NODE",
++          value: 4,
++        }, // ...
++      ],
 +    },
 +  ];
 +}
@@ -500,17 +530,15 @@ new file mode 100644
 +
 +function onAttach(aState, aResponse)
 +{
-+  dump("onAttach\n");
 +  onConsoleAPICall = onConsoleAPICall.bind(null, aState);
 +  aState.dbgClient.addListener("consoleAPICall", onConsoleAPICall);
-+  doConsoleCalls();
++  doConsoleCalls(aState.actor);
 +}
 +
 +let consoleCalls = [];
 +
 +function onConsoleAPICall(aState, aType, aPacket)
 +{
-+  dump("onConsoleAPICall\n");
 +  is(aPacket.from, aState.actor, "console API call actor");
 +
 +  consoleCalls.push(aPacket.message);
@@ -522,11 +550,326 @@ new file mode 100644
 +
 +  expectedConsoleCalls.forEach(function(aMessage, aIndex) {
 +    info("checking received console call #" + aIndex);
-+    checkObject(consoleCalls[aIndex], expectedConsoleCalls[aIndex]);
++    checkConsoleAPICall(consoleCalls[aIndex], expectedConsoleCalls[aIndex]);
 +  });
 +
++
++  consoleCalls = [];
++
 +  closeDebugger(aState, function() {
-+      return;
++    SimpleTest.finish();
++  });
++}
++
++addEventListener("load", startTest);
++</script>
++</body>
++</html>
+diff --git a/toolkit/devtools/webconsole/test/test_jsterm.html b/toolkit/devtools/webconsole/test/test_jsterm.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/test_jsterm.html
+@@ -0,0 +1,136 @@
++<!DOCTYPE HTML>
++<html lang="en">
++<head>
++  <meta charset="utf8">
++  <title>Test for JavaScript terminal functionality</title>
++  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript;version=1.8" src="common.js"></script>
++  <!-- Any copyright is dedicated to the Public Domain.
++     - http://creativecommons.org/publicdomain/zero/1.0/ -->
++</head>
++<body>
++<p>Test for JavaScript terminal functionality</p>
++
++<script type="text/javascript;version=1.8">
++netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++SimpleTest.waitForExplicitFinish();
++
++function startTest()
++{
++  removeEventListener("load", startTest);
++
++  attachConsole(["PageError"], onAttach);
++}
++
++function onAttach(aState, aResponse)
++{
++  top.foobarObject = Object.create(null);
++  top.foobarObject.foo = 1;
++  top.foobarObject.foobar = 2;
++  top.foobarObject.foobaz = 3;
++  top.foobarObject.omg = 4;
++  top.foobarObject.omgfoo = 5;
++
++  onAutocomplete1 = onAutocomplete1.bind(null, aState);
++  aState.client.autocomplete("window.foo", 0, onAutocomplete1);
++}
++
++function onAutocomplete1(aState, aResponse)
++{
++  let matches = aResponse.matches;
++
++  is(aResponse.matchProp, "foo", "matchProp");
++  is(matches.length, 1, "matches.length");
++  is(matches[0], "foobarObject", "matches[0]");
++
++  onAutocomplete2 = onAutocomplete2.bind(null, aState);
++  aState.client.autocomplete("window.foobarObject.", 0, onAutocomplete2);
++}
++
++function onAutocomplete2(aState, aResponse)
++{
++  let matches = aResponse.matches;
++
++  ok(!aResponse.matchProp, "matchProp");
++  is(matches.length, 5, "matches.length");
++  checkObject(matches, ["foo", "foobar", "foobaz", "omg", "omgfoo"]);
++
++  onEval1 = onEval1.bind(null, aState);
++  aState.client.evaluateJS("2+2", onEval1);
++}
++
++function onEval1(aState, aResponse)
++{
++  checkObject(aResponse, {
++    from: aState.actor,
++    input: "2+2",
++    result: 4,
++  });
++
++  ok(!aResponse.error, "no js error");
++  ok(!aResponse.helperResult, "no helper result");
++
++  onEval2 = onEval2.bind(null, aState);
++  aState.client.evaluateJS("window", onEval2);
++}
++
++function onEval2(aState, aResponse)
++{
++  checkObject(aResponse, {
++    from: aState.actor,
++    input: "window",
++    result: {
++      type: "object",
++      className: "Window",
++      actor: /[a-z]/,
++    },
++  });
++
++  ok(!aResponse.error, "no js error");
++  ok(!aResponse.helperResult, "no helper result");
++
++  onEvalWithException = onEvalWithException.bind(null, aState);
++  aState.client.evaluateJS("window.doTheImpossible()",
++                           onEvalWithException);
++}
++
++function onEvalWithException(aState, aResponse)
++{
++  checkObject(aResponse, {
++    from: aState.actor,
++    input: "window.doTheImpossible()",
++    result: {
++      type: "undefined",
++    },
++    errorMessage: /doTheImpossible/,
++  });
++
++  ok(aResponse.error, "js error object");
++  ok(!aResponse.helperResult, "no helper result");
++
++  onEvalWithHelper = onEvalWithHelper.bind(null, aState);
++  aState.client.evaluateJS("clear()", onEvalWithHelper);
++}
++
++function onEvalWithHelper(aState, aResponse)
++{
++  checkObject(aResponse, {
++    from: aState.actor,
++    input: "clear()",
++    result: {
++      type: "undefined",
++    },
++    helperResult: { type: "clearOutput" },
++  });
++
++  ok(!aResponse.error, "no js error");
++
++  closeDebugger(aState, function() {
++    SimpleTest.finish();
++  });
++}
++
++addEventListener("load", startTest);
++</script>
++</body>
++</html>
+diff --git a/toolkit/devtools/webconsole/test/test_object_actor.html b/toolkit/devtools/webconsole/test/test_object_actor.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/test_object_actor.html
+@@ -0,0 +1,167 @@
++<!DOCTYPE HTML>
++<html lang="en">
++<head>
++  <meta charset="utf8">
++  <title>Test for the object actor</title>
++  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript;version=1.8" src="common.js"></script>
++  <!-- Any copyright is dedicated to the Public Domain.
++     - http://creativecommons.org/publicdomain/zero/1.0/ -->
++</head>
++<body>
++<p>Test for the object actor</p>
++
++<script type="text/javascript;version=1.8">
++netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++SimpleTest.waitForExplicitFinish();
++
++let expectedProps = [];
++
++function startTest()
++{
++  removeEventListener("load", startTest);
++
++  attachConsole(["ConsoleAPI"], onAttach);
++}
++
++function onAttach(aState, aResponse)
++{
++  onConsoleCall = onConsoleCall.bind(null, aState);
++  aState.dbgClient.addListener("consoleAPICall", onConsoleCall);
++
++  window.foobarObject = Object.create(null);
++  foobarObject.foo = 1;
++  foobarObject.foobar = "hello";
++  foobarObject.foobaz = document;
++  foobarObject.omg = null;
++  foobarObject.testfoo = false;
++  foobarObject.notInspectable = {};
++  foobarObject.omgfn = function _omgfn() {
++    return "myResult";
++  };
++  foobarObject.abArray = ["a", "b"];
++
++  Object.defineProperty(foobarObject, "getterAndSetter", {
++    enumerable: true,
++    get: function fooGet() { return "foo"; },
++    set: function fooSet() { 1+2 },
++  });
++
++  console.log("hello", foobarObject);
++
++  expectedProps = [
++    {
++      name: "abArray",
++      value: {
++        type: "object",
++        className: "Array",
++        actor: /[a-z]/,
++        inspectable: true,
++      },
++    },
++    {
++      name: "foo",
++      configurable: true,
++      enumerable: true,
++      writable: true,
++      value: 1,
++    },
++    {
++      name: "foobar",
++      value: "hello",
++    },
++    {
++      name: "foobaz",
++      value: {
++        type: "object",
++        className: "HTMLDocument",
++        displayString: /\[object HTMLDocument/,
++        inspectable: true,
++        actor: /[a-z]/,
++      },
++    },
++    {
++      name: "getterAndSetter",
++      get: {
++        type: "function",
++        className: "function",
++        displayString: /function fooGet/,
++        actor: /[a-z]/,
++        inspectable: false,
++      },
++      set: {
++        type: "function",
++        className: "function",
++        displayString: /function fooSet/,
++        actor: /[a-z]/,
++        inspectable: false,
++      },
++    },
++    {
++      name: "notInspectable",
++      value: {
++        type: "object",
++        className: "Object",
++        actor: /[a-z]/,
++        inspectable: false,
++      },
++    },
++    {
++      name: "omg",
++      value: { type: "null" },
++    },
++    {
++      name: "omgfn",
++      value: {
++        type: "function",
++        className: "function",
++        displayString: /function _omgfn/,
++        actor: /[a-z]/,
++        inspectable: false,
++      },
++    },
++    {
++      name: "testfoo",
++      value: false,
++    },
++  ];
++}
++
++function onConsoleCall(aState, aType, aPacket)
++{
++  is(aPacket.from, aState.actor, "console API call actor");
++
++  checkConsoleAPICall(aPacket.message, {
++    level: "log",
++    filename: /test_object_actor/,
++    functionName: "onAttach",
++    arguments: ["hello", {
++      type: "object",
++      actor: /[a-z]/,
++      inspectable: true,
++    }],
++  });
++
++  aState.dbgClient.removeListener("consoleAPICall", onConsoleCall);
++
++  let args = aPacket.message.arguments;
++  onProperties = onProperties.bind(null, aState);
++  aState.client.inspectObjectProperties(args[1].actor, onProperties);
++}
++
++function onProperties(aState, aResponse)
++{
++  let props = aResponse.properties;
++  checkObject(props, expectedProps);
++
++  expectedProps = [];
++
++  closeDebugger(aState, function() {
 +    SimpleTest.finish();
 +  });
 +}

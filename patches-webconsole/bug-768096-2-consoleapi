@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 87a6afbdb9ad18bfebc2ee0daab4ac1c654cc38a
+# Parent 969304f9b6b29e5b5b98d85a3560455043c50ff0
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1348242261 -10800
+# Date 1348589803 -3600
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API and JS evaluation
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -545,7 +545,43 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_cons
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
-@@ -171,17 +171,17 @@ function testJSTerm(hud)
+@@ -106,30 +106,32 @@ function testJSTerm(hud)
+   ok(!output, "help worked");
+ 
+   jsterm.execute("?");
+   output = jsterm.outputNode.querySelector(".webconsole-msg-output");
+   ok(!output, "? worked");
+ 
+   let foundTab = null;
+   waitForSuccess({
+-    name: "help tab opened",
++    name: "help tabs opened",
+     validatorFn: function()
+     {
+-      let newTabOpen = gBrowser.tabs.length == tabs + 1;
++      let newTabOpen = gBrowser.tabs.length == tabs + 3;
+       if (!newTabOpen) {
+         return false;
+       }
+ 
+       foundTab = gBrowser.tabs[tabs];
+       return true;
+     },
+     successFn: function()
+     {
+-      gBrowser.removeTab(foundTab);
++      gBrowser.removeTab(gBrowser.tabs[gBrowser.tabs.length - 1]);
++      gBrowser.removeTab(gBrowser.tabs[gBrowser.tabs.length - 1]);
++      gBrowser.removeTab(gBrowser.tabs[gBrowser.tabs.length - 1]);
+       nextTest();
+     },
+     failureFn: nextTest,
+   });
+   yield;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("pprint({b:2, a:1})");
+@@ -171,17 +173,17 @@ function testJSTerm(hud)
    jsterm.execute("pprint('hi')");
    checkResult('0: "h"\n  1: "i"', "pprint('hi')", 1);
    yield;
@@ -567,7 +603,26 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/bro
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -302,16 +302,22 @@ WebConsoleFrame.prototype = {
+@@ -44,16 +44,18 @@ const STRINGS_URI = "chrome://browser/lo
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ 
+ // The XUL namespace.
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ 
+ const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/en/Security/MixedContent";
+ 
++const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
++
+ // The amount of time in milliseconds that must pass between messages to
+ // trigger the display of a new group.
+ const NEW_GROUP_DELAY = 5000;
+ 
+ // The amount of time in milliseconds that we wait before performing a live
+ // search.
+ const SEARCH_DELAY = 200;
+ 
+@@ -302,16 +304,22 @@ WebConsoleFrame.prototype = {
    outputNode: null,
  
    /**
@@ -590,7 +645,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @type boolean
     */
    get saveRequestAndResponseBodies() this._saveRequestAndResponseBodies,
-@@ -408,18 +414,20 @@ WebConsoleFrame.prototype = {
+@@ -408,18 +416,20 @@ WebConsoleFrame.prototype = {
                                         !this.getFilterState("network");
      }.bind(this));
  
@@ -613,7 +668,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    _initDefaultFilterPrefs: function WCF__initDefaultFilterPrefs()
    {
-@@ -652,50 +660,29 @@ WebConsoleFrame.prototype = {
+@@ -652,50 +662,29 @@ WebConsoleFrame.prototype = {
     */
    receiveMessage: function WCF_receiveMessage(aMessage)
    {
@@ -664,7 +719,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * manager.
     *
     * @private
-@@ -1028,23 +1015,21 @@ WebConsoleFrame.prototype = {
+@@ -1028,23 +1017,21 @@ WebConsoleFrame.prototype = {
  
      return false;
    },
@@ -689,7 +744,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      aRemoteMessages.forEach(function(aMessage) {
        switch (aMessage._type) {
          case "PageError": {
-@@ -1057,59 +1042,70 @@ WebConsoleFrame.prototype = {
+@@ -1057,59 +1044,70 @@ WebConsoleFrame.prototype = {
            this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage,
                               [aMessage]);
            break;
@@ -784,7 +839,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          body = l10n.getFormatStr("stacktrace.outputMessage",
                                   [filename, functionName, lineNumber]);
  
-@@ -1121,77 +1117,63 @@ WebConsoleFrame.prototype = {
+@@ -1121,77 +1119,63 @@ WebConsoleFrame.prototype = {
          args.forEach(function(aFrame) {
            clipboardText += aFrame.filename + " :: " +
                             aFrame.functionName + " :: " +
@@ -873,7 +928,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.makeOutputMessageLink(node, function _traceNodeClickCallback() {
          if (node._panelOpen) {
            return;
-@@ -1203,80 +1185,87 @@ WebConsoleFrame.prototype = {
+@@ -1203,80 +1187,87 @@ WebConsoleFrame.prototype = {
          };
  
          let propPanel = this.jsterm.openPropertyPanel(options);
@@ -983,7 +1038,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1448,24 +1437,22 @@ WebConsoleFrame.prototype = {
+@@ -1448,24 +1439,22 @@ WebConsoleFrame.prototype = {
      }.bind(this));
  
      return outputNode;
@@ -1011,7 +1066,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param object aMessage
     *        The HTTP activity object. This object needs to hold two properties:
-@@ -1847,37 +1834,57 @@ WebConsoleFrame.prototype = {
+@@ -1847,37 +1836,57 @@ WebConsoleFrame.prototype = {
     * @private
     * @param array aItem
     *        The item you want to remove from the output queue.
@@ -1074,7 +1129,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Ensures that the number of message nodes of type aCategory don't exceed that
     * category's line limit by removing old messages as needed.
     *
-@@ -1911,33 +1918,31 @@ WebConsoleFrame.prototype = {
+@@ -1911,33 +1920,31 @@ WebConsoleFrame.prototype = {
    pruneConsoleDirNode: function WCF_pruneConsoleDirNode(aMessageNode)
    {
      if (aMessageNode.parentNode) {
@@ -1111,7 +1166,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        if (aNode.childNodes[4]) {
          location = aNode.childNodes[4].getAttribute("title");
        }
-@@ -2052,17 +2057,17 @@ WebConsoleFrame.prototype = {
+@@ -2052,17 +2059,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -1130,7 +1185,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2127,20 +2132,19 @@ WebConsoleFrame.prototype = {
+@@ -2127,20 +2134,19 @@ WebConsoleFrame.prototype = {
  
        bodyContainer.appendChild(tree);
        node.appendChild(bodyContainer);
@@ -1154,7 +1209,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        node.appendChild(bodyNode);
      }
      node.appendChild(repeatContainer);
-@@ -2159,45 +2163,46 @@ WebConsoleFrame.prototype = {
+@@ -2159,45 +2165,46 @@ WebConsoleFrame.prototype = {
     * @private
     * @param nsIDOMElement aMessage
     *        The message element that holds the output for the given call.
@@ -1207,7 +1262,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this._addMessageLinkCallback(elem,
          this._consoleLogClick.bind(this, aMessage, elem, aItem));
  
-@@ -2389,16 +2394,51 @@ WebConsoleFrame.prototype = {
+@@ -2389,16 +2396,51 @@ WebConsoleFrame.prototype = {
          }
        }
      }
@@ -1259,7 +1314,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      if (!item || !item.url) {
        return;
-@@ -2473,16 +2513,22 @@ JSTerm.prototype = {
+@@ -2473,16 +2515,22 @@ JSTerm.prototype = {
    history: null,
  
    /**
@@ -1282,7 +1337,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Initialize the JSTerminal UI.
     * @private
     */
-@@ -2494,92 +2540,93 @@ JSTerm.prototype = {
+@@ -2494,92 +2542,96 @@ JSTerm.prototype = {
      this.inputNode.addEventListener("keypress", this._keyPress, false);
      this.inputNode.addEventListener("input", this._inputEventHandler, false);
      this.inputNode.addEventListener("keyup", this._inputEventHandler, false);
@@ -1362,6 +1417,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +            errorMessage = helperResult.message;
 +          }
 +          break;
++        case "help":
++          this.hud.owner.openLink(HELP_URL);
++          break;
 +      }
 +    }
  
@@ -1425,7 +1483,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
-@@ -2592,20 +2639,19 @@ JSTerm.prototype = {
+@@ -2592,20 +2644,19 @@ JSTerm.prototype = {
      // attempt to execute the content of the inputNode
      aExecuteString = aExecuteString || this.inputNode.value;
      if (!aExecuteString) {
@@ -1449,7 +1507,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.clearCompletion();
    },
  
-@@ -2746,17 +2792,17 @@ JSTerm.prototype = {
+@@ -2746,17 +2797,17 @@ JSTerm.prototype = {
  
      hud.groupDepth = 0;
      hud._outputQueue.forEach(hud._pruneItemFromQueue, hud);
@@ -1468,7 +1526,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @returns void
     */
-@@ -3073,49 +3119,53 @@ JSTerm.prototype = {
+@@ -3073,49 +3124,53 @@ JSTerm.prototype = {
     */
    _updateCompletionResult:
    function JST__updateCompletionResult(aType, aCallback)
@@ -1536,7 +1594,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.clearCompletion();
        return;
      }
-@@ -3261,99 +3311,102 @@ JSTerm.prototype = {
+@@ -3261,99 +3316,102 @@ JSTerm.prototype = {
        objectId: aObjectId,
        resultCacheId: aResultCacheId,
      };
@@ -1668,7 +1726,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param object aOptions
-@@ -3372,42 +3425,50 @@ JSTerm.prototype = {
+@@ -3372,42 +3430,50 @@ JSTerm.prototype = {
                                      aNewResponse)
    {
      if (aNewResponse.errorMessage) {
@@ -1739,7 +1797,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    destroy: function JST_destroy()
    {
      this.clearCompletion();
-@@ -3628,16 +3689,17 @@ CommandController.prototype = {
+@@ -3628,16 +3694,17 @@ CommandController.prototype = {
   * @param object aWebConsole
   *        The Web Console instance that owns this connection proxy.
   */
@@ -1757,7 +1815,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @see WebConsoleFrame
     * @type object
-@@ -3662,16 +3724,24 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3662,16 +3729,24 @@ WebConsoleConnectionProxy.prototype = {
     * The WebConsoleActor ID.
     *
     * @private
@@ -1782,7 +1840,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        DebuggerServer.init();
        DebuggerServer.addBrowserActors();
      }
-@@ -3684,18 +3754,19 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3684,18 +3759,19 @@ WebConsoleConnectionProxy.prototype = {
     *        Optional function to invoke when connection is established.
     */
    connect: function WCCP_connect(aCallback)
@@ -1804,7 +1862,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          client.attachConsole(tab.consoleActor, listeners,
                               this._onAttachConsole.bind(this, aCallback));
        }.bind(this));
-@@ -3720,16 +3791,46 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3720,16 +3796,46 @@ WebConsoleConnectionProxy.prototype = {
      if (aResponse.error) {
        Cu.reportError("attachConsole failed: " + aResponse.error + " " +
                       aResponse.message);
@@ -1851,7 +1909,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * The "pageError" message type handler. We redirect any page errors to the UI
     * for displaying.
     *
-@@ -3742,29 +3843,60 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3742,29 +3848,60 @@ WebConsoleConnectionProxy.prototype = {
    _onPageError: function WCCP__onPageError(aType, aPacket)
    {
      if (this.owner && aPacket.from == this._consoleActor) {
@@ -2620,7 +2678,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  
  WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
  {
-@@ -1158,8 +1525,335 @@ PageErrorListener.prototype =
+@@ -1158,8 +1525,332 @@ PageErrorListener.prototype =
     * Remove the nsIConsoleService listener.
     */
    destroy: function PEL_destroy()
@@ -2881,10 +2939,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +   */
 +  aOwner.sandbox.help = function JSTH_help()
 +  {
-+    aOwner.helperResult = {};
-+    aOwner.window.open(
-+        "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers",
-+        "help", "");
++    aOwner.helperResult = { type: "help" };
 +  };
 +
 +  /**
