@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 969304f9b6b29e5b5b98d85a3560455043c50ff0
+# Parent 0ddcc014e31b4ea6aaae88f155535ffdb0a2906f
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1348589803 -3600
+# Date 1348678924 -3600
 Bug 768096 - Web Console remote debugging protocol support - Part 2: window.console API and JS evaluation
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -1337,7 +1337,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Initialize the JSTerminal UI.
     * @private
     */
-@@ -2494,92 +2542,96 @@ JSTerm.prototype = {
+@@ -2494,92 +2542,97 @@ JSTerm.prototype = {
      this.inputNode.addEventListener("keypress", this._keyPress, false);
      this.inputNode.addEventListener("input", this._inputEventHandler, false);
      this.inputNode.addEventListener("keyup", this._inputEventHandler, false);
@@ -1397,9 +1397,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    let result = aResponse.result;
 +    let inspectable = result && typeof result == "object" && result.inspectable;
 +    let helperResult = aResponse.helperResult;
-+    let helperRawOutput = !!(helperResult || {}).rawOutput;
++    let helperHasRawOutput = !!(helperResult || {}).rawOutput;
 +    let resultString =
-+      WebConsoleUtils.objectActorGripToString(result, !helperRawOutput);
++      WebConsoleUtils.objectActorGripToString(result,
++                                              !helperHasRawOutput);
 +
 +    if (helperResult && helperResult.type) {
 +      switch (helperResult.type) {
@@ -1431,7 +1432,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -        !aResponse.helperRawOutput) {
 +    if (!errorMessage && result && typeof result == "object" &&
 +        result.type == "undefined" &&
-+        helperResult && !helperRawOutput) {
++        helperResult && !helperHasRawOutput) {
 +      aCallback && aCallback();
        return;
      }
@@ -1483,7 +1484,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
-@@ -2592,20 +2644,19 @@ JSTerm.prototype = {
+@@ -2592,20 +2645,19 @@ JSTerm.prototype = {
      // attempt to execute the content of the inputNode
      aExecuteString = aExecuteString || this.inputNode.value;
      if (!aExecuteString) {
@@ -1507,7 +1508,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.clearCompletion();
    },
  
-@@ -2746,17 +2797,17 @@ JSTerm.prototype = {
+@@ -2746,17 +2798,17 @@ JSTerm.prototype = {
  
      hud.groupDepth = 0;
      hud._outputQueue.forEach(hud._pruneItemFromQueue, hud);
@@ -1526,7 +1527,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @returns void
     */
-@@ -3073,49 +3124,53 @@ JSTerm.prototype = {
+@@ -3073,49 +3125,53 @@ JSTerm.prototype = {
     */
    _updateCompletionResult:
    function JST__updateCompletionResult(aType, aCallback)
@@ -1594,7 +1595,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.clearCompletion();
        return;
      }
-@@ -3261,99 +3316,102 @@ JSTerm.prototype = {
+@@ -3261,99 +3317,102 @@ JSTerm.prototype = {
        objectId: aObjectId,
        resultCacheId: aResultCacheId,
      };
@@ -1726,7 +1727,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param object aOptions
-@@ -3372,42 +3430,50 @@ JSTerm.prototype = {
+@@ -3372,42 +3431,50 @@ JSTerm.prototype = {
                                      aNewResponse)
    {
      if (aNewResponse.errorMessage) {
@@ -1797,7 +1798,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    destroy: function JST_destroy()
    {
      this.clearCompletion();
-@@ -3628,16 +3694,17 @@ CommandController.prototype = {
+@@ -3628,16 +3695,17 @@ CommandController.prototype = {
   * @param object aWebConsole
   *        The Web Console instance that owns this connection proxy.
   */
@@ -1815,7 +1816,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @see WebConsoleFrame
     * @type object
-@@ -3662,16 +3729,24 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3662,16 +3730,24 @@ WebConsoleConnectionProxy.prototype = {
     * The WebConsoleActor ID.
     *
     * @private
@@ -1840,7 +1841,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        DebuggerServer.init();
        DebuggerServer.addBrowserActors();
      }
-@@ -3684,18 +3759,19 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3684,18 +3760,19 @@ WebConsoleConnectionProxy.prototype = {
     *        Optional function to invoke when connection is established.
     */
    connect: function WCCP_connect(aCallback)
@@ -1862,7 +1863,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          client.attachConsole(tab.consoleActor, listeners,
                               this._onAttachConsole.bind(this, aCallback));
        }.bind(this));
-@@ -3720,16 +3796,46 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3720,16 +3797,46 @@ WebConsoleConnectionProxy.prototype = {
      if (aResponse.error) {
        Cu.reportError("attachConsole failed: " + aResponse.error + " " +
                       aResponse.message);
@@ -1909,7 +1910,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * The "pageError" message type handler. We redirect any page errors to the UI
     * for displaying.
     *
-@@ -3742,29 +3848,60 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3742,29 +3849,60 @@ WebConsoleConnectionProxy.prototype = {
    _onPageError: function WCCP__onPageError(aType, aPacket)
    {
      if (this.owner && aPacket.from == this._consoleActor) {
@@ -3049,13 +3050,13 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
   * @constructor
   * @param object aConnection
   *        The connection to the client, DebuggerServerConnection.
-  * @param string aTabActorID
-  *        The parent tab actor ID.
+  * @param object aTabActor
+  *        The parent tab actor.
   */
- function WebConsoleActor(aConnection, aTabActorID)
+ function WebConsoleActor(aConnection, aTabActor)
  {
    this.conn = aConnection;
-   this._browser = this.conn.getActor(aTabActorID).browser;
+   this._browser = aTabActor.browser;
 +
 +  this._objectActorsPool = new ActorPool(this.conn);
 +  this.conn.addActorPool(this._objectActorsPool);

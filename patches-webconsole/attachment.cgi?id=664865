@@ -1,0 +1,86 @@
+# HG changeset patch
+# User Panos Astithas <past@mozilla.com>
+# Date 1348654198 -3600
+# Node ID f976337074ee8e7dd413d82bf8516af61e8c1e86
+# Parent  7505bbe999e4dc52b67c5c4df8585d8785a61ceb
+Bug 793947 - Race condition in dbg-server.js breaks Marionette
+
+diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
+--- a/toolkit/devtools/debugger/server/dbg-server.js
++++ b/toolkit/devtools/debugger/server/dbg-server.js
+@@ -311,22 +311,20 @@ var DebuggerServer = {
+     // Create a root actor for the connection and send the hello packet.
+     conn.rootActor = this.createRootActor(conn);
+     conn.addActor(conn.rootActor);
+     aTransport.send(conn.rootActor.sayHello());
+     aTransport.ready();
+   },
+ 
+   /**
+-   * Remove the connection from the debugging server and shut down the server
+-   * if no other connections are open.
++   * Remove the connection from the debugging server.
+    */
+   _connectionClosed: function DH_connectionClosed(aConnection) {
+     delete this._connections[aConnection.prefix];
+-    this.destroy();
+   }
+ };
+ 
+ /**
+  * Construct an ActorPool.
+  *
+  * ActorPools are actorID -> actor mapping and storage.  These are
+  * used to accumulate and quickly dispose of groups of actors that
+diff --git a/toolkit/devtools/debugger/tests/unit/test_dbgsocket.js b/toolkit/devtools/debugger/tests/unit/test_dbgsocket.js
+--- a/toolkit/devtools/debugger/tests/unit/test_dbgsocket.js
++++ b/toolkit/devtools/debugger/tests/unit/test_dbgsocket.js
+@@ -54,45 +54,20 @@ function test_socket_conn()
+       run_next_test();
+     },
+   };
+   transport.ready();
+ }
+ 
+ function test_socket_shutdown()
+ {
+-  let count = 0;
+-  wait_for_server_shutdown(count);
+-}
+-
+-function wait_for_server_shutdown(aCount)
+-{
+-  do_timeout(100, function() {
+-    dump("count: "+aCount+" ");
+-    if (++aCount > 20) {
+-      do_throw("Timed out waiting for the server to shut down.");
+-      return;
+-    }
+-    if (DebuggerServer.initialized) {
+-      wait_for_server_shutdown(aCount);
+-      return;
+-    }
+-    real_test_socket_shutdown(aCount);
+-  });
+-}
+-
+-function real_test_socket_shutdown()
+-{
+-  // After the last conection was closed, the server must be initialized again.
+-  // Allow incoming connections.
+-  DebuggerServer.init(function () true);
+-  DebuggerServer.addActors("resource://test/testactors.js");
+-
++  do_check_eq(DebuggerServer._socketConnections, 1);
++  do_check_true(DebuggerServer.closeListener());
+   do_check_eq(DebuggerServer._socketConnections, 0);
+-  // Make sure closing a non-started listener does nothing.
++  // Make sure closing the listener twice does nothing.
+   do_check_false(DebuggerServer.closeListener());
+   do_check_eq(DebuggerServer._socketConnections, 0);
+ 
+   let transport = debuggerSocketConnect("127.0.0.1", 2929);
+   transport.hooks = {
+     onPacket: function(aPacket) {
+       // Shouldn't reach this, should never connect.
+       do_check_true(false);

@@ -1,0 +1,50 @@
+# HG changeset patch
+# User Panos Astithas <past@mozilla.com>
+# Date 1348487006 -3600
+# Node ID 4f139f4f39646dae4a9a33652d6e8a4c8c3d7d45
+# Parent  4d2107ccca9077593dbc1102a11a0bddaff99941
+Bug 792925 - Dynamically-added tab-scoped actors should get a reference to their parent
+
+diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/devtools/debugger/server/dbg-browser-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-browser-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-browser-actors.js
+@@ -136,17 +136,17 @@ BrowserRootActor.prototype = {
+   /**
+    * Adds dynamically-added actors from add-ons to the provided pool.
+    */
+   _createExtraActors: function BRA_createExtraActors(aFactories, aPool) {
+     // Walk over global actors added by extensions.
+     for (let name in aFactories) {
+       let actor = this._extraActors[name];
+       if (!actor) {
+-        actor = aFactories[name].bind(null, this.conn);
++        actor = aFactories[name].bind(null, this.conn, this);
+         actor.prototype = aFactories[name].prototype;
+         actor.parentID = this.actorID;
+         this._extraActors[name] = actor;
+       }
+       aPool.addActor(actor);
+     }
+   },
+ 
+diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
+--- a/toolkit/devtools/debugger/server/dbg-server.js
++++ b/toolkit/devtools/debugger/server/dbg-server.js
+@@ -530,16 +530,17 @@ DebuggerServerConnection.prototype = {
+       } catch (e) {
+         Cu.reportError(e);
+         this.transport.send({
+           error: "unknownError",
+           message: ("error occurred while creating actor '" + actor.name +
+                     "': " + safeErrorString(e))
+         });
+       }
++      instance.parentID = actor.parentID;
+       // We want the newly-constructed actor to completely replace the factory
+       // actor. Reusing the existing actor ID will make sure ActorPool.addActor
+       // does the right thing.
+       instance.actorID = actor.actorID;
+       actor.registeredPool.addActor(instance);
+       actor = instance;
+     }
+ 
