@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 0507215cdfeff81299f194806df6ab74f9ba1ebc
+# Parent d4acee06a87f8be2b981c6d19aee64387a73515d
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1348671524 -3600
+# Date 1348750305 -3600
 Bug 768096 - Web Console remote debugging protocol support - Part 3: network logging
 
 diff --git a/browser/devtools/webconsole/HUDService-content.js b/browser/devtools/webconsole/HUDService-content.js
@@ -205,7 +205,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
                                    "resource://gre/modules/devtools/WebConsoleUtils.jsm");
  
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
-@@ -71,41 +71,47 @@ function NetworkPanel(aParent, aHttpActi
+@@ -71,41 +71,43 @@ function NetworkPanel(aParent, aHttpActi
  
      if (self.linkNode) {
        self.linkNode._panelOpen = false;
@@ -223,15 +223,11 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 +    }
 +
 +    self.iframe.removeEventListener("load", onLoad, true);
-+    self.document = (self.iframe.contentWindow || {}).document;
 +    self.update();
 +  }, true);
 +
 +  this.panel.addEventListener("popupshown", function onPopupShown() {
 +    self.panel.removeEventListener("popupshown", onPopupShown, true);
-+    if (!self.document) {
-+      self.document = (self.iframe.contentWindow || {}).document;
-+    }
      self.update();
    }, true);
  
@@ -262,7 +258,38 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
     * State variables.
     */
    _INIT: 0,
-@@ -145,19 +151,18 @@ NetworkPanel.prototype =
+@@ -114,16 +116,30 @@ NetworkPanel.prototype =
+   _DISPLAYED_RESPONSE_HEADER: 3,
+   _TRANSITION_CLOSED: 4,
+ 
+   _fromDataRegExp: /Content-Type\:\s*application\/x-www-form-urlencoded/,
+ 
+   _contentType: null,
+ 
+   /**
++   * Function callback invoked whenever the panel content is updated. This is
++   * used only by tests.
++   *
++   * @private
++   * @type function
++   */
++  _onUpdate: null,
++
++  get document() {
++    return this.iframe && this.iframe.contentWindow ?
++           this.iframe.contentWindow.document : null;
++  },
++
++  /**
+    * Small helper function that is nearly equal to l10n.getFormatStr
+    * except that it prefixes aName with "NetworkPanel.".
+    *
+    * @param string aName
+    *        The name of an i10n string to format. This string is prefixed with
+    *        "NetworkPanel." before calling the HUDService.getFormatStr function.
+    * @param array aArray
+    *        Values used as placeholder for the i10n string.
+@@ -145,19 +161,18 @@ NetworkPanel.prototype =
     *         out.
     */
    get contentType()
@@ -284,7 +311,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
        if (types[i] in NetworkHelper.mimeCategoryMap) {
          contentType = types[i];
          break;
-@@ -231,28 +236,28 @@ NetworkPanel.prototype =
+@@ -231,28 +246,28 @@ NetworkPanel.prototype =
     * Tells if the server response is cached.
     *
     * @returns boolean
@@ -315,7 +342,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
     *
     * @param string aId
     * @param string aValue
-@@ -336,19 +341,18 @@ NetworkPanel.prototype =
+@@ -336,19 +351,18 @@ NetworkPanel.prototype =
     * If the request header contains cookie data, a list of sent cookies is
     * generated and a special sent cookie section is displayed + the cookie list
     * added to it.
@@ -337,7 +364,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
  
      this._appendList("requestHeadersContent", request.headers, true);
  
-@@ -359,30 +363,32 @@ NetworkPanel.prototype =
+@@ -359,30 +373,32 @@ NetworkPanel.prototype =
    },
  
    /**
@@ -374,7 +401,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
      {
        try {
          return decodeURIComponent(aText);
-@@ -412,19 +418,18 @@ NetworkPanel.prototype =
+@@ -412,19 +428,18 @@ NetworkPanel.prototype =
     * Displays the response section of the NetworkPanel, sets the response status,
     * the duration between the start of the request and the receiving of the
     * response header as well as the response header content on the the NetworkPanel.
@@ -396,7 +423,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
      // Calculate how much time it took from the request start, until the
      // response started to be received.
      let deltaDuration = 0;
-@@ -448,26 +453,26 @@ NetworkPanel.prototype =
+@@ -448,26 +463,26 @@ NetworkPanel.prototype =
     * the receiving of the response header and the end of the request. Once the
     * image is loaded, the size of the requested image is set.
     *
@@ -427,7 +454,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
          self._format("imageSizeDeltaDurationMS",
            [ imageNode.width, imageNode.height, timing.receive ]
          )
-@@ -493,19 +498,18 @@ NetworkPanel.prototype =
+@@ -493,19 +508,18 @@ NetworkPanel.prototype =
     * Displays the response body section, sets the the duration between
     * the receiving of the response header and the end of the request as well as
     * the content of the response body on the NetworkPanel.
@@ -449,7 +476,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
      this._displayNode("responseBody" + cached);
      this._appendTextNode("responseBody" + cached + "Content",
                           response.content.text);
-@@ -514,17 +518,17 @@ NetworkPanel.prototype =
+@@ -514,17 +528,17 @@ NetworkPanel.prototype =
    /**
     * Displays the `Unknown Content-Type hint` and sets the duration between the
     * receiving of the response header on the NetworkPanel.
@@ -468,7 +495,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
      this._appendTextNode("responseBodyUnknownTypeContent",
        this._format("responseBodyUnableToDisplay.content", [this.contentType]));
    },
-@@ -532,17 +536,17 @@ NetworkPanel.prototype =
+@@ -532,17 +546,17 @@ NetworkPanel.prototype =
    /**
     * Displays the `no response body` section and sets the the duration between
     * the receiving of the response header and the end of the request.
@@ -487,7 +514,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
  
    /**
     * Updates the content of the NetworkPanel's iframe.
-@@ -552,61 +556,57 @@ NetworkPanel.prototype =
+@@ -552,78 +566,77 @@ NetworkPanel.prototype =
    update: function NP_update()
    {
      // After the iframe's contentWindow is ready, the document object is set.
@@ -557,6 +584,27 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
          }
          else if (this._responseIsImage) {
            this._displayResponseImage();
+         }
+         else if (!this._isResponseBodyTextData) {
+           this._displayResponseBodyUnknownType();
+         }
+         else if (response.content.text) {
+           this._displayResponseBody();
+         }
++        break;
++    }
+ 
+-        break;
++    if (this._onUpdate) {
++      this._onUpdate();
+     }
+   }
+ }
+ 
+ /**
+  * Creates a DOMNode and sets all the attributes of aAttributes on the created
+  * element.
+  *
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js b/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_599725_response_headers.js
@@ -1100,7 +1148,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js b
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
-@@ -60,43 +60,35 @@ function checkNodeKeyValue(aPanel, aId, 
+@@ -60,52 +60,46 @@ function checkNodeKeyValue(aPanel, aId, 
    ok(false, "content check failed for " + aId + ", key " + aKey);
  }
  
@@ -1156,10 +1204,25 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    is(filterBox._netPanel, networkPanel,
       "Network panel stored on the anchor object");
  
-   networkPanel.panel.addEventListener("load", function onLoad() {
-     networkPanel.panel.removeEventListener("load", onLoad, true);
-     testDriver.next();
-@@ -118,40 +110,40 @@ function testGen() {
+-  networkPanel.panel.addEventListener("load", function onLoad() {
+-    networkPanel.panel.removeEventListener("load", onLoad, true);
+-    testDriver.next();
+-  }, true);
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
+ 
+   yield;
+ 
+   info("test 1");
+ 
+   checkIsVisible(networkPanel, {
+     requestCookie: false,
+     requestFormData: false,
+@@ -118,40 +112,40 @@ function testGen() {
    });
  
    checkNodeContent(networkPanel, "header", "http://www.testpage.com");
@@ -1208,7 +1271,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
  
    checkIsVisible(networkPanel, {
      requestBody: true,
-@@ -165,34 +157,34 @@ function testGen() {
+@@ -165,34 +159,34 @@ function testGen() {
    });
  
    checkNodeContent(networkPanel, "header", "HTTP/3.14 999 earthquake win");
@@ -1246,7 +1309,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
      requestCookie: false,
      responseContainer: true,
      responseBody: false,
-@@ -200,21 +192,21 @@ function testGen() {
+@@ -200,30 +194,32 @@ function testGen() {
      responseImage: false,
      responseImageCached: false
    });
@@ -1267,10 +1330,25 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    is(filterBox._netPanel, networkPanel,
       "Network panel stored on httpActivity object");
  
-   networkPanel.panel.addEventListener("load", function onLoad() {
-     networkPanel.panel.removeEventListener("load", onLoad, true);
-     testDriver.next();
-@@ -237,19 +229,19 @@ function testGen() {
+-  networkPanel.panel.addEventListener("load", function onLoad() {
+-    networkPanel.panel.removeEventListener("load", onLoad, true);
+-    testDriver.next();
+-  }, true);
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
+ 
+   yield;
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestFormData: false,
+     requestCookie: true,
+     responseContainer: true,
+@@ -237,25 +233,27 @@ function testGen() {
    checkNodeKeyValue(networkPanel, "requestCookieContent", "hello", "world");
    checkNodeContent(networkPanel, "responseBodyContent", "get out here");
    checkNodeContent(networkPanel, "responseBodyInfo", "2ms");
@@ -1287,13 +1365,25 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
 +  httpActivity.request.url = TEST_IMG;
  
    networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
-   networkPanel.panel.addEventListener("load", function onLoad() {
-     networkPanel.panel.removeEventListener("load", onLoad, true);
-     testDriver.next();
-   }, true);
+-  networkPanel.panel.addEventListener("load", function onLoad() {
+-    networkPanel.panel.removeEventListener("load", onLoad, true);
+-    testDriver.next();
+-  }, true);
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
  
    yield;
-@@ -286,19 +278,19 @@ function testGen() {
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestFormData: false,
+     requestCookie: true,
+     responseContainer: true,
+@@ -286,25 +284,27 @@ function testGen() {
    }
    else {
      checkImageResponseInfo();
@@ -1310,13 +1400,25 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
 +  httpActivity.response.statusText = "Not Modified";
  
    networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
-   networkPanel.panel.addEventListener("load", function onLoad() {
-     networkPanel.panel.removeEventListener("load", onLoad, true);
-     testDriver.next();
-   }, true);
+-  networkPanel.panel.addEventListener("load", function onLoad() {
+-    networkPanel.panel.removeEventListener("load", onLoad, true);
+-    testDriver.next();
+-  }, true);
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
  
    yield;
-@@ -316,17 +308,17 @@ function testGen() {
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestFormData: false,
+     requestCookie: true,
+     responseContainer: true,
+@@ -316,27 +316,29 @@ function testGen() {
  
    let imgNode = networkPanel.document.getElementById("responseImageCachedNode");
    is(imgNode.getAttribute("src"), TEST_IMG, "Displayed image is correct");
@@ -1333,9 +1435,25 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    ].join("\n");
  
    networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
-   networkPanel.panel.addEventListener("load", function onLoad() {
-     networkPanel.panel.removeEventListener("load", onLoad, true);
-@@ -347,17 +339,17 @@ function testGen() {
+-  networkPanel.panel.addEventListener("load", function onLoad() {
+-    networkPanel.panel.removeEventListener("load", onLoad, true);
+-    testDriver.next();
+-  }, true);
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
+ 
+   yield;
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: false,
+     requestFormData: true,
+     requestCookie: true,
+     responseContainer: true,
+@@ -347,23 +349,25 @@ function testGen() {
    });
  
    checkNodeKeyValue(networkPanel, "requestFormDataContent", "name", "rob");
@@ -1348,13 +1466,25 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
 +  httpActivity.request.postData.text = "Content-Type:application/x-www-form-urlencoded\n";
  
    networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
-   networkPanel.panel.addEventListener("load", function onLoad() {
-     networkPanel.panel.removeEventListener("load", onLoad, true);
-     testDriver.next();
-   }, true);
+-  networkPanel.panel.addEventListener("load", function onLoad() {
+-    networkPanel.panel.removeEventListener("load", onLoad, true);
+-    testDriver.next();
+-  }, true);
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
  
    yield;
-@@ -374,20 +366,20 @@ function testGen() {
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: false,
+     requestFormData: true,
+     requestCookie: true,
+     responseContainer: true,
+@@ -374,26 +378,28 @@ function testGen() {
    });
  
    networkPanel.panel.hidePopup();
@@ -1373,13 +1503,25 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
 +  httpActivity.response.content.text = "my cached data is here!";
  
    networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
-   networkPanel.panel.addEventListener("load", function onLoad() {
-     networkPanel.panel.removeEventListener("load", onLoad, true);
-     testDriver.next();
-   }, true);
+-  networkPanel.panel.addEventListener("load", function onLoad() {
+-    networkPanel.panel.removeEventListener("load", onLoad, true);
+-    testDriver.next();
+-  }, true);
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
  
    yield;
-@@ -407,18 +399,18 @@ function testGen() {
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: false,
+     requestFormData: true,
+     requestCookie: true,
+     responseContainer: true,
+@@ -407,24 +413,26 @@ function testGen() {
    checkNodeContent(networkPanel, "responseBodyCachedContent",
                     "my cached data is here!");
  
@@ -1394,12 +1536,24 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
 +  httpActivity.response.content.mimeType = "application/x-shockwave-flash";
  
    networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
-   networkPanel.panel.addEventListener("load", function onLoad() {
-     networkPanel.panel.removeEventListener("load", onLoad, true);
-     testDriver.next();
-   }, true);
+-  networkPanel.panel.addEventListener("load", function onLoad() {
+-    networkPanel.panel.removeEventListener("load", onLoad, true);
+-    testDriver.next();
+-  }, true);
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
  
    yield;
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: false,
+     requestFormData: true,
+     requestCookie: true,
+     responseContainer: true,
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -2107,7 +2261,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Open the selected item's URL in a new tab.
-@@ -3695,16 +3808,20 @@ CommandController.prototype = {
+@@ -3696,16 +3809,20 @@ CommandController.prototype = {
   *        The Web Console instance that owns this connection proxy.
   */
  function WebConsoleConnectionProxy(aWebConsole)
@@ -2128,7 +2282,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @see WebConsoleFrame
     * @type object
-@@ -3760,23 +3877,29 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3761,23 +3878,29 @@ WebConsoleConnectionProxy.prototype = {
     */
    connect: function WCCP_connect(aCallback)
    {
@@ -2160,7 +2314,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * The "attachConsole" response handler.
-@@ -3865,16 +3988,90 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3866,16 +3989,90 @@ WebConsoleConnectionProxy.prototype = {
    _onConsoleAPICall: function WCCP__onConsoleAPICall(aType, aPacket)
    {
      if (this.owner && aPacket.from == this._consoleActor) {
@@ -2251,7 +2405,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    releaseActor: function WCCP_releaseActor(aActor)
    {
      if (this.client) {
-@@ -3892,16 +4089,20 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3893,16 +4090,20 @@ WebConsoleConnectionProxy.prototype = {
    {
      if (!this.client) {
        aOnDisconnect && aOnDisconnect();
