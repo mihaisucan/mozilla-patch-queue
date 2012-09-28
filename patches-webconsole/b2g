@@ -1,0 +1,477 @@
+# HG changeset patch
+# Parent 211d7c18eb679c08023ad11d8c03412c5df66f5d
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1348767651 -3600
+
+diff --git a/b2g/chrome/content/dbg-browser-actors.js b/b2g/chrome/content/dbg-browser-actors.js
+--- a/b2g/chrome/content/dbg-browser-actors.js
++++ b/b2g/chrome/content/dbg-browser-actors.js
+@@ -112,17 +112,17 @@ DeviceTabActor.prototype.grip = function
+   let response = {
+     'actor': this.actorID,
+     'title': this.browser.title,
+     'url': this.browser.document.documentURI
+   };
+ 
+   // Walk over tab actors added by extensions and add them to a new ActorPool.
+   let actorPool = new ActorPool(this.conn);
+-  this._createExtraActors(DebuggerServer.globalActorFactories, actorPool);
++  this._createExtraActors(DebuggerServer.tabActorFactories, actorPool);
+   if (!actorPool.isEmpty()) {
+     this._tabActorPool = actorPool;
+     this.conn.addActorPool(this._tabActorPool);
+   }
+ 
+   this._appendExtraActors(response);
+   return response;
+ };
+diff --git a/b2g/chrome/content/shell.js b/b2g/chrome/content/shell.js
+--- a/b2g/chrome/content/shell.js
++++ b/b2g/chrome/content/shell.js
+@@ -641,19 +641,28 @@ function startDebugger() {
+   try {
+     DebuggerServer.openListener(port);
+   } catch (e) {
+     dump('Unable to start debugger server: ' + e + '\n');
+   }
+ }
+ 
+ window.addEventListener('ContentStart', function(evt) {
++  dump("hello world\n");
++  try {
+   if (Services.prefs.getBoolPref('devtools.debugger.remote-enabled')) {
++    dump("hello world 2\n");
+     startDebugger();
+   }
++  } catch (ex) {
++    dump("exception!\n");
++    dump(ex + "\n");
++    dump(ex.stack + "\n");
++  }
++  dump("the end!\n");
+ });
+ 
+ // This is the backend for Gaia's screenshot feature.  Gaia requests a
+ // screenshot by sending a mozContentEvent with detail.type set to
+ // 'take-screenshot'.  Then we take a screenshot and send a
+ // mozChromeEvent with detail.type set to 'take-screenshot-success'
+ // and detail.file set to the an image/png blob
+ window.addEventListener('ContentStart', function ss_onContentStart() {
+diff --git a/b2g/components/ProcessGlobal.js b/b2g/components/ProcessGlobal.js
+--- a/b2g/components/ProcessGlobal.js
++++ b/b2g/components/ProcessGlobal.js
+@@ -34,20 +34,21 @@ function ProcessGlobal() {}
+ ProcessGlobal.prototype = {
+   classID: Components.ID('{1a94c87a-5ece-4d11-91e1-d29c29f21b28}'),
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
+                                          Ci.nsISupportsWeakReference]),
+ 
+   observe: function pg_observe(subject, topic, data) {
+     switch (topic) {
+     case 'app-startup': {
+-      Services.obs.addObserver(this, 'console-api-log-event', false);
++      //Services.obs.addObserver(this, 'console-api-log-event', false);
+       break;
+     }
+     case 'console-api-log-event': {
++      dump("omg no!!!\n");
+       // Pipe `console` log messages to the nsIConsoleService which
+       // writes them to logcat on Gonk.
+       let message = subject.wrappedJSObject;
+       let prefix = ('Content JS ' + message.level.toUpperCase() +
+                     ' at ' + message.filename + ':' + message.lineNumber +
+                     ' in ' + (message.functionName || 'anonymous') + ': ');
+       Services.console.logStringMessage(prefix + Array.join(message.arguments,
+                                                             ' '));
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -16,16 +16,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+                                   "resource://gre/modules/Services.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
+                                   "resource://gre/modules/devtools/dbg-server.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "DebuggerClient",
+                                   "resource://gre/modules/devtools/dbg-client.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "debuggerSocketConnect",
++                                  "resource://gre/modules/devtools/dbg-client.jsm");
++
+ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
+                                    "@mozilla.org/widget/clipboardhelper;1",
+                                    "nsIClipboardHelper");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "PropertyPanel",
+                                   "resource:///modules/PropertyPanel.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "PropertyTreeView",
+@@ -3931,28 +3934,43 @@ WebConsoleConnectionProxy.prototype = {
+   /**
+    * Initialize a debugger client and connect it to the debugger server.
+    *
+    * @param function [aCallback]
+    *        Optional function to invoke when connection is established.
+    */
+   connect: function WCCP_connect(aCallback)
+   {
+-    let transport = DebuggerServer.connectPipe();
++    this.local = 0;
++
++    let transport;
++    if (this.local) {
++      transport = DebuggerServer.connectPipe();
++    }
++    else {
++      transport = debuggerSocketConnect("localhost", 6000);
++    }
++
+     let client = this.client = new DebuggerClient(transport);
+ 
+     client.addListener("pageError", this._onPageError);
+     client.addListener("consoleAPICall", this._onConsoleAPICall);
+     client.addListener("networkEvent", this._onNetworkEvent);
+     client.addListener("networkEventUpdate", this._onNetworkEventUpdate);
+     client.addListener("fileActivity", this._onFileActivity);
+     client.addListener("locationChange", this._onLocationChange);
+ 
+-    let listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
+-                     "FileActivity", "LocationChange"];
++    let listeners;
++    if (this.local) {
++      listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
++                   "FileActivity", "LocationChange"];
++    }
++    else {
++      listeners = ["PageError", "ConsoleAPI", "NetworkActivity"];
++    }
+ 
+     client.connect(function(aType, aTraits) {
+       client.listTabs(function(aResponse) {
+         let tab = aResponse.tabs[aResponse.selected];
+         this._consoleActor = tab.consoleActor;
+         this.owner.onLocationChange(tab.url, tab.title);
+         client.attachConsole(tab.consoleActor, listeners,
+                              this._onAttachConsole.bind(this, aCallback));
+diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
+--- a/toolkit/devtools/debugger/server/dbg-server.js
++++ b/toolkit/devtools/debugger/server/dbg-server.js
+@@ -179,16 +179,17 @@ var DebuggerServer = {
+   },
+ 
+   /**
+    * Install Firefox-specific actors.
+    */
+   addBrowserActors: function DH_addBrowserActors() {
+     this.addActors("chrome://global/content/devtools/dbg-browser-actors.js");
+     this.addActors("chrome://global/content/devtools/dbg-webconsole-actors.js");
++    dump("addBrowserActors " + this.WebConsoleActor + "\n");
+     this.addTabActor(this.WebConsoleActor, "consoleActor");
+     if ("nsIProfiler" in Ci)
+       this.addActors("chrome://global/content/devtools/dbg-profiler-actors.js");
+   },
+ 
+   /**
+    * Listens on the given port for remote debugger connections.
+    *
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -1254,30 +1254,31 @@ PageErrorListener.prototype =
+    * messages belonging to the current window and sends them to the remote Web
+    * Console instance.
+    *
+    * @param nsIScriptError aScriptError
+    *        The script error object coming from the nsIConsoleService.
+    */
+   observe: function PEL_observe(aScriptError)
+   {
+-    if (!this.window || !this.listener ||
+-        !(aScriptError instanceof Ci.nsIScriptError) ||
+-        !aScriptError.outerWindowID) {
++    if (!this.listener ||
++        !(aScriptError instanceof Ci.nsIScriptError)) {
+       return;
+     }
+ 
+     if (!this.isCategoryAllowed(aScriptError.category)) {
+       return;
+     }
+ 
+-    let errorWindow =
+-      WebConsoleUtils.getWindowByOuterId(aScriptError.outerWindowID, this.window);
+-    if (!errorWindow || errorWindow.top != this.window) {
+-      return;
++    if (this.window) {
++      let errorWindow =
++        WebConsoleUtils.getWindowByOuterId(aScriptError.outerWindowID, this.window);
++      if (!errorWindow || errorWindow.top != this.window) {
++        return;
++      }
+     }
+ 
+     this.listener.onPageError(aScriptError);
+   },
+ 
+   /**
+    * Check if the given script error category is allowed to be tracked or not.
+    * We ignore chrome-originating errors as we only care about content.
+@@ -1309,16 +1310,22 @@ PageErrorListener.prototype =
+    *
+    * @return array
+    *         The array of cached messages. Each element is an nsIScriptError
+    *         with an added _type property so the remote Web Console instance can
+    *         tell the difference between various types of cached messages.
+    */
+   getCachedMessages: function PEL_getCachedMessages()
+   {
++    if (!this.window) {
++      let errors = {};
++      Services.console.getMessageArray(errors, {});
++      return errors.value;
++    }
++
+     let innerWindowId = WebConsoleUtils.getInnerWindowId(this.window);
+     let result = [];
+     let errors = {};
+     Services.console.getMessageArray(errors, {});
+ 
+     (errors.value || []).forEach(function(aError) {
+       if (!(aError instanceof Ci.nsIScriptError) ||
+           aError.innerWindowID != innerWindowId ||
+@@ -1403,26 +1410,29 @@ ConsoleAPIListener.prototype =
+    *
+    * @param object aMessage
+    *        The message object receives from the observer service.
+    * @param string aTopic
+    *        The message topic received from the observer service.
+    */
+   observe: function CAL_observe(aMessage, aTopic)
+   {
+-    if (!this.owner || !this.window) {
++    dump("CAL_observe\n");
++    if (!this.owner) {
+       return;
+     }
+ 
+     let apiMessage = aMessage.wrappedJSObject;
+-    let msgWindow = WebConsoleUtils.getWindowByOuterId(apiMessage.ID,
+-                                                       this.window);
+-    if (!msgWindow || msgWindow.top != this.window) {
+-      // Not the same window!
+-      return;
++    if (this.window) {
++      let msgWindow = WebConsoleUtils.getWindowByOuterId(apiMessage.ID,
++                                                         this.window);
++      if (!msgWindow || msgWindow.top != this.window) {
++        // Not the same window!
++        return;
++      }
+     }
+ 
+     this.owner.onConsoleAPICall(apiMessage);
+   },
+ 
+   /**
+    * Get the cached messages for the current inner window.
+    *
+@@ -2070,20 +2080,22 @@ NetworkMonitor.prototype = {
+     // object with the data from the new object in openResponses.
+ 
+     if (!this.owner || aTopic != "http-on-examine-response" ||
+         !(aSubject instanceof Ci.nsIHttpChannel)) {
+       return;
+     }
+ 
+     let channel = aSubject.QueryInterface(Ci.nsIHttpChannel);
+-    // Try to get the source window of the request.
+-    let win = NetworkHelper.getWindowForRequest(channel);
+-    if (!win || win.top !== this.window) {
+-      return;
++    if (this.window) {
++      // Try to get the source window of the request.
++      let win = NetworkHelper.getWindowForRequest(channel);
++      if (!win || win.top !== this.window) {
++        return;
++      }
+     }
+ 
+     let response = {
+       id: gSequenceId(),
+       channel: channel,
+       headers: [],
+       cookies: [],
+     };
+@@ -2212,24 +2224,29 @@ NetworkMonitor.prototype = {
+    * @param nsIHttpChannel aChannel
+    * @param number aTimestamp
+    * @param string aExtraStringData
+    * @return void
+    */
+   _onRequestHeader:
+   function NM__onRequestHeader(aChannel, aTimestamp, aExtraStringData)
+   {
++    let win = null;
++
+     // Try to get the source window of the request.
+-    let win = NetworkHelper.getWindowForRequest(aChannel);
+-    if (!win || win.top !== this.window) {
+-      return;
++    if (this.window) {
++      win = NetworkHelper.getWindowForRequest(aChannel);
++      if (!win || win.top !== this.window) {
++        return;
++      }
+     }
+ 
+     let httpActivity = this.createActivityObject(aChannel);
+-    httpActivity.charset = win.document.characterSet; // see NM__onRequestBodySent()
++    // see NM__onRequestBodySent()
++    httpActivity.charset = win ? win.document.characterSet : null;
+ 
+     httpActivity.timings.REQUEST_HEADER = {
+       first: aTimestamp,
+       last: aTimestamp
+     };
+ 
+     let httpVersionMaj = {};
+     let httpVersionMin = {};
+@@ -2359,17 +2376,18 @@ NetworkMonitor.prototype = {
+     if (aHttpActivity.discardRequestBody) {
+       return;
+     }
+ 
+     let sentBody = NetworkHelper.
+                    readPostTextFromRequest(aHttpActivity.channel,
+                                            aHttpActivity.charset);
+ 
+-    if (!sentBody && aHttpActivity.url == this.window.location.href) {
++    if (!sentBody && this.window &&
++        aHttpActivity.url == this.window.location.href) {
+       // If the request URL is the same as the current page URL, then
+       // we can try to get the posted text from the page directly.
+       // This check is necessary as otherwise the
+       //   NetworkHelper.readPostTextFromPageViaWebNav()
+       // function is called for image requests as well but these
+       // are not web pages and as such don't store the posted text
+       // in the cache of the webpage.
+       let webNav = this.window.QueryInterface(Ci.nsIInterfaceRequestor).
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -1,16 +1,18 @@
+ /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+ /* vim: set ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
++dump("dbg-webconsole-actors.js\n");
++
+ let Cc = Components.classes;
+ let Ci = Components.interfaces;
+ let Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                   "resource://gre/modules/Services.jsm");
+@@ -47,26 +49,30 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+  * @constructor
+  * @param object aConnection
+  *        The connection to the client, DebuggerServerConnection.
+  * @param object aTabActor
+  *        The parent tab actor.
+  */
+ function WebConsoleActor(aConnection, aTabActor)
+ {
++  dump("WebConsoleActor\n");
+   this.conn = aConnection;
+   this._browser = aTabActor.browser;
+ 
++  dump("_browser " + this._browser + " " + this.window + "\n");
++
+   this._objectActorsPool = new ActorPool(this.conn);
+   this.conn.addActorPool(this._objectActorsPool);
+ 
+   this._networkEventActorsPool = new ActorPool(this.conn);
+   this.conn.addActorPool(this._networkEventActorsPool);
+ 
+   this._prefs = {};
++  dump("WebConsoleActor end\n");
+ }
+ 
+ WebConsoleActor.prototype =
+ {
+   /**
+    * The xul:browser we work with.
+    * @private
+    * @type nsIDOMElement
+@@ -117,17 +123,17 @@ WebConsoleActor.prototype =
+    * @type object
+    */
+   conn: null,
+ 
+   /**
+    * The content window we work with.
+    * @type nsIDOMWindow
+    */
+-  get window() this._browser.contentWindow,
++  get window() this._browser,
+ 
+   /**
+    * The PageErrorListener instance.
+    * @type object
+    */
+   pageErrorListener: null,
+ 
+   /**
+@@ -287,33 +293,33 @@ WebConsoleActor.prototype =
+     let startedListeners = [];
+ 
+     while (aRequest.listeners.length > 0) {
+       let listener = aRequest.listeners.shift();
+       switch (listener) {
+         case "PageError":
+           if (!this.pageErrorListener) {
+             this.pageErrorListener =
+-              new PageErrorListener(this.window, this);
++              new PageErrorListener(null, this);
+             this.pageErrorListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "ConsoleAPI":
+           if (!this.consoleAPIListener) {
+             this.consoleAPIListener =
+-              new ConsoleAPIListener(this.window, this);
++              new ConsoleAPIListener(null, this);
+             this.consoleAPIListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "NetworkActivity":
+           if (!this.networkMonitor) {
+             this.networkMonitor =
+-              new NetworkMonitor(this.window, this);
++              new NetworkMonitor(null, this);
+             this.networkMonitor.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "FileActivity":
+           if (!this.consoleProgressListener) {
+             this.consoleProgressListener =
+               new ConsoleProgressListener(this._browser, this);
+@@ -1267,8 +1273,9 @@ NetworkEventActor.prototype.requestTypes
+   "getRequestCookies": NetworkEventActor.prototype.onGetRequestCookies,
+   "getRequestPostData": NetworkEventActor.prototype.onGetRequestPostData,
+   "getResponseHeaders": NetworkEventActor.prototype.onGetResponseHeaders,
+   "getResponseCookies": NetworkEventActor.prototype.onGetResponseCookies,
+   "getResponseContent": NetworkEventActor.prototype.onGetResponseContent,
+   "getEventTimings": NetworkEventActor.prototype.onGetEventTimings,
+ };
+ 
++dump("dbg-webconsole-actors.js end\n");
