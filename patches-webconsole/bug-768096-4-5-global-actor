@@ -1,0 +1,325 @@
+# HG changeset patch
+# Parent 23d40fb471b3943472491149cb9abd6c449167c0
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1349382129 -10800
+Bug 768096 - Web Console remote debugging protocol support - Part 4.5: global actor
+
+diff --git a/dom/base/ConsoleAPIStorage.jsm b/dom/base/ConsoleAPIStorage.jsm
+--- a/dom/base/ConsoleAPIStorage.jsm
++++ b/dom/base/ConsoleAPIStorage.jsm
+@@ -74,17 +74,27 @@ var ConsoleAPIStorage = {
+    * @param string aId
+    *        The inner window ID for which you want to get the array of cached
+    *        events.
+    * @returns array
+    *          The array of cached events for the given window.
+    */
+   getEvents: function CS_getEvents(aId)
+   {
+-    return (_consoleStorage[aId] || []).slice(0);
++    if (aId != null) {
++      return (_consoleStorage[aId] || []).slice(0);
++    }
++
++    let ids = [];
++
++    for each (let events in _consoleStorage) {
++      ids.push(events);
++    }
++
++    return [].concat.apply([], ids);
+   },
+ 
+   /**
+    * Record an event associated with the given window ID.
+    *
+    * @param string aWindowID
+    *        The ID of the inner window for which the event occurred.
+    * @param object aEvent
+diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/debugger/server/dbg-server.js
+--- a/toolkit/devtools/debugger/server/dbg-server.js
++++ b/toolkit/devtools/debugger/server/dbg-server.js
+@@ -182,16 +182,17 @@ var DebuggerServer = {
+ 
+   /**
+    * Install Firefox-specific actors.
+    */
+   addBrowserActors: function DH_addBrowserActors() {
+     this.addActors("chrome://global/content/devtools/dbg-browser-actors.js");
+     this.addActors("chrome://global/content/devtools/dbg-webconsole-actors.js");
+     this.addTabActor(this.WebConsoleActor, "consoleActor");
++    this.addGlobalActor(this.WebConsoleActor, "consoleActor");
+     if ("nsIProfiler" in Ci)
+       this.addActors("chrome://global/content/devtools/dbg-profiler-actors.js");
+   },
+ 
+   /**
+    * Listens on the given port for remote debugger connections.
+    *
+    * @param aPort int
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -1206,18 +1206,19 @@ return JSPropertyProvider;
+ // The page errors listener
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ /**
+  * The nsIConsoleService listener. This is used to send all the page errors
+  * (JavaScript, CSS and more) to the remote Web Console instance.
+  *
+  * @constructor
+- * @param nsIDOMWindow aWindow
+- *        The window object for which we are created.
++ * @param nsIDOMWindow [aWindow]
++ *        Optional - the window object for which we are created. This is used
++ *        for filtering out messages that belong to other windows.
+  * @param object aListener
+  *        The listener object must have a method: onPageError. This method is
+  *        invoked with one argument, the nsIScriptError, whenever a relevant
+  *        page error is received.
+  */
+ function PageErrorListener(aWindow, aListener)
+ {
+   this.window = aWindow;
+@@ -1254,30 +1255,33 @@ PageErrorListener.prototype =
+    * messages belonging to the current window and sends them to the remote Web
+    * Console instance.
+    *
+    * @param nsIScriptError aScriptError
+    *        The script error object coming from the nsIConsoleService.
+    */
+   observe: function PEL_observe(aScriptError)
+   {
+-    if (!this.window || !this.listener ||
+-        !(aScriptError instanceof Ci.nsIScriptError) ||
+-        !aScriptError.outerWindowID) {
++    if (!this.listener ||
++        !(aScriptError instanceof Ci.nsIScriptError)) {
+       return;
+     }
+ 
+-    if (!this.isCategoryAllowed(aScriptError.category)) {
+-      return;
+-    }
++    if (this.window) {
++      if (!aScriptError.outerWindowID ||
++          !this.isCategoryAllowed(aScriptError.category)) {
++        return;
++      }
+ 
+-    let errorWindow =
+-      WebConsoleUtils.getWindowByOuterId(aScriptError.outerWindowID, this.window);
+-    if (!errorWindow || errorWindow.top != this.window) {
+-      return;
++      let errorWindow =
++        WebConsoleUtils.getWindowByOuterId(aScriptError.outerWindowID,
++                                           this.window);
++      if (!errorWindow || errorWindow.top != this.window) {
++        return;
++      }
+     }
+ 
+     this.listener.onPageError(aScriptError);
+   },
+ 
+   /**
+    * Check if the given script error category is allowed to be tracked or not.
+    * We ignore chrome-originating errors as we only care about content.
+@@ -1309,30 +1313,31 @@ PageErrorListener.prototype =
+    *
+    * @return array
+    *         The array of cached messages. Each element is an nsIScriptError
+    *         with an added _type property so the remote Web Console instance can
+    *         tell the difference between various types of cached messages.
+    */
+   getCachedMessages: function PEL_getCachedMessages()
+   {
+-    let innerWindowId = WebConsoleUtils.getInnerWindowId(this.window);
++    let innerWindowId = this.window ?
++                        WebConsoleUtils.getInnerWindowId(this.window) : null;
+     let result = [];
+     let errors = {};
+     Services.console.getMessageArray(errors, {});
+ 
+     (errors.value || []).forEach(function(aError) {
+       if (!(aError instanceof Ci.nsIScriptError) ||
+-          aError.innerWindowID != innerWindowId ||
+-          !this.isCategoryAllowed(aError.category)) {
++          (innerWindowId &&
++           (aError.innerWindowID != innerWindowId ||
++            !this.isCategoryAllowed(aError.category)))) {
+         return;
+       }
+ 
+-      let remoteMessage = WebConsoleUtils.cloneObject(aError);
+-      result.push(remoteMessage);
++      result.push(aError);
+     }, this);
+ 
+     return result;
+   },
+ 
+   /**
+    * Remove the nsIConsoleService listener.
+    */
+@@ -1349,17 +1354,18 @@ PageErrorListener.prototype =
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ /**
+  * The window.console API observer. This allows the window.console API messages
+  * to be sent to the remote Web Console instance.
+  *
+  * @constructor
+  * @param nsIDOMWindow aWindow
+- *        The window object for which we are created.
++ *        Optional - the window object for which we are created. This is used
++ *        for filtering out messages that belong to other windows.
+  * @param object aOwner
+  *        The owner object must have the following methods:
+  *        - onConsoleAPICall(). This method is invoked with one argument, the
+  *        Console API message that comes from the observer service, whenever
+  *        a relevant console API call is received.
+  */
+ function ConsoleAPIListener(aWindow, aOwner)
+ {
+@@ -1403,26 +1409,28 @@ ConsoleAPIListener.prototype =
+    *
+    * @param object aMessage
+    *        The message object receives from the observer service.
+    * @param string aTopic
+    *        The message topic received from the observer service.
+    */
+   observe: function CAL_observe(aMessage, aTopic)
+   {
+-    if (!this.owner || !this.window) {
++    if (!this.owner) {
+       return;
+     }
+ 
+     let apiMessage = aMessage.wrappedJSObject;
+-    let msgWindow = WebConsoleUtils.getWindowByOuterId(apiMessage.ID,
+-                                                       this.window);
+-    if (!msgWindow || msgWindow.top != this.window) {
+-      // Not the same window!
+-      return;
++    if (this.window) {
++      let msgWindow = WebConsoleUtils.getWindowByOuterId(apiMessage.ID,
++                                                         this.window);
++      if (!msgWindow || msgWindow.top != this.window) {
++        // Not the same window!
++        return;
++      }
+     }
+ 
+     this.owner.onConsoleAPICall(apiMessage);
+   },
+ 
+   /**
+    * Get the cached messages for the current inner window.
+    *
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -42,23 +42,25 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ 
+ /**
+  * The WebConsoleActor implements capabilities needed for the Web Console
+  * feature.
+  *
+  * @constructor
+  * @param object aConnection
+  *        The connection to the client, DebuggerServerConnection.
+- * @param object aTabActor
+- *        The parent tab actor.
++ * @param object [aTabActor]
++ *        Optional, the parent tab actor.
+  */
+ function WebConsoleActor(aConnection, aTabActor)
+ {
+   this.conn = aConnection;
+-  this._browser = aTabActor.browser;
++  if (aTabActor) {
++    this._browser = aTabActor.browser;
++  }
+ 
+   this._objectActorsPool = new ActorPool(this.conn);
+   this.conn.addActorPool(this._objectActorsPool);
+ 
+   this._networkEventActorsPool = new ActorPool(this.conn);
+   this.conn.addActorPool(this._networkEventActorsPool);
+ 
+   this._prefs = {};
+@@ -117,17 +119,17 @@ WebConsoleActor.prototype =
+    * @type object
+    */
+   conn: null,
+ 
+   /**
+    * The content window we work with.
+    * @type nsIDOMWindow
+    */
+-  get window() this._browser.contentWindow,
++  get window() this._browser ? this._browser.contentWindow : null,
+ 
+   /**
+    * The PageErrorListener instance.
+    * @type object
+    */
+   pageErrorListener: null,
+ 
+   /**
+@@ -163,16 +165,21 @@ WebConsoleActor.prototype =
+    * Tells if the window.console object is native or overwritten by script in
+    * the page.
+    *
+    * @return boolean
+    *         True if the window.console object is native, or false otherwise.
+    */
+   hasNativeConsoleAPI: function WCA_hasNativeConsoleAPI()
+   {
++    if (!this.window) {
++      // Assume the global console always has the native window.console object.
++      return true;
++    }
++
+     let isNative = false;
+     try {
+       let consoleObject = WebConsoleUtils.unwrap(this.window).console;
+       isNative = "__mozillaConsole__" in consoleObject;
+     }
+     catch (ex) { }
+     return isNative;
+   },
+@@ -309,25 +316,31 @@ WebConsoleActor.prototype =
+           if (!this.networkMonitor) {
+             this.networkMonitor =
+               new NetworkMonitor(this.window, this);
+             this.networkMonitor.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "FileActivity":
++          if (!this._browser) {
++            break;
++          }
+           if (!this.consoleProgressListener) {
+             this.consoleProgressListener =
+               new ConsoleProgressListener(this._browser, this);
+           }
+           this.consoleProgressListener.startMonitor(this.consoleProgressListener.
+                                                     MONITOR_FILE_ACTIVITY);
+           startedListeners.push(listener);
+           break;
+         case "LocationChange":
++          if (!this._browser) {
++            break;
++          }
+           if (!this.consoleProgressListener) {
+             this.consoleProgressListener =
+               new ConsoleProgressListener(this._browser, this);
+           }
+           this.consoleProgressListener.startMonitor(this.consoleProgressListener.
+                                                     MONITOR_LOCATION_CHANGE);
+       }
+     }

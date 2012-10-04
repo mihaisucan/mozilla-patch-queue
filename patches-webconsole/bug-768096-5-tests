@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1348842074 -3600
+# Date 1349379456 -10800
 # Node ID d17d6438819c8f4814f73a3913833f27331847eb
-# Parent d94e43a6e12655ce10f00b84fbf8493452cecbc0
+# Parent 23d40fb471b3943472491149cb9abd6c449167c0
 Bug 768096 - Web Console remote debugging protocol support - Part 5: tests; try: -b do -p all -u mochitests,xpcshell -t none
 
 diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
@@ -26,11 +26,49 @@ diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconso
  
  libs::
  	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -1315,24 +1315,29 @@ PageErrorListener.prototype =
+   getCachedMessages: function PEL_getCachedMessages()
+   {
+     let innerWindowId = WebConsoleUtils.getInnerWindowId(this.window);
+     let result = [];
+     let errors = {};
+     Services.console.getMessageArray(errors, {});
+ 
+     (errors.value || []).forEach(function(aError) {
+-      if (!(aError instanceof Ci.nsIScriptError) ||
+-          aError.innerWindowID != innerWindowId ||
+-          !this.isCategoryAllowed(aError.category)) {
++      if (!(aError instanceof Ci.nsIScriptError)) {
+         return;
+       }
+ 
+-      let remoteMessage = WebConsoleUtils.cloneObject(aError);
+-      result.push(remoteMessage);
++      let errorWindow = aError.outerWindowID ?
++        WebConsoleUtils.getWindowByOuterId(aError.outerWindowID, this.window) :
++        null;
++
++      if (this.isCategoryAllowed(aError.category) &&
++          (aError.innerWindowID == innerWindowId ||
++           (errorWindow && errorWindow.top == this.window))) {
++        result.push(aError);
++      }
+     }, this);
+ 
+     return result;
+   },
+ 
+   /**
+    * Remove the nsIConsoleService listener.
+    */
 diff --git a/toolkit/devtools/webconsole/test/Makefile.in b/toolkit/devtools/webconsole/test/Makefile.in
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/Makefile.in
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,27 @@
 +# This Source Code Form is subject to the terms of the Mozilla Public
 +# License, v. 2.0. If a copy of the MPL was not distributed with this
 +# file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -43,8 +81,7 @@ new file mode 100644
 +
 +include $(DEPTH)/config/autoconf.mk
 +
-+# Mochitest tests
-+MOCHITEST_FILES = \
++MOCHITEST_CHROME_FILES = \
 +    test_basics.html \
 +    test_cached_messages.html \
 +    test_page_errors.html \
@@ -63,23 +100,26 @@ diff --git a/toolkit/devtools/webconsole/test/common.js b/toolkit/devtools/webco
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/common.js
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,131 @@
 +/* Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/ */
 +
-+netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++"use strict";
 +
 +const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 +
++const XHTML_NS = "http://www.w3.org/1999/xhtml";
++
 +Cu.import("resource://gre/modules/Services.jsm");
-+Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
-+Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
 +Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm");
 +
 +function initCommon()
 +{
 +  // Always log packets when running tests.
 +  Services.prefs.setBoolPref("devtools.debugger.log", true);
++
++  Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
++  Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
 +}
 +
 +function initDebuggerServer()
@@ -251,13 +291,13 @@ diff --git a/toolkit/devtools/webconsole/test/test_basics.html b/toolkit/devtool
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/test_basics.html
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,68 @@
 +<!DOCTYPE HTML>
 +<html lang="en">
 +<head>
 +  <meta charset="utf8">
 +  <title>Basic Web Console Actor tests</title>
-+  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
 +  <script type="text/javascript;version=1.8" src="common.js"></script>
 +  <!-- Any copyright is dedicated to the Public Domain.
 +     - http://creativecommons.org/publicdomain/zero/1.0/ -->
@@ -265,8 +305,7 @@ new file mode 100644
 +<body>
 +<p>Basic Web Console Actor tests</p>
 +
-+<script type="text/javascript;version=1.8">
-+netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++<script class="testbody" type="text/javascript;version=1.8">
 +SimpleTest.waitForExplicitFinish();
 +
 +function startTest()
@@ -331,7 +370,7 @@ new file mode 100644
 +<head>
 +  <meta charset="utf8">
 +  <title>Test for cached messages</title>
-+  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
 +  <script type="text/javascript;version=1.8" src="common.js"></script>
 +  <!-- Any copyright is dedicated to the Public Domain.
 +     - http://creativecommons.org/publicdomain/zero/1.0/ -->
@@ -339,7 +378,7 @@ new file mode 100644
 +<body>
 +<p>Test for cached messages</p>
 +
-+<script type="application/javascript;version=1.8">
++<script class="testbody" type="application/javascript;version=1.8">
 +let expectedConsoleCalls = [];
 +let expectedPageErrors = [];
 +
@@ -371,15 +410,16 @@ new file mode 100644
 +    },
 +  ];
 +
-+  let container = top.document.createElement("script");
-+  top.document.body.appendChild(container);
-+  container.textContent = "document.body.style.color = 'fooColor';";
-+  top.document.body.removeChild(container);
++  let body = top.document.documentElement;
++  let container = top.document.createElementNS(XHTML_NS, "script");
++  body.appendChild(container);
++  container.textContent = "document.documentElement.style.color = 'fooColor';";
++  body.removeChild(container);
 +
-+  container = top.document.createElement("script");
-+  top.document.body.appendChild(container);
++  container = top.document.createElementNS(XHTML_NS, "script");
++  body.appendChild(container);
 +  container.textContent = "document.doTheImpossible();";
-+  top.document.body.removeChild(container);
++  body.removeChild(container);
 +})();
 +
 +function doConsoleCalls()
@@ -417,8 +457,7 @@ new file mode 100644
 +}
 +</script>
 +
-+<script type="text/javascript;version=1.8">
-+netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++<script class="testbody" type="text/javascript;version=1.8">
 +SimpleTest.waitForExplicitFinish();
 +
 +let consoleAPIListener;
