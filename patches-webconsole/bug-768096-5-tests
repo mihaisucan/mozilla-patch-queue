@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1349379456 -10800
+# Date 1349444457 -10800
 # Node ID d17d6438819c8f4814f73a3913833f27331847eb
-# Parent 23d40fb471b3943472491149cb9abd6c449167c0
+# Parent 2f876c13e0d4099abb7905e51835793584d63a61
 Bug 768096 - Web Console remote debugging protocol support - Part 5: tests; try: -b do -p all -u mochitests,xpcshell -t none
 
 diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
@@ -18,7 +18,7 @@ diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconso
  include $(DEPTH)/config/autoconf.mk
  
 -#TEST_DIRS += tests
-+ifneq (mobile,$(MOZ_BUILD_APP))
++ifneq (Android,$(OS_TARGET))
 +  TEST_DIRS += test
 +endif
  
@@ -26,44 +26,6 @@ diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconso
  
  libs::
  	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
-diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
---- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-+++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -1315,24 +1315,29 @@ PageErrorListener.prototype =
-   getCachedMessages: function PEL_getCachedMessages()
-   {
-     let innerWindowId = WebConsoleUtils.getInnerWindowId(this.window);
-     let result = [];
-     let errors = {};
-     Services.console.getMessageArray(errors, {});
- 
-     (errors.value || []).forEach(function(aError) {
--      if (!(aError instanceof Ci.nsIScriptError) ||
--          aError.innerWindowID != innerWindowId ||
--          !this.isCategoryAllowed(aError.category)) {
-+      if (!(aError instanceof Ci.nsIScriptError)) {
-         return;
-       }
- 
--      let remoteMessage = WebConsoleUtils.cloneObject(aError);
--      result.push(remoteMessage);
-+      let errorWindow = aError.outerWindowID ?
-+        WebConsoleUtils.getWindowByOuterId(aError.outerWindowID, this.window) :
-+        null;
-+
-+      if (this.isCategoryAllowed(aError.category) &&
-+          (aError.innerWindowID == innerWindowId ||
-+           (errorWindow && errorWindow.top == this.window))) {
-+        result.push(aError);
-+      }
-     }, this);
- 
-     return result;
-   },
- 
-   /**
-    * Remove the nsIConsoleService listener.
-    */
 diff --git a/toolkit/devtools/webconsole/test/Makefile.in b/toolkit/devtools/webconsole/test/Makefile.in
 new file mode 100644
 --- /dev/null
@@ -100,7 +62,7 @@ diff --git a/toolkit/devtools/webconsole/test/common.js b/toolkit/devtools/webco
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/common.js
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,139 @@
 +/* Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -115,8 +77,7 @@ new file mode 100644
 +
 +function initCommon()
 +{
-+  // Always log packets when running tests.
-+  Services.prefs.setBoolPref("devtools.debugger.log", true);
++  //Services.prefs.setBoolPref("devtools.debugger.log", true);
 +
 +  Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
 +  Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
@@ -142,7 +103,7 @@ new file mode 100644
 +  client.connect(aCallback.bind(null, dbgState));
 +}
 +
-+function attachConsole(aListeners, aCallback)
++function attachConsole(aListeners, aCallback, aAttachToTab)
 +{
 +  function _onAttachConsole(aState, aResponse, aWebConsoleClient)
 +  {
@@ -156,7 +117,14 @@ new file mode 100644
 +    aCallback(aState, aResponse);
 +  }
 +
-+  connectToDebugger(function _onConnect(aState) {
++  connectToDebugger(function _onConnect(aState, aResponse) {
++    if (aResponse.error) {
++      Cu.reportError("client.connect() failed: " + aResponse.error + " " +
++                     aResponse.message);
++      aCallback(aState, aResponse);
++      return;
++    }
++
 +    aState.dbgClient.listTabs(function _onListTabs(aResponse) {
 +      if (aResponse.error) {
 +        Cu.reportError("listTabs failed: " + aResponse.error + " " +
@@ -164,9 +132,11 @@ new file mode 100644
 +        aCallback(aState, aResponse);
 +        return;
 +      }
-+      let tab = aResponse.tabs[aResponse.selected];
-+      aState.actor = tab.consoleActor;
-+      aState.dbgClient.attachConsole(tab.consoleActor, aListeners,
++      let consoleActor = aAttachToTab ?
++                         aResponse.tabs[aResponse.selected].consoleActor :
++                         aResponse.consoleActor;
++      aState.actor = consoleActor;
++      aState.dbgClient.attachConsole(consoleActor, aListeners,
 +                                     _onAttachConsole.bind(null, aState));
 +    });
 +  });
@@ -291,7 +261,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_basics.html b/toolkit/devtool
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/test_basics.html
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,79 @@
 +<!DOCTYPE HTML>
 +<html lang="en">
 +<head>
@@ -325,7 +295,7 @@ new file mode 100644
 +    top.console_ = top.console;
 +    top.console = { lolz: "foo" };
 +    attachConsole(["PageError", "ConsoleAPI", "foo"],
-+                  onStartPageErrorAndConsoleAPI);
++                  onStartPageErrorAndConsoleAPI, true);
 +  });
 +}
 +
@@ -339,9 +309,6 @@ new file mode 100644
 +  is(startedListeners.indexOf("foo"), -1, "startedListeners: no foo");
 +  ok(!aResponse.nativeConsoleAPI, "!nativeConsoleAPI");
 +
-+  top.console = top.console_;
-+  delete top.console_;
-+
 +  aState.client.stopListeners(["ConsoleAPI", "foo"],
 +                              onStopConsoleAPI.bind(null, aState));
 +}
@@ -350,6 +317,20 @@ new file mode 100644
 +{
 +  is(aResponse.stoppedListeners.length, 1, "stoppedListeners.length");
 +  is(aResponse.stoppedListeners[0], "ConsoleAPI", "stoppedListeners: ConsoleAPI");
++
++  closeDebugger(aState, function() {
++    attachConsole(["ConsoleAPI"], onStartConsoleAPI);
++  });
++}
++
++function onStartConsoleAPI(aState, aResponse)
++{
++  is(aResponse.startedListeners.length, 1, "startedListeners.length");
++  is(aResponse.startedListeners[0], "ConsoleAPI", "startedListeners: ConsoleAPI");
++  ok(aResponse.nativeConsoleAPI, "nativeConsoleAPI");
++
++  top.console = top.console_;
++  delete top.console_;
 +
 +  closeDebugger(aState, function() {
 +    SimpleTest.finish();
@@ -401,7 +382,7 @@ new file mode 100644
 +      _type: "PageError",
 +      errorMessage: /doTheImpossible/,
 +      sourceName: /.+/,
-+      category: "content javascript",
++      category: "chrome javascript",
 +      timeStamp: /^\d+$/,
 +      error: false,
 +      warning: false,
@@ -554,7 +535,7 @@ new file mode 100644
 +<head>
 +  <meta charset="utf8">
 +  <title>Test for the Console API</title>
-+  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
 +  <script type="text/javascript;version=1.8" src="common.js"></script>
 +  <!-- Any copyright is dedicated to the Public Domain.
 +     - http://creativecommons.org/publicdomain/zero/1.0/ -->
@@ -562,8 +543,7 @@ new file mode 100644
 +<body>
 +<p>Test for the Console API</p>
 +
-+<script type="text/javascript;version=1.8">
-+netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++<script class="testbody" type="text/javascript;version=1.8">
 +SimpleTest.waitForExplicitFinish();
 +
 +let expectedConsoleCalls = [];
@@ -671,6 +651,7 @@ new file mode 100644
 +
 +function onConsoleAPICall(aState, aType, aPacket)
 +{
++  info("received message level: " + aPacket.message.level);
 +  is(aPacket.from, aState.actor, "console API call actor");
 +
 +  consoleCalls.push(aPacket.message);
@@ -701,13 +682,13 @@ diff --git a/toolkit/devtools/webconsole/test/test_jsterm.html b/toolkit/devtool
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/test_jsterm.html
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,145 @@
 +<!DOCTYPE HTML>
 +<html lang="en">
 +<head>
 +  <meta charset="utf8">
 +  <title>Test for JavaScript terminal functionality</title>
-+  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
 +  <script type="text/javascript;version=1.8" src="common.js"></script>
 +  <!-- Any copyright is dedicated to the Public Domain.
 +     - http://creativecommons.org/publicdomain/zero/1.0/ -->
@@ -715,15 +696,14 @@ new file mode 100644
 +<body>
 +<p>Test for JavaScript terminal functionality</p>
 +
-+<script type="text/javascript;version=1.8">
-+netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++<script class="testbody" type="text/javascript;version=1.8">
 +SimpleTest.waitForExplicitFinish();
 +
 +function startTest()
 +{
 +  removeEventListener("load", startTest);
 +
-+  attachConsole(["PageError"], onAttach);
++  attachConsole(["PageError"], onAttach, true);
 +}
 +
 +function onAttach(aState, aResponse)
@@ -852,13 +832,13 @@ diff --git a/toolkit/devtools/webconsole/test/test_network_get.html b/toolkit/de
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/test_network_get.html
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,242 @@
 +<!DOCTYPE HTML>
 +<html lang="en">
 +<head>
 +  <meta charset="utf8">
 +  <title>Test for the network actor (GET request)</title>
-+  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
 +  <script type="text/javascript;version=1.8" src="common.js"></script>
 +  <!-- Any copyright is dedicated to the Public Domain.
 +     - http://creativecommons.org/publicdomain/zero/1.0/ -->
@@ -866,16 +846,15 @@ new file mode 100644
 +<body>
 +<p>Test for the network actor (GET request)</p>
 +
-+<iframe src="/tests/toolkit/devtools/webconsole/test/network_requests_iframe.html"></iframe>
++<iframe src="http://example.com/chrome/toolkit/devtools/webconsole/test/network_requests_iframe.html"></iframe>
 +
-+<script type="text/javascript;version=1.8">
-+netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++<script class="testbody" type="text/javascript;version=1.8">
 +SimpleTest.waitForExplicitFinish();
 +
 +function startTest()
 +{
 +  removeEventListener("load", startTest);
-+  attachConsole(["NetworkActivity"], onAttach);
++  attachConsole(["NetworkActivity"], onAttach, true);
 +}
 +
 +function onAttach(aState, aResponse)
@@ -888,7 +867,7 @@ new file mode 100644
 +  aState.dbgClient.addListener("networkEventUpdate", onNetworkEventUpdate);
 +
 +  let iframe = document.querySelector("iframe").contentWindow;
-+  iframe.testXhrGet();
++  iframe.wrappedJSObject.testXhrGet();
 +}
 +
 +function onNetworkEvent(aState, aType, aPacket)
@@ -1100,13 +1079,13 @@ diff --git a/toolkit/devtools/webconsole/test/test_network_post.html b/toolkit/d
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/test_network_post.html
-@@ -0,0 +1,267 @@
+@@ -0,0 +1,266 @@
 +<!DOCTYPE HTML>
 +<html lang="en">
 +<head>
 +  <meta charset="utf8">
 +  <title>Test for the network actor (POST request)</title>
-+  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
 +  <script type="text/javascript;version=1.8" src="common.js"></script>
 +  <!-- Any copyright is dedicated to the Public Domain.
 +     - http://creativecommons.org/publicdomain/zero/1.0/ -->
@@ -1114,17 +1093,16 @@ new file mode 100644
 +<body>
 +<p>Test for the network actor (POST request)</p>
 +
-+<iframe src="/tests/toolkit/devtools/webconsole/test/network_requests_iframe.html"></iframe>
++<iframe src="http://example.com/chrome/toolkit/devtools/webconsole/test/network_requests_iframe.html"></iframe>
 +
-+<script type="text/javascript;version=1.8">
-+netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++<script class="testbody" type="text/javascript;version=1.8">
 +SimpleTest.waitForExplicitFinish();
 +
 +function startTest()
 +{
 +  removeEventListener("load", startTest);
 +
-+  attachConsole(["NetworkActivity"], onAttach);
++  attachConsole(["NetworkActivity"], onAttach, true);
 +}
 +
 +function onAttach(aState, aResponse)
@@ -1151,7 +1129,7 @@ new file mode 100644
 +  aState.dbgClient.addListener("networkEventUpdate", onNetworkEventUpdate);
 +
 +  let iframe = document.querySelector("iframe").contentWindow;
-+  iframe.testXhrPost();
++  iframe.wrappedJSObject.testXhrPost();
 +}
 +
 +function onNetworkEvent(aState, aType, aPacket)
@@ -1372,13 +1350,13 @@ diff --git a/toolkit/devtools/webconsole/test/test_object_actor.html b/toolkit/d
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/test_object_actor.html
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,171 @@
 +<!DOCTYPE HTML>
 +<html lang="en">
 +<head>
 +  <meta charset="utf8">
 +  <title>Test for the object actor</title>
-+  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
 +  <script type="text/javascript;version=1.8" src="common.js"></script>
 +  <!-- Any copyright is dedicated to the Public Domain.
 +     - http://creativecommons.org/publicdomain/zero/1.0/ -->
@@ -1386,8 +1364,7 @@ new file mode 100644
 +<body>
 +<p>Test for the object actor</p>
 +
-+<script type="text/javascript;version=1.8">
-+netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++<script class="testbody" type="text/javascript;version=1.8">
 +SimpleTest.waitForExplicitFinish();
 +
 +let expectedProps = [];
@@ -1396,7 +1373,7 @@ new file mode 100644
 +{
 +  removeEventListener("load", startTest);
 +
-+  attachConsole(["ConsoleAPI"], onAttach);
++  attachConsole(["ConsoleAPI"], onAttach, true);
 +}
 +
 +function onAttach(aState, aResponse)
@@ -1549,13 +1526,13 @@ diff --git a/toolkit/devtools/webconsole/test/test_page_errors.html b/toolkit/de
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/test_page_errors.html
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,97 @@
 +<!DOCTYPE HTML>
 +<html lang="en">
 +<head>
 +  <meta charset="utf8">
 +  <title>Test for page errors</title>
-+  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
 +  <script type="text/javascript;version=1.8" src="common.js"></script>
 +  <!-- Any copyright is dedicated to the Public Domain.
 +     - http://creativecommons.org/publicdomain/zero/1.0/ -->
@@ -1563,8 +1540,7 @@ new file mode 100644
 +<body>
 +<p>Test for page errors</p>
 +
-+<script type="text/javascript;version=1.8">
-+netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
++<script class="testbody" type="text/javascript;version=1.8">
 +SimpleTest.waitForExplicitFinish();
 +
 +let expectedPageErrors = [];
@@ -1585,7 +1561,7 @@ new file mode 100644
 +    {
 +      errorMessage: /doTheImpossible/,
 +      sourceName: /test_page_errors/,
-+      category: "content javascript",
++      category: "chrome javascript",
 +      timeStamp: /^\d+$/,
 +      error: false,
 +      warning: false,

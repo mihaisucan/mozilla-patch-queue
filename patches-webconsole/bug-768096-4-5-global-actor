@@ -1,18 +1,35 @@
 # HG changeset patch
-# Parent 23d40fb471b3943472491149cb9abd6c449167c0
+# Parent 12ec517dad998beaecc02633abec95a054f07155
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1349382129 -10800
+# Date 1349444480 -10800
 Bug 768096 - Web Console remote debugging protocol support - Part 4.5: global actor
 
 diff --git a/dom/base/ConsoleAPIStorage.jsm b/dom/base/ConsoleAPIStorage.jsm
 --- a/dom/base/ConsoleAPIStorage.jsm
 +++ b/dom/base/ConsoleAPIStorage.jsm
-@@ -74,17 +74,27 @@ var ConsoleAPIStorage = {
-    * @param string aId
-    *        The inner window ID for which you want to get the array of cached
-    *        events.
+@@ -64,27 +64,43 @@ var ConsoleAPIStorage = {
+   init: function CS_init()
+   {
+     Services.obs.addObserver(this, "xpcom-shutdown", false);
+     Services.obs.addObserver(this, "inner-window-destroyed", false);
+     Services.obs.addObserver(this, "memory-pressure", false);
+   },
+ 
+   /**
+-   * Get the events array by inner window ID.
++   * Get the events array by inner window ID or all events from all windows.
+    *
+-   * @param string aId
+-   *        The inner window ID for which you want to get the array of cached
+-   *        events.
++   * @param string [aId]
++   *        Optional, the inner window ID for which you want to get the array of
++   *        cached events.
     * @returns array
-    *          The array of cached events for the given window.
+-   *          The array of cached events for the given window.
++   *          The array of cached events for the given window. If no |aId| is
++   *          given this function returns all of the cached events, from any
++   *          window.
     */
    getEvents: function CS_getEvents(aId)
    {
@@ -27,7 +44,11 @@ diff --git a/dom/base/ConsoleAPIStorage.jsm b/dom/base/ConsoleAPIStorage.jsm
 +      ids.push(events);
 +    }
 +
-+    return [].concat.apply([], ids);
++    let result = [].concat.apply([], ids);
++
++    return result.sort(function(a, b) {
++      return a.timeStamp - b.timeStamp;
++    });
    },
  
    /**
@@ -60,7 +81,32 @@ diff --git a/toolkit/devtools/debugger/server/dbg-server.js b/toolkit/devtools/d
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -1206,18 +1206,19 @@ return JSPropertyProvider;
+@@ -522,17 +522,23 @@ var WebConsoleUtils = {
+         result.get = this.createValueGrip(descriptor.get, aObjectWrapper);
+         result.set = this.createValueGrip(descriptor.set, aObjectWrapper);
+       }
+     }
+ 
+     // There are cases with properties that have no value and no getter. For
+     // example window.screen.width.
+     if (result.value === undefined && result.get === undefined) {
+-      result.value = this.createValueGrip(aObject[aProperty], aObjectWrapper);
++      try {
++        result.value = this.createValueGrip(aObject[aProperty], aObjectWrapper);
++      }
++      catch (ex) {
++        // This can throw when the security restriction prevent us from reading
++        // the value.
++      }
+     }
+ 
+     return result;
+   },
+ 
+   /**
+    * Make an object grip for the given object. An object grip of the simplest
+    * form with minimal information about the given object is returned. This
+@@ -1206,18 +1212,19 @@ return JSPropertyProvider;
  // The page errors listener
  ///////////////////////////////////////////////////////////////////////////////
  
@@ -82,7 +128,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  function PageErrorListener(aWindow, aListener)
  {
    this.window = aWindow;
-@@ -1254,30 +1255,33 @@ PageErrorListener.prototype =
+@@ -1254,30 +1261,33 @@ PageErrorListener.prototype =
     * messages belonging to the current window and sends them to the remote Web
     * Console instance.
     *
@@ -126,7 +172,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    /**
     * Check if the given script error category is allowed to be tracked or not.
     * We ignore chrome-originating errors as we only care about content.
-@@ -1309,30 +1313,31 @@ PageErrorListener.prototype =
+@@ -1309,30 +1319,31 @@ PageErrorListener.prototype =
     *
     * @return array
     *         The array of cached messages. Each element is an nsIScriptError
@@ -163,7 +209,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    /**
     * Remove the nsIConsoleService listener.
     */
-@@ -1349,17 +1354,18 @@ PageErrorListener.prototype =
+@@ -1349,17 +1360,18 @@ PageErrorListener.prototype =
  ///////////////////////////////////////////////////////////////////////////////
  
  /**
@@ -183,7 +229,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
   */
  function ConsoleAPIListener(aWindow, aOwner)
  {
-@@ -1403,26 +1409,28 @@ ConsoleAPIListener.prototype =
+@@ -1403,43 +1415,45 @@ ConsoleAPIListener.prototype =
     *
     * @param object aMessage
     *        The message object receives from the observer service.
@@ -218,10 +264,133 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    /**
     * Get the cached messages for the current inner window.
     *
+    * @return array
+    *         The array of cached messages. Each element is a Console API
+    *         prepared to be sent to the remote Web Console instance.
+    */
+   getCachedMessages: function CAL_getCachedMessages()
+   {
+-    let innerWindowId = WebConsoleUtils.getInnerWindowId(this.window);
+-    let messages = ConsoleAPIStorage.getEvents(innerWindowId);
+-    return messages;
++    let innerWindowId = this.window ?
++                        WebConsoleUtils.getInnerWindowId(this.window) : null;
++    return ConsoleAPIStorage.getEvents(innerWindowId);
+   },
+ 
+   /**
+    * Destroy the console API listener.
+    */
+   destroy: function CAL_destroy()
+   {
+     Services.obs.removeObserver(this, "console-api-log-event");
+@@ -1973,17 +1987,18 @@ NetworkResponseListener.prototype = {
+ /**
+  * The network monitor uses the nsIHttpActivityDistributor to monitor network
+  * requests. The nsIObserverService is also used for monitoring
+  * http-on-examine-response notifications. All network request information is
+  * routed to the remote Web Console.
+  *
+  * @constructor
+  * @param nsIDOMWindow aWindow
+- *        The window that we monitor network requests for.
++ *        Optional, the window that we monitor network requests for. If no
++ *        window is given, all browser network requests are logged.
+  * @param object aOwner
+  *        The network monitor owner. This object needs to hold:
+  *        - onNetworkEvent(aRequestInfo). This method is invoked once for every
+  *        new network request and it is given one arguments: the initial network
+  *        request information. onNetworkEvent() must return an object which
+  *        holds several add*() methods which are used to add further network
+  *        request/response information.
+  *        - saveRequestAndResponseBodies property which tells if you want to log
+@@ -2070,20 +2085,23 @@ NetworkMonitor.prototype = {
+     // object with the data from the new object in openResponses.
+ 
+     if (!this.owner || aTopic != "http-on-examine-response" ||
+         !(aSubject instanceof Ci.nsIHttpChannel)) {
+       return;
+     }
+ 
+     let channel = aSubject.QueryInterface(Ci.nsIHttpChannel);
+-    // Try to get the source window of the request.
+-    let win = NetworkHelper.getWindowForRequest(channel);
+-    if (!win || win.top !== this.window) {
+-      return;
++
++    if (this.window) {
++      // Try to get the source window of the request.
++      let win = NetworkHelper.getWindowForRequest(channel);
++      if (!win || win.top !== this.window) {
++        return;
++      }
+     }
+ 
+     let response = {
+       id: gSequenceId(),
+       channel: channel,
+       headers: [],
+       cookies: [],
+     };
+@@ -2212,24 +2230,31 @@ NetworkMonitor.prototype = {
+    * @param nsIHttpChannel aChannel
+    * @param number aTimestamp
+    * @param string aExtraStringData
+    * @return void
+    */
+   _onRequestHeader:
+   function NM__onRequestHeader(aChannel, aTimestamp, aExtraStringData)
+   {
++    let win = null;
++    try {
++      win = NetworkHelper.getWindowForRequest(aChannel);
++    }
++    catch (ex) { }
++
+     // Try to get the source window of the request.
+-    let win = NetworkHelper.getWindowForRequest(aChannel);
+-    if (!win || win.top !== this.window) {
++    if (this.window && (!win || win.top !== this.window)) {
+       return;
+     }
+ 
+     let httpActivity = this.createActivityObject(aChannel);
+-    httpActivity.charset = win.document.characterSet; // see NM__onRequestBodySent()
++
++    // see NM__onRequestBodySent()
++    httpActivity.charset = win ? win.document.characterSet : null;
+ 
+     httpActivity.timings.REQUEST_HEADER = {
+       first: aTimestamp,
+       last: aTimestamp
+     };
+ 
+     let httpVersionMaj = {};
+     let httpVersionMin = {};
+@@ -2359,17 +2384,18 @@ NetworkMonitor.prototype = {
+     if (aHttpActivity.discardRequestBody) {
+       return;
+     }
+ 
+     let sentBody = NetworkHelper.
+                    readPostTextFromRequest(aHttpActivity.channel,
+                                            aHttpActivity.charset);
+ 
+-    if (!sentBody && aHttpActivity.url == this.window.location.href) {
++    if (!sentBody && this.window &&
++        aHttpActivity.url == this.window.location.href) {
+       // If the request URL is the same as the current page URL, then
+       // we can try to get the posted text from the page directly.
+       // This check is necessary as otherwise the
+       //   NetworkHelper.readPostTextFromPageViaWebNav()
+       // function is called for image requests as well but these
+       // are not web pages and as such don't store the posted text
+       // in the cache of the webpage.
+       let webNav = this.window.QueryInterface(Ci.nsIInterfaceRequestor).
 diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 --- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -42,23 +42,25 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+@@ -42,43 +42,58 @@ XPCOMUtils.defineLazyModuleGetter(this, 
  
  /**
   * The WebConsoleActor implements capabilities needed for the Web Console
@@ -233,14 +402,19 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 - * @param object aTabActor
 - *        The parent tab actor.
 + * @param object [aTabActor]
-+ *        Optional, the parent tab actor.
++ *        Optional, the parent tab actor. This must be an instance of
++ *        BrowserTabActor.
   */
  function WebConsoleActor(aConnection, aTabActor)
  {
    this.conn = aConnection;
 -  this._browser = aTabActor.browser;
-+  if (aTabActor) {
++  if (aTabActor instanceof BrowserTabActor) {
 +    this._browser = aTabActor.browser;
++  }
++  else {
++    this._window = Services.wm.getMostRecentWindow("navigator:browser");
++    this._isGlobalActor = true;
 +  }
  
    this._objectActorsPool = new ActorPool(this.conn);
@@ -250,7 +424,36 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    this.conn.addActorPool(this._networkEventActorsPool);
  
    this._prefs = {};
-@@ -117,17 +119,17 @@ WebConsoleActor.prototype =
+ }
+ 
+ WebConsoleActor.prototype =
+ {
+   /**
+-   * The xul:browser we work with.
++   * The xul:browser we work with. This is only available when the Web Console
++   * actor is a tab actor.
+    * @private
+    * @type nsIDOMElement
+    */
+   _browser: null,
+ 
+   /**
++   * Tells if this Web Console actor is a global actor or not.
++   * @private
++   * @type boolean
++   */
++  _isGlobalActor: false,
++
++  /**
+    * Actor pool for all of the object actors for objects we send to the client.
+    * @private
+    * @type object
+    * @see ActorPool
+    * @see WebConsoleObjectActor
+    * @see this.objectGrip()
+    */
+   _objectActorsPool: null,
+@@ -117,17 +132,19 @@ WebConsoleActor.prototype =
     * @type object
     */
    conn: null,
@@ -260,7 +463,9 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     * @type nsIDOMWindow
     */
 -  get window() this._browser.contentWindow,
-+  get window() this._browser ? this._browser.contentWindow : null,
++  get window() this._browser ? this._browser.contentWindow : this._window,
++
++  _window: null,
  
    /**
     * The PageErrorListener instance.
@@ -269,38 +474,69 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    pageErrorListener: null,
  
    /**
-@@ -163,16 +165,21 @@ WebConsoleActor.prototype =
-    * Tells if the window.console object is native or overwritten by script in
-    * the page.
-    *
-    * @return boolean
-    *         True if the window.console object is native, or false otherwise.
-    */
-   hasNativeConsoleAPI: function WCA_hasNativeConsoleAPI()
-   {
-+    if (!this.window) {
-+      // Assume the global console always has the native window.console object.
-+      return true;
-+    }
-+
-     let isNative = false;
-     try {
-       let consoleObject = WebConsoleUtils.unwrap(this.window).console;
-       isNative = "__mozillaConsole__" in consoleObject;
+@@ -198,17 +215,17 @@ WebConsoleActor.prototype =
+       this.consoleProgressListener.destroy();
+       this.consoleProgressListener = null;
      }
-     catch (ex) { }
-     return isNative;
+     this.conn.removeActorPool(this._objectActorsPool);
+     this.conn.removeActorPool(this._networkEventActorsPool);
+     this._objectActorsPool = null;
+     this._networkEventActorsPool = null;
+     this._sandboxLocation = this.sandbox = null;
+-    this.conn = this._browser = null;
++    this.conn = this._browser = this._window = null;
    },
-@@ -309,25 +316,31 @@ WebConsoleActor.prototype =
+ 
+   /**
+    * Create a grip for the given value. If the value is an object,
+    * a WebConsoleObjectActor will be created.
+    *
+    * @param mixed aValue
+    * @return object
+@@ -280,54 +297,62 @@ WebConsoleActor.prototype =
+    * @param object aRequest
+    *        The JSON request object received from the Web Console client.
+    * @return object
+    *         The response object which holds the startedListeners array.
+    */
+   onStartListeners: function WCA_onStartListeners(aRequest)
+   {
+     let startedListeners = [];
++    let window = !this._isGlobalActor ? this.window : null;
+ 
+     while (aRequest.listeners.length > 0) {
+       let listener = aRequest.listeners.shift();
+       switch (listener) {
+         case "PageError":
+           if (!this.pageErrorListener) {
+             this.pageErrorListener =
+-              new PageErrorListener(this.window, this);
++              new PageErrorListener(window, this);
+             this.pageErrorListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "ConsoleAPI":
+           if (!this.consoleAPIListener) {
+             this.consoleAPIListener =
+-              new ConsoleAPIListener(this.window, this);
++              new ConsoleAPIListener(window, this);
+             this.consoleAPIListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "NetworkActivity":
            if (!this.networkMonitor) {
              this.networkMonitor =
-               new NetworkMonitor(this.window, this);
+-              new NetworkMonitor(this.window, this);
++              new NetworkMonitor(window, this);
              this.networkMonitor.init();
            }
            startedListeners.push(listener);
            break;
          case "FileActivity":
-+          if (!this._browser) {
++          if (this._isGlobalActor) {
++            // The ConsoleProgressListener cannot listen for global events.
 +            break;
 +          }
            if (!this.consoleProgressListener) {
@@ -312,7 +548,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
            startedListeners.push(listener);
            break;
          case "LocationChange":
-+          if (!this._browser) {
++          if (this._isGlobalActor) {
 +            break;
 +          }
            if (!this.consoleProgressListener) {
@@ -323,3 +559,23 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
                                                      MONITOR_LOCATION_CHANGE);
        }
      }
+@@ -515,17 +540,18 @@ WebConsoleActor.prototype =
+   },
+ 
+   /**
+    * The "clearMessagesCache" request handler.
+    */
+   onClearMessagesCache: function WCA_onClearMessagesCache()
+   {
+     // TODO: Bug 717611 - Web Console clear button does not clear cached errors
+-    let windowId = WebConsoleUtils.getInnerWindowId(this.window);
++    let windowId = !this._isGlobalActor ?
++                   WebConsoleUtils.getInnerWindowId(this.window) : null;
+     ConsoleAPIStorage.clearEvents(windowId);
+     return {};
+   },
+ 
+   /**
+    * The "setPreferences" request handler.
+    *
+    * @param object aRequest
