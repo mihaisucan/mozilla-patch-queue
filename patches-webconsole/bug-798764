@@ -1,0 +1,416 @@
+# HG changeset patch
+# Parent 738d6a3b49c24cc627b62096544fa451dc0c1301
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1349988356 -10800
+
+Bug 798764 - Global console: add support for a global ConsoleProgressListener
+
+diff --git a/toolkit/devtools/webconsole/NetworkHelper.jsm b/toolkit/devtools/webconsole/NetworkHelper.jsm
+--- a/toolkit/devtools/webconsole/NetworkHelper.jsm
++++ b/toolkit/devtools/webconsole/NetworkHelper.jsm
+@@ -207,43 +207,37 @@ var NetworkHelper =
+   /**
+    * Gets the nsIDOMWindow that is associated with aRequest.
+    *
+    * @param nsIHttpChannel aRequest
+    * @returns nsIDOMWindow or null
+    */
+   getWindowForRequest: function NH_getWindowForRequest(aRequest)
+   {
+-    let loadContext = this.getRequestLoadContext(aRequest);
+-    if (loadContext) {
+-      return loadContext.associatedWindow;
+-    }
++    try {
++      return this.getRequestLoadContext(aRequest).associatedWindow;
++    } catch (ex) { }
+     return null;
+   },
+ 
+   /**
+    * Gets the nsILoadContext that is associated with aRequest.
+    *
+    * @param nsIHttpChannel aRequest
+    * @returns nsILoadContext or null
+    */
+   getRequestLoadContext: function NH_getRequestLoadContext(aRequest)
+   {
+-    if (aRequest && aRequest.notificationCallbacks) {
+-      try {
+-        return aRequest.notificationCallbacks.getInterface(Ci.nsILoadContext);
+-      } catch (ex) { }
+-    }
++    try {
++      return aRequest.notificationCallbacks.getInterface(Ci.nsILoadContext);
++    } catch (ex) { }
+ 
+-    if (aRequest && aRequest.loadGroup
+-                 && aRequest.loadGroup.notificationCallbacks) {
+-      try {
+-        return aRequest.loadGroup.notificationCallbacks.getInterface(Ci.nsILoadContext);
+-      } catch (ex) { }
+-    }
++    try {
++      return aRequest.loadGroup.notificationCallbacks.getInterface(Ci.nsILoadContext);
++    } catch (ex) { }
+ 
+     return null;
+   },
+ 
+   /**
+    * Loads the content of aUrl from the cache.
+    *
+    * @param string aUrl
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -2585,26 +2585,26 @@ NetworkMonitor.prototype = {
+ 
+ /**
+  * A WebProgressListener that listens for location changes.
+  *
+  * This progress listener is used to track file loads and other kinds of
+  * location changes.
+  *
+  * @constructor
+- * @param object aBrowser
+- *        The xul:browser for which we need to track location changes.
++ * @param object aWindow
++ *        The window for which we need to track location changes.
+  * @param object aOwner
+  *        The listener owner which needs to implement two methods:
+  *        - onFileActivity(aFileURI)
+  *        - onLocationChange(aState, aTabURI, aPageTitle)
+  */
+-function ConsoleProgressListener(aBrowser, aOwner)
++function ConsoleProgressListener(aWindow, aOwner)
+ {
+-  this.browser = aBrowser;
++  this.window = aWindow;
+   this.owner = aOwner;
+ }
+ 
+ ConsoleProgressListener.prototype = {
+   /**
+    * Constant used for startMonitor()/stopMonitor() that tells you want to
+    * monitor file loads.
+    */
+@@ -2632,31 +2632,38 @@ ConsoleProgressListener.prototype = {
+ 
+   /**
+    * Tells if the console progress listener is initialized or not.
+    * @private
+    * @type boolean
+    */
+   _initialized: false,
+ 
++  _webProgress: null,
++
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener,
+                                          Ci.nsISupportsWeakReference]),
+ 
+   /**
+    * Initialize the ConsoleProgressListener.
+    * @private
+    */
+   _init: function CPL__init()
+   {
+     if (this._initialized) {
+       return;
+     }
+ 
++    this._webProgress = this.window.QueryInterface(Ci.nsIInterfaceRequestor)
++                        .getInterface(Ci.nsIWebNavigation)
++                        .QueryInterface(Ci.nsIWebProgress);
++    this._webProgress.addProgressListener(this,
++                                          Ci.nsIWebProgress.NOTIFY_STATE_ALL);
++
+     this._initialized = true;
+-    this.browser.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_ALL);
+   },
+ 
+   /**
+    * Start a monitor/tracker related to the current nsIWebProgressListener
+    * instance.
+    *
+    * @param number aMonitor
+    *        Tells what you want to track. Available constants:
+@@ -2763,28 +2770,26 @@ ConsoleProgressListener.prototype = {
+   function CPL__checkLocationChange(aProgress, aRequest, aState, aStatus)
+   {
+     let isStart = aState & Ci.nsIWebProgressListener.STATE_START;
+     let isStop = aState & Ci.nsIWebProgressListener.STATE_STOP;
+     let isNetwork = aState & Ci.nsIWebProgressListener.STATE_IS_NETWORK;
+     let isWindow = aState & Ci.nsIWebProgressListener.STATE_IS_WINDOW;
+ 
+     // Skip non-interesting states.
+-    if (!isNetwork || !isWindow ||
+-        aProgress.DOMWindow != this.browser.contentWindow) {
++    if (!isNetwork || !isWindow || aProgress.DOMWindow != this.window) {
+       return;
+     }
+ 
+     if (isStart && aRequest instanceof Ci.nsIChannel) {
+       this.owner.onLocationChange("start", aRequest.URI.spec, "");
+     }
+     else if (isStop) {
+-      let window = this.browser.contentWindow;
+-      this.owner.onLocationChange("stop", window.location.href,
+-                                  window.document.title);
++      this.owner.onLocationChange("stop", this.window.location.href,
++                                  this.window.document.title);
+     }
+   },
+ 
+   onLocationChange: function() {},
+   onStatusChange: function() {},
+   onProgressChange: function() {},
+   onSecurityChange: function() {},
+ 
+@@ -2796,21 +2801,22 @@ ConsoleProgressListener.prototype = {
+     if (!this._initialized) {
+       return;
+     }
+ 
+     this._initialized = false;
+     this._fileActivity = false;
+     this._locationChange = false;
+ 
+-    if (this.browser.removeProgressListener) {
+-      this.browser.removeProgressListener(this);
++    if (this._webProgress.removeProgressListener) {
++      this._webProgress.removeProgressListener(this);
+     }
+ 
+-    this.browser = null;
++    this._webProgress = null;
++    this.window = null;
+     this.owner = null;
+   },
+ };
+ 
+ function gSequenceId()
+ {
+   return gSequenceId.n++;
+ }
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -42,25 +42,30 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ 
+ /**
+  * The WebConsoleActor implements capabilities needed for the Web Console
+  * feature.
+  *
+  * @constructor
+  * @param object aConnection
+  *        The connection to the client, DebuggerServerConnection.
+- * @param object [aTabActor]
+- *        Optional, the parent tab actor. This must be an instance of
+- *        BrowserTabActor.
++ * @param object [aParentActor]
++ *        Optional, the parent actor.
+  */
+-function WebConsoleActor(aConnection, aTabActor)
++function WebConsoleActor(aConnection, aParentActor)
+ {
+   this.conn = aConnection;
+-  if (aTabActor instanceof BrowserTabActor) {
+-    this._browser = aTabActor.browser;
++
++  if (aParentActor instanceof BrowserTabActor &&
++      aParentActor.browser instanceof Ci.nsIDOMWindow) {
++    this._window = aParentActor.browser;
++  }
++  else if (aParentActor instanceof BrowserTabActor &&
++           aParentActor.browser instanceof Ci.nsIDOMElement) {
++    this._window = aParentActor.browser.contentWindow;
+   }
+   else {
+     this._window = Services.wm.getMostRecentWindow("navigator:browser");
+     this._isGlobalActor = true;
+   }
+ 
+   this._objectActorsPool = new ActorPool(this.conn);
+   this.conn.addActorPool(this._objectActorsPool);
+@@ -69,24 +74,16 @@ function WebConsoleActor(aConnection, aT
+   this.conn.addActorPool(this._networkEventActorsPool);
+ 
+   this._prefs = {};
+ }
+ 
+ WebConsoleActor.prototype =
+ {
+   /**
+-   * The xul:browser we work with. This is only available when the Web Console
+-   * actor is a tab actor.
+-   * @private
+-   * @type nsIDOMElement
+-   */
+-  _browser: null,
+-
+-  /**
+    * Tells if this Web Console actor is a global actor or not.
+    * @private
+    * @type boolean
+    */
+   _isGlobalActor: false,
+ 
+   /**
+    * Actor pool for all of the object actors for objects we send to the client.
+@@ -132,17 +129,17 @@ WebConsoleActor.prototype =
+    * @type object
+    */
+   conn: null,
+ 
+   /**
+    * The content window we work with.
+    * @type nsIDOMWindow
+    */
+-  get window() this._browser ? this._browser.contentWindow : this._window,
++  get window() this._window,
+ 
+   _window: null,
+ 
+   /**
+    * The PageErrorListener instance.
+    * @type object
+    */
+   pageErrorListener: null,
+@@ -215,17 +212,17 @@ WebConsoleActor.prototype =
+       this.consoleProgressListener.destroy();
+       this.consoleProgressListener = null;
+     }
+     this.conn.removeActorPool(this._objectActorsPool);
+     this.conn.removeActorPool(this._networkEventActorsPool);
+     this._objectActorsPool = null;
+     this._networkEventActorsPool = null;
+     this._sandboxLocation = this.sandbox = null;
+-    this.conn = this._browser = this._window = null;
++    this.conn = this._window = null;
+   },
+ 
+   /**
+    * Create a grip for the given value. If the value is an object,
+    * a WebConsoleObjectActor will be created.
+    *
+    * @param mixed aValue
+    * @return object
+@@ -327,36 +324,28 @@ WebConsoleActor.prototype =
+           if (!this.networkMonitor) {
+             this.networkMonitor =
+               new NetworkMonitor(window, this);
+             this.networkMonitor.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "FileActivity":
+-          if (this._isGlobalActor) {
+-            // The ConsoleProgressListener cannot listen for global events.
+-            // See bug 798764.
+-            break;
+-          }
+           if (!this.consoleProgressListener) {
+             this.consoleProgressListener =
+-              new ConsoleProgressListener(this._browser, this);
++              new ConsoleProgressListener(this.window, this);
+           }
+           this.consoleProgressListener.startMonitor(this.consoleProgressListener.
+                                                     MONITOR_FILE_ACTIVITY);
+           startedListeners.push(listener);
+           break;
+         case "LocationChange":
+-          if (this._isGlobalActor) {
+-            break;
+-          }
+           if (!this.consoleProgressListener) {
+             this.consoleProgressListener =
+-              new ConsoleProgressListener(this._browser, this);
++              new ConsoleProgressListener(this.window, this);
+           }
+           this.consoleProgressListener.startMonitor(this.consoleProgressListener.
+                                                     MONITOR_LOCATION_CHANGE);
+           startedListeners.push(listener);
+           break;
+       }
+     }
+     return {
+diff --git a/toolkit/devtools/webconsole/test/Makefile.in b/toolkit/devtools/webconsole/test/Makefile.in
+--- a/toolkit/devtools/webconsole/test/Makefile.in
++++ b/toolkit/devtools/webconsole/test/Makefile.in
+@@ -14,14 +14,15 @@ MOCHITEST_CHROME_FILES = \
+     test_basics.html \
+     test_cached_messages.html \
+     test_page_errors.html \
+     test_consoleapi.html \
+     test_jsterm.html \
+     test_object_actor.html \
+     test_network_get.html \
+     test_network_post.html \
++    test_file_uri.html \
+     network_requests_iframe.html \
+     data.json \
+     common.js \
+     $(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/toolkit/devtools/webconsole/test/test_file_uri.html b/toolkit/devtools/webconsole/test/test_file_uri.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/test_file_uri.html
+@@ -0,0 +1,55 @@
++<!DOCTYPE HTML>
++<html lang="en">
++<head>
++  <meta charset="utf8">
++  <title>Test for file activity tracking</title>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript;version=1.8" src="common.js"></script>
++  <!-- Any copyright is dedicated to the Public Domain.
++     - http://creativecommons.org/publicdomain/zero/1.0/ -->
++</head>
++<body>
++<p>Test for file activity tracking</p>
++
++<script class="testbody" type="text/javascript;version=1.8">
++SimpleTest.waitForExplicitFinish();
++
++function doFileActivity()
++{
++  let iframe = document.createElement("iframe");
++  iframe.src = "data.json";
++  document.body.appendChild(iframe);
++}
++
++function startTest()
++{
++  removeEventListener("load", startTest);
++
++  attachConsole(["FileActivity"], onAttach);
++}
++
++function onAttach(aState, aResponse)
++{
++  onFileActivity = onFileActivity.bind(null, aState);
++  aState.dbgClient.addListener("fileActivity", onFileActivity);
++  doPageErrors();
++}
++
++function onFileActivity(aState, aType, aPacket)
++{
++  is(aPacket.from, aState.actor, "fileActivity actor");
++
++  aState.dbgClient.removeListener("fileActivity", onFileActivity);
++
++  ok(/data.json$/.test(aPacket.uri), "file URI match");
++
++  closeDebugger(aState, function() {
++    SimpleTest.finish();
++  });
++}
++
++addEventListener("load", startTest);
++</script>
++</body>
++</html>
++

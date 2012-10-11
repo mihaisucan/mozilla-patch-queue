@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent ec10630b1a5406c28d1ac84bd314938374404d04
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1349901269 -10800
+# Date 1349979897 -10800
 Bug 795691 - b2g fixes for the web console actors
 
 diff --git a/b2g/chrome/content/dbg-browser-actors.js b/b2g/chrome/content/dbg-browser-actors.js
@@ -26,89 +26,6 @@ diff --git a/b2g/chrome/content/dbg-browser-actors.js b/b2g/chrome/content/dbg-b
    this._appendExtraActors(response);
    return response;
  };
-diff --git a/b2g/chrome/content/shell.js b/b2g/chrome/content/shell.js
---- a/b2g/chrome/content/shell.js
-+++ b/b2g/chrome/content/shell.js
-@@ -720,19 +720,28 @@ function startDebugger() {
-   try {
-     DebuggerServer.openListener(port);
-   } catch (e) {
-     dump('Unable to start debugger server: ' + e + '\n');
-   }
- }
- 
- window.addEventListener('ContentStart', function(evt) {
-+  dump("hello world\n");
-+  try {
-   if (Services.prefs.getBoolPref('devtools.debugger.remote-enabled')) {
-+    dump("hello world 2\n");
-     startDebugger();
-   }
-+  } catch (ex) {
-+    dump("exception!\n");
-+    dump(ex + "\n");
-+    dump(ex.stack + "\n");
-+  }
-+  dump("the end!\n");
- });
- 
- // This is the backend for Gaia's screenshot feature.  Gaia requests a
- // screenshot by sending a mozContentEvent with detail.type set to
- // 'take-screenshot'.  Then we take a screenshot and send a
- // mozChromeEvent with detail.type set to 'take-screenshot-success'
- // and detail.file set to the an image/png blob
- window.addEventListener('ContentStart', function ss_onContentStart() {
-diff --git a/b2g/components/ProcessGlobal.js b/b2g/components/ProcessGlobal.js
---- a/b2g/components/ProcessGlobal.js
-+++ b/b2g/components/ProcessGlobal.js
-@@ -34,20 +34,21 @@ function ProcessGlobal() {}
- ProcessGlobal.prototype = {
-   classID: Components.ID('{1a94c87a-5ece-4d11-91e1-d29c29f21b28}'),
-   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
-                                          Ci.nsISupportsWeakReference]),
- 
-   observe: function pg_observe(subject, topic, data) {
-     switch (topic) {
-     case 'app-startup': {
--      Services.obs.addObserver(this, 'console-api-log-event', false);
-+      //Services.obs.addObserver(this, 'console-api-log-event', false);
-       break;
-     }
-     case 'console-api-log-event': {
-+      dump("omg no!!!\n");
-       // Pipe `console` log messages to the nsIConsoleService which
-       // writes them to logcat on Gonk.
-       let message = subject.wrappedJSObject;
-       let prefix = ('Content JS ' + message.level.toUpperCase() +
-                     ' at ' + message.filename + ':' + message.lineNumber +
-                     ' in ' + (message.functionName || 'anonymous') + ': ');
-       Services.console.logStringMessage(prefix + Array.join(message.arguments,
-                                                             ' '));
-diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
---- a/browser/app/profile/firefox.js
-+++ b/browser/app/profile/firefox.js
-@@ -1093,16 +1093,21 @@ pref("devtools.webconsole.filter.jswarn"
- pref("devtools.webconsole.filter.error", true);
- pref("devtools.webconsole.filter.warn", true);
- pref("devtools.webconsole.filter.info", true);
- pref("devtools.webconsole.filter.log", true);
- 
- // Text size in the Web Console. Use 0 for the system default size.
- pref("devtools.webconsole.fontSize", 0);
- 
-+// The Remote Web Console.
-+pref("devtools.webconsole.remote-enabled", false);
-+pref("devtools.webconsole.remote-host", "localhost");
-+pref("devtools.webconsole.remote-port", 6000);
-+
- // The number of lines that are displayed in the web console for the Net,
- // CSS, JS and Web Developer categories.
- pref("devtools.hud.loglimit.network", 200);
- pref("devtools.hud.loglimit.cssparser", 200);
- pref("devtools.hud.loglimit.exception", 200);
- pref("devtools.hud.loglimit.console", 200);
- 
- // The developer tools editor configuration:
 diff --git a/browser/base/content/browser-appmenu.inc b/browser/base/content/browser-appmenu.inc
 --- a/browser/base/content/browser-appmenu.inc
 +++ b/browser/base/content/browser-appmenu.inc
@@ -196,31 +113,27 @@ diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browse
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 --- a/browser/base/content/browser.js
 +++ b/browser/base/content/browser.js
-@@ -1443,16 +1443,24 @@ var gBrowserInit = {
+@@ -1441,16 +1441,20 @@ var gBrowserInit = {
+     }
+ 
      // Enable Remote Debugger?
      let enabled = gPrefService.getBoolPref("devtools.debugger.remote-enabled");
      if (enabled) {
        let cmd = document.getElementById("Tools:RemoteDebugger");
        cmd.removeAttribute("disabled");
        cmd.removeAttribute("hidden");
-     }
- 
-+    // Enable Remote Web Console?
-+    let enabled = gPrefService.getBoolPref("devtools.webconsole.remote-enabled");
-+    if (enabled) {
-+      let cmd = document.getElementById("Tools:RemoteWebConsole");
++
++      cmd = document.getElementById("Tools:RemoteWebConsole");
 +      cmd.removeAttribute("disabled");
 +      cmd.removeAttribute("hidden");
-+    }
-+
+     }
+ 
      // Enable Chrome Debugger?
      let enabled = gPrefService.getBoolPref("devtools.chrome.enabled") &&
                    gPrefService.getBoolPref("devtools.debugger.chrome-enabled") &&
                    gPrefService.getBoolPref("devtools.debugger.remote-enabled");
      if (enabled) {
        let cmd = document.getElementById("Tools:ChromeDebugger");
-       cmd.removeAttribute("disabled");
-       cmd.removeAttribute("hidden");
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
@@ -321,7 +234,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      var ownerDocument = gBrowser.selectedTab.ownerDocument;
      var hud = ownerDocument.getElementById(hudId);
      var hudRef = HUDService.hudReferences[hudId];
-@@ -1041,21 +1055,59 @@ var HeadsUpDisplayUICommands = {
+@@ -1041,21 +1055,62 @@ var HeadsUpDisplayUICommands = {
            // case gracefully.
            if (ownerDocument.getElementById(hudId)) {
              HUDService.deactivateHUDForContext(gBrowser.selectedTab, true);
@@ -338,35 +251,38 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  
 +  toggleRemoteHUD: function UIC_toggleRemoteHUD()
 +  {
-+    let host = Services.prefs.getCharPref("devtools.webconsole.remote-host");
-+    let port = Services.prefs.getIntPref("devtools.webconsole.remote-port");
++    if (this.getOpenHUD()) {
++      this.toggleHUD();
++      return;
++    }
++
++    let host = Services.prefs.getCharPref("devtools.debugger.remote-host");
++    let port = Services.prefs.getIntPref("devtools.debugger.remote-port");
 +
 +    let check = { value: false };
 +    let input = { value: host + ":" + port };
 +
-+    while (true) {
-+      let result = Services.prompt.prompt(null,
-+        l10n.getStr("remoteWebConsolePromptTitle"),
-+        l10n.getStr("remoteWebConsolePromptMessage"),
-+        input, null, check);
++    let result = Services.prompt.prompt(null,
++      l10n.getStr("remoteWebConsolePromptTitle"),
++      l10n.getStr("remoteWebConsolePromptMessage"),
++      input, null, check);
 +
-+      if (!result) {
-+        return;
-+      }
-+
-+      let parts = input.value.split(":");
-+      if (parts.length != 2) {
-+        return;
-+      }
-+
-+      [host, port] = parts;
-+      if (!host.length || !port.length) {
-+        return;
-+      }
++    if (!result) {
++      return;
 +    }
 +
-+    Services.prefs.setCharPref("devtools.webconsole.remote-host", host);
-+    Services.prefs.setIntPref("devtools.webconsole.remote-port", port);
++    let parts = input.value.split(":");
++    if (parts.length != 2) {
++      return;
++    }
++
++    [host, port] = parts;
++    if (!host.length || !port.length) {
++      return;
++    }
++
++    Services.prefs.setCharPref("devtools.debugger.remote-host", host);
++    Services.prefs.setIntPref("devtools.debugger.remote-port", port);
 +
 +    this.toggleHUD({
 +      host: host,
@@ -455,7 +371,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    this._onFileActivity = this._onFileActivity.bind(this);
    this._onLocationChange = this._onLocationChange.bind(this);
  }
-@@ -3933,29 +3943,36 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3933,38 +3943,86 @@ WebConsoleConnectionProxy.prototype = {
    /**
     * Initialize a debugger client and connect it to the debugger server.
     *
@@ -465,7 +381,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    connect: function WCCP_connect(aCallback)
    {
 -    let transport = DebuggerServer.connectPipe();
-+    let listeners = ["PageError", "ConsoleAPI", "NetworkActivity"];
 +    let transport;
 +    if (this.remoteHost) {
 +      transport = debuggerSocketConnect(this.remoteHost, this.remotePort);
@@ -473,7 +388,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    else {
 +      this.initServer();
 +      transport = DebuggerServer.connectPipe();
-+      listeners.push("FileActivity", "LocationChange"];
 +    }
 +
      let client = this.client = new DebuggerClient(transport);
@@ -485,17 +399,76 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      client.addListener("fileActivity", this._onFileActivity);
      client.addListener("locationChange", this._onLocationChange);
  
--    let listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
--                     "FileActivity", "LocationChange"];
++    client.connect(function(aType, aTraits) {
++      client.listTabs(this._onListTabs.bind(this, aCallback));
++    }.bind(this));
++  },
++
++  /**
++   * The "listTabs" response handler.
++   *
++   * @private
++   * @param function [aCallback]
++   *        Optional function to invoke once the connection is established.
++   * @param object aResponse
++   *        The JSON response object received from the server.
++   */
++  _onListTabs: function WCCP__onListTabs(aCallback, aResponse)
++  {
++    let selectedTab;
++
++    if (this.remoteHost) {
++      let tabs = [];
++      for (let tab of aResponse.tabs) {
++        tabs.push(tab.title);
++      }
++
++      tabs.push(l10n.getStr("listTabs.globalConsoleActor"));
++
++      let selected = {};
++      let result = Services.prompt.select(null,
++        l10n.getStr("remoteWebConsoleSelectTabTitle"),
++        l10n.getStr("remoteWebConsoleSelectTabMessage"),
++        tabs.length, tabs, selected);
++
++      if (result && selected.value < aResponse.tabs.length) {
++        selectedTab = aResponse.tabs[selected.value];
++      }
++    }
++    else {
++      selectedTab = aResponse.tabs[aResponse.selected];
++    }
++
++    if (selectedTab) {
++      this._consoleActor = selectedTab.consoleActor;
++      this.owner.onLocationChange(selectedTab.url, selectedTab.title);
++    }
++    else {
++      this._consoleActor = aResponse.consoleActor;
++    }
++
+     let listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
+                      "FileActivity", "LocationChange"];
 -
-     client.connect(function(aType, aTraits) {
-       client.listTabs(function(aResponse) {
-         let tab = aResponse.tabs[aResponse.selected];
-         this._consoleActor = tab.consoleActor;
-         this.owner.onLocationChange(tab.url, tab.title);
-         client.attachConsole(tab.consoleActor, listeners,
-                              this._onAttachConsole.bind(this, aCallback));
-       }.bind(this));
+-    client.connect(function(aType, aTraits) {
+-      client.listTabs(function(aResponse) {
+-        let tab = aResponse.tabs[aResponse.selected];
+-        this._consoleActor = tab.consoleActor;
+-        this.owner.onLocationChange(tab.url, tab.title);
+-        client.attachConsole(tab.consoleActor, listeners,
+-                             this._onAttachConsole.bind(this, aCallback));
+-      }.bind(this));
+-    }.bind(this));
++    this.client.attachConsole(this._consoleActor, listeners,
++                              this._onAttachConsole.bind(this, aCallback));
+   },
+ 
+   /**
+    * The "attachConsole" response handler.
+    *
+    * @private
+    * @param function [aCallback]
+    *        Optional function to invoke once the connection is established.
 diff --git a/browser/locales/en-US/chrome/browser/browser.dtd b/browser/locales/en-US/chrome/browser/browser.dtd
 --- a/browser/locales/en-US/chrome/browser/browser.dtd
 +++ b/browser/locales/en-US/chrome/browser/browser.dtd
@@ -517,35 +490,57 @@ diff --git a/browser/locales/en-US/chrome/browser/browser.dtd b/browser/locales/
  <!ENTITY inspectContextMenu.label     "Inspect Element">
  <!ENTITY inspectContextMenu.accesskey "Q">
  
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -140,8 +140,28 @@ Autocomplete.blank=  <- no result
+ 
+ maxTimersExceeded=The maximum allowed number of timers in this page was exceeded.
+ 
+ # LOCALIZATION NOTE (JSTerm.updateNotInspectable):
+ # This string is used when the user inspects an evaluation result in the Web
+ # Console and tries the Update button, but the new result no longer returns an
+ # object that can be inspected.
+ JSTerm.updateNotInspectable=After your input has been re-evaluated the result is no longer inspectable.
++
++# LOCALIZATION NOTE (remoteWebConsolePromptTitle): The title displayed on the
++# Web Console prompt asking for the remote host and port to connect to.
++remoteWebConsolePromptTitle=Remote Connection
++
++# LOCALIZATION NOTE (remoteWebConsolePromptMessage): The message displayed on the
++# Web Console prompt asking for the remote host and port to connect to.
++remoteWebConsolePromptMessage=Enter hostname and port number (host:port)
++
++# LOCALIZATION NOTE (remoteWebConsoleSelectTabTitle): The title displayed on the
++# Web Console prompt asking the user to pick a tab to attach to.
++remoteWebConsoleSelectTabTitle=Tab list - Remote Connection
++
++# LOCALIZATION NOTE (remoteWebConsoleSelectTabMessage): The message displayed on the
++# Web Console prompt asking the user to pick a tab to attach to.
++remoteWebConsoleSelectTabMessage=Select one of the tabs you want to attach to, or select the global console.
++
++# LOCALIZATION NOTE (listTabs.globalConsoleActor): The string displayed for the
++# global console in the tabs selection.
++listTabs.globalConsoleActor=*Global Console*
 diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 --- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -1,16 +1,18 @@
- /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
- /* vim: set ts=2 et sw=2 tw=80: */
- /* This Source Code Form is subject to the terms of the Mozilla Public
-  * License, v. 2.0. If a copy of the MPL was not distributed with this
-  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+@@ -350,16 +350,18 @@ WebConsoleActor.prototype =
+             break;
+           }
+           if (!this.consoleProgressListener) {
+             this.consoleProgressListener =
+               new ConsoleProgressListener(this._browser, this);
+           }
+           this.consoleProgressListener.startMonitor(this.consoleProgressListener.
+                                                     MONITOR_LOCATION_CHANGE);
++          startedListeners.push(listener);
++          break;
+       }
+     }
+     return {
+       startedListeners: startedListeners,
+       nativeConsoleAPI: this.hasNativeConsoleAPI(),
+     };
+   },
  
- "use strict";
- 
-+dump("dbg-webconsole-actors.js\n");
-+
- let Cc = Components.classes;
- let Ci = Components.interfaces;
- let Cu = Components.utils;
- 
- Cu.import("resource://gre/modules/XPCOMUtils.jsm");
- 
- XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                   "resource://gre/modules/Services.jsm");
-@@ -1291,8 +1293,9 @@ NetworkEventActor.prototype.requestTypes
-   "getRequestCookies": NetworkEventActor.prototype.onGetRequestCookies,
-   "getRequestPostData": NetworkEventActor.prototype.onGetRequestPostData,
-   "getResponseHeaders": NetworkEventActor.prototype.onGetResponseHeaders,
-   "getResponseCookies": NetworkEventActor.prototype.onGetResponseCookies,
-   "getResponseContent": NetworkEventActor.prototype.onGetResponseContent,
-   "getEventTimings": NetworkEventActor.prototype.onGetEventTimings,
- };
- 
-+dump("dbg-webconsole-actors.js end\n");
