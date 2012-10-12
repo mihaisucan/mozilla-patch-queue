@@ -1,0 +1,395 @@
+# HG changeset patch
+# Parent e613a1a550b09baa7c23c0c1e466dc9c6982d543
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1350072125 -10800
+
+Bug 787981 - Use LongStringActor in the Web Console actors
+
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -3443,58 +3443,16 @@ JSTerm.prototype = {
+   updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
+   {
+     // completion prefix = input, with non-control chars replaced by spaces
+     let prefix = aSuffix ? this.inputNode.value.replace(/[\S]/g, " ") : "";
+     this.completeNode.value = prefix + aSuffix;
+   },
+ 
+   /**
+-   * Clear the object cache from the Web Console content instance.
+-   *
+-   * @param string aCacheId
+-   *        The cache ID you want to clear. Multiple objects are cached into one
+-   *        group which is given an ID.
+-   */
+-  clearObjectCache: function JST_clearObjectCache(aCacheId)
+-  {
+-    if (this.hud) {
+-      this.hud.owner.sendMessageToContent("JSTerm:ClearObjectCache",
+-                                          { cacheId: aCacheId });
+-    }
+-  },
+-
+-  /**
+-   * The remote object provider allows you to retrieve a given object from
+-   * a specific cache and have your callback invoked when the desired object is
+-   * received from the Web Console content instance.
+-   *
+-   * @param string aCacheId
+-   *        Retrieve the desired object from this cache ID.
+-   * @param string aObjectId
+-   *        The ID of the object you want.
+-   * @param string aResultCacheId
+-   *        The ID of the cache where you want any object references to be
+-   *        stored into.
+-   * @param function aCallback
+-   *        The function you want invoked when the desired object is retrieved.
+-   */
+-  remoteObjectProvider:
+-  function JST_remoteObjectProvider(aCacheId, aObjectId, aResultCacheId,
+-                                    aCallback) {
+-    let message = {
+-      cacheId: aCacheId,
+-      objectId: aObjectId,
+-      resultCacheId: aResultCacheId,
+-    };
+-
+-    this.hud.owner.sendMessageToContent("JSTerm:GetEvalObject", message, aCallback);
+-  },
+-
+-  /**
+    * The JSTerm InspectObject remote message handler. This allows the remote
+    * process to open the Property Panel for a given object.
+    *
+    * @param object aRequest
+    *        The request message from the content process. This message includes
+    *        the user input string that was evaluated to inspect an object and
+    *        the result object which is to be inspected.
+    */
+diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-script-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
+@@ -1621,22 +1621,32 @@ LongStringActor.prototype = {
+    * @param aRequest object
+    *        The protocol request object.
+    */
+   onSubstring: function LSA_onSubString(aRequest) {
+     return {
+       "from": this.actorID,
+       "substring": this.string.substring(aRequest.start, aRequest.end)
+     };
+-  }
++  },
+ 
++  /**
++   * Handle a request to release this LongStringActor instance.
++   */
++  onRelease: function LSA_onRelease() {
++    if (this.registeredPool) {
++      this.registeredPool.removeActor(this.actorID);
++    }
++    return {};
++  },
+ };
+ 
+ LongStringActor.prototype.requestTypes = {
+-  "substring": LongStringActor.prototype.onSubstring
++  "substring": LongStringActor.prototype.onSubstring,
++  "release": LongStringActor.prototype.onRelease
+ };
+ 
+ 
+ /**
+  * Creates an actor for the specified stack frame.
+  *
+  * @param aFrame Debugger.Frame
+  *        The debuggee frame.
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -584,19 +584,20 @@ var WebConsoleUtils = {
+    * @return mixed
+    *         The value grip.
+    */
+   createValueGrip: function WCU_createValueGrip(aValue, aObjectWrapper)
+   {
+     let type = typeof(aValue);
+     switch (type) {
+       case "boolean":
+-      case "string":
+       case "number":
+         return aValue;
++      case "string":
++          return aObjectWrapper(aValue);
+       case "object":
+       case "function":
+         if (aValue) {
+           return aObjectWrapper(aValue);
+         }
+       default:
+         if (aValue === null) {
+           return { type: "null" };
+@@ -682,22 +683,29 @@ var WebConsoleUtils = {
+    * @return string
+    *         The object grip converted to a string.
+    */
+   objectActorGripToString: function WCU_objectActorGripToString(aGrip, aFormatString)
+   {
+     // Primitives like strings and numbers are not sent as objects.
+     // But null and undefined are sent as objects with the type property
+     // telling which type of value we have.
++
+     let type = typeof(aGrip);
++    if (type == "string" ||
++        (aGrip && type == "object" && aGrip.type == "longString")) {
++      let str = type == "string" ? aGrip : aGrip.initial;
++      return aFormatString ? this.formatResultString(str) : str;
++    }
++
+     if (aGrip && type == "object") {
+       return aGrip.displayString || aGrip.className || aGrip.type || type;
+     }
+-    return type == "string" && aFormatString ?
+-           this.formatResultString(aGrip) : aGrip + "";
++
++    return aGrip + "";
+   },
+ 
+   /**
+    * Helper function to deduce the name of the provided function.
+    *
+    * @param funtion aFunction
+    *        The function whose name will be returned.
+    * @return string
+@@ -808,16 +816,20 @@ var WebConsoleUtils = {
+     if (typeof val == "string") {
+       return this.formatResultString(val);
+     }
+ 
+     if (typeof val != "object" || !val) {
+       return val;
+     }
+ 
++    if (val.type == "longString") {
++      return this.formatResultString(val.initial) + "…";
++    }
++
+     if (val.type == "function" && val.functionName) {
+       return "function " + val.functionName + "(" +
+              val.functionArguments.join(", ") + ")";
+     }
+     if (val.type == "object" && val.className) {
+       return val.className;
+     }
+ 
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -62,51 +62,38 @@ function WebConsoleActor(aConnection, aP
+            aParentActor.browser instanceof Ci.nsIDOMElement) {
+     this._window = aParentActor.browser.contentWindow;
+   }
+   else {
+     this._window = Services.wm.getMostRecentWindow("navigator:browser");
+     this._isGlobalActor = true;
+   }
+ 
+-  this._objectActorsPool = new ActorPool(this.conn);
+-  this.conn.addActorPool(this._objectActorsPool);
+-
+-  this._networkEventActorsPool = new ActorPool(this.conn);
+-  this.conn.addActorPool(this._networkEventActorsPool);
++  this._actorPool = new ActorPool(this.conn);
++  this.conn.addActorPool(this._actorPool);
+ 
+   this._prefs = {};
+ }
+ 
+ WebConsoleActor.prototype =
+ {
+   /**
+    * Tells if this Web Console actor is a global actor or not.
+    * @private
+    * @type boolean
+    */
+   _isGlobalActor: false,
+ 
+   /**
+-   * Actor pool for all of the object actors for objects we send to the client.
++   * Actor pool for all of the actors we send to the client.
+    * @private
+    * @type object
+    * @see ActorPool
+-   * @see WebConsoleObjectActor
+-   * @see this.objectGrip()
+    */
+-  _objectActorsPool: null,
+-
+-  /**
+-   * Actor pool for all of the network event actors.
+-   * @private
+-   * @type object
+-   * @see NetworkEventActor
+-   */
+-  _networkEventActorsPool: null,
++  _actorPool: null,
+ 
+   /**
+    * Web Console-related preferences.
+    * @private
+    * @type object
+    */
+   _prefs: null,
+ 
+@@ -207,20 +194,18 @@ WebConsoleActor.prototype =
+     if (this.networkMonitor) {
+       this.networkMonitor.destroy();
+       this.networkMonitor = null;
+     }
+     if (this.consoleProgressListener) {
+       this.consoleProgressListener.destroy();
+       this.consoleProgressListener = null;
+     }
+-    this.conn.removeActorPool(this._objectActorsPool);
+-    this.conn.removeActorPool(this._networkEventActorsPool);
+-    this._objectActorsPool = null;
+-    this._networkEventActorsPool = null;
++    this.conn.removeActorPool(this.actorPool);
++    this._actorPool = null;
+     this._sandboxLocation = this.sandbox = null;
+     this.conn = this._window = null;
+   },
+ 
+   /**
+    * Create a grip for the given value. If the value is an object,
+    * a WebConsoleObjectActor will be created.
+    *
+@@ -238,55 +223,53 @@ WebConsoleActor.prototype =
+    *
+    * @param object aObject
+    *        The object you want.
+    * @param object
+    *        The object grip.
+    */
+   createObjectActor: function WCA_createObjectActor(aObject)
+   {
++    if (typeof aObject == "string") {
++      if (aObject.length >= DebuggerServer.LONG_STRING_LENGTH) {
++        let actor = new LongStringActor(aObject, this);
++        this._actorPool.addActor(actor);
++        return actor.grip();
++      }
++      return aObject;
++    }
++
+     // We need to unwrap the object, otherwise we cannot access the properties
+     // and methods added by the content scripts.
+     let obj = WebConsoleUtils.unwrap(aObject);
+     let actor = new WebConsoleObjectActor(obj, this);
+-    this._objectActorsPool.addActor(actor);
++    this._actorPool.addActor(actor);
+     return actor.grip();
+   },
+ 
+   /**
+    * Get an object actor by its ID.
+    *
+    * @param string aActorID
+    * @return object
+    */
+   getObjectActorByID: function WCA_getObjectActorByID(aActorID)
+   {
+-    return this._objectActorsPool.get(aActorID);
++    return this._actorPool.get(aActorID);
+   },
+ 
+   /**
+-   * Release an object grip for the given object actor.
++   * Release an actor.
+    *
+    * @param object aActor
+-   *        The WebConsoleObjectActor instance you want to release.
++   *        The actor instance you want to release.
+    */
+-  releaseObject: function WCA_releaseObject(aActor)
++  releaseActor: function WCA_releaseActor(aActor)
+   {
+-    this._objectActorsPool.removeActor(aActor.actorID);
+-  },
+-
+-  /**
+-   * Release a network event actor.
+-   *
+-   * @param object aActor
+-   *        The NetworkEventActor instance you want to release.
+-   */
+-  releaseNetworkEvent: function WCA_releaseNetworkEvent(aActor)
+-  {
+-    this._networkEventActorsPool.removeActor(aActor.actorID);
++    this._actorPool.removeActor(aActor.actorID);
+   },
+ 
+   //////////////////
+   // Request handlers for known packet types.
+   //////////////////
+ 
+   /**
+    * Handler for the "startListeners" request.
+@@ -702,17 +685,17 @@ WebConsoleActor.prototype =
+    *        The initial network request event information.
+    * @return object
+    *         A new NetworkEventActor is returned. This is used for tracking the
+    *         network request and response.
+    */
+   onNetworkEvent: function WCA_onNetworkEvent(aEvent)
+   {
+     let actor = new NetworkEventActor(aEvent, this);
+-    this._networkEventActorsPool.addActor(actor);
++    this._actorPool.addActor(actor);
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEvent",
+       eventActor: actor.grip(),
+     };
+ 
+     this.conn.send(packet);
+@@ -872,17 +855,17 @@ WebConsoleObjectActor.prototype =
+     return grip;
+   },
+ 
+   /**
+    * Releases this actor from the pool.
+    */
+   release: function WCOA_release()
+   {
+-    this.parent.releaseObject(this);
++    this.parent.releaseActor(this);
+     this.parent = this.obj = null;
+   },
+ 
+   /**
+    * Handle a protocol request to inspect the properties of the object.
+    *
+    * @return object
+    *         Message to send to the client. This holds the 'properties' property
+@@ -975,17 +958,17 @@ NetworkEventActor.prototype =
+     };
+   },
+ 
+   /**
+    * Releases this actor from the pool.
+    */
+   release: function NEA_release()
+   {
+-    this.parent.releaseNetworkEvent(this);
++    this.parent.releaseActor(this);
+   },
+ 
+   /**
+    * Handle a protocol request to release a grip.
+    */
+   onRelease: function NEA_onRelease()
+   {
+     this.release();
