@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent e613a1a550b09baa7c23c0c1e466dc9c6982d543
+# Parent def46b1c40d2e847d472630fb860a053e2910348
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1350072125 -10800
+# Date 1350418940 -10800
 
 Bug 787981 - Use LongStringActor in the Web Console actors
 
@@ -70,7 +70,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-script-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
-@@ -1621,22 +1621,32 @@ LongStringActor.prototype = {
+@@ -1636,22 +1636,32 @@ LongStringActor.prototype = {
     * @param aRequest object
     *        The protocol request object.
     */
@@ -130,7 +130,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        default:
          if (aValue === null) {
            return { type: "null" };
-@@ -682,22 +683,29 @@ var WebConsoleUtils = {
+@@ -682,22 +683,30 @@ var WebConsoleUtils = {
     * @return string
     *         The object grip converted to a string.
     */
@@ -144,7 +144,8 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +    if (type == "string" ||
 +        (aGrip && type == "object" && aGrip.type == "longString")) {
 +      let str = type == "string" ? aGrip : aGrip.initial;
-+      return aFormatString ? this.formatResultString(str) : str;
++      let suffix = type != "string" ? "\u2026" : "";
++      return aFormatString ? this.formatResultString(str) + suffix : str;
 +    }
 +
      if (aGrip && type == "object") {
@@ -162,7 +163,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     * @param funtion aFunction
     *        The function whose name will be returned.
     * @return string
-@@ -808,16 +816,20 @@ var WebConsoleUtils = {
+@@ -808,16 +817,20 @@ var WebConsoleUtils = {
      if (typeof val == "string") {
        return this.formatResultString(val);
      }
@@ -172,7 +173,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
      }
  
 +    if (val.type == "longString") {
-+      return this.formatResultString(val.initial) + "…";
++      return this.formatResultString(val.initial) + "\u2026";
 +    }
 +
      if (val.type == "function" && val.functionName) {
@@ -355,7 +356,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      };
  
      this.conn.send(packet);
-@@ -872,17 +855,17 @@ WebConsoleObjectActor.prototype =
+@@ -872,30 +855,29 @@ WebConsoleObjectActor.prototype =
      return grip;
    },
  
@@ -374,7 +375,20 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     *
     * @return object
     *         Message to send to the client. This holds the 'properties' property
-@@ -975,17 +958,17 @@ NetworkEventActor.prototype =
+    *         - an array with a descriptor for each property in the object.
+    */
+   onInspectProperties: function WCOA_onInspectProperties()
+   {
+-    // TODO: Bug 787981 - use LongStringActor for strings that are too long.
+     let createObjectActor = this.parent.createObjectActor.bind(this.parent);
+     let props = WebConsoleUtils.inspectObject(this.obj, createObjectActor);
+     return {
+       from: this.actorID,
+       properties: props,
+     };
+   },
+ 
+@@ -975,17 +957,17 @@ NetworkEventActor.prototype =
      };
    },
  
@@ -393,3 +407,64 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    onRelease: function NEA_onRelease()
    {
      this.release();
+diff --git a/toolkit/devtools/webconsole/test/test_jsterm.html b/toolkit/devtools/webconsole/test/test_jsterm.html
+--- a/toolkit/devtools/webconsole/test/test_jsterm.html
++++ b/toolkit/devtools/webconsole/test/test_jsterm.html
+@@ -9,31 +9,37 @@
+      - http://creativecommons.org/publicdomain/zero/1.0/ -->
+ </head>
+ <body>
+ <p>Test for JavaScript terminal functionality</p>
+ 
+ <script class="testbody" type="text/javascript;version=1.8">
+ SimpleTest.waitForExplicitFinish();
+ 
++let tests = [onAutocomplete1, onAutocomplete2, onEval1, onEval2,
++             onEvalWithException, onEvalWithHelper];
++
+ function startTest()
+ {
+   removeEventListener("load", startTest);
+ 
+   attachConsole(["PageError"], onAttach, true);
+ }
+ 
+ function onAttach(aState, aResponse)
+ {
+   top.foobarObject = Object.create(null);
+   top.foobarObject.foo = 1;
+   top.foobarObject.foobar = 2;
+   top.foobarObject.foobaz = 3;
+   top.foobarObject.omg = 4;
+   top.foobarObject.omgfoo = 5;
++  top.foobarObject.strfoo = "foobarz";
++  top.foobarObject.omgstr = "foobarz" +
++    (new Array(DebuggerServer.LONG_STRING_LENGTH * 2)).join("abb");
+ 
+   info("test autocomplete for 'window.foo'");
+   onAutocomplete1 = onAutocomplete1.bind(null, aState);
+   aState.client.autocomplete("window.foo", 0, onAutocomplete1);
+ }
+ 
+ function onAutocomplete1(aState, aResponse)
+ {
+@@ -50,17 +56,18 @@ function onAutocomplete1(aState, aRespon
+ }
+ 
+ function onAutocomplete2(aState, aResponse)
+ {
+   let matches = aResponse.matches;
+ 
+   ok(!aResponse.matchProp, "matchProp");
+   is(matches.length, 5, "matches.length");
+-  checkObject(matches, ["foo", "foobar", "foobaz", "omg", "omgfoo"]);
++  checkObject(matches,
++    ["foo", "foobar", "foobaz", "omg", "omgfoo", "omgstr", "strfoo"]);
+ 
+   info("test eval '2+2'");
+ 
+   onEval1 = onEval1.bind(null, aState);
+   aState.client.evaluateJS("2+2", onEval1);
+ }
+ 
+ function onEval1(aState, aResponse)
