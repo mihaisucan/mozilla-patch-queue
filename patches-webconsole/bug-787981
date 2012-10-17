@@ -1,10 +1,64 @@
 # HG changeset patch
 # Parent def46b1c40d2e847d472630fb860a053e2910348
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1350418940 -10800
+# Date 1350500531 -10800
 
-Bug 787981 - Use LongStringActor in the Web Console actors
+Bug 787981 - Use LongStringActor in the Web Console actors; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-o -t none --post-to-bugzilla Bug 787981
 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+@@ -10,16 +10,23 @@
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+ let testEnded = false;
+ let pos = -1;
+ 
+ let dateNow = Date.now();
+ 
++let tempScope = {};
++Cu.import("resource://gre/modules/devtools/dbg-server.jsm", tempScope);
++
++let longString = (new Array(tempScope.DebuggerServer.LONG_STRING_LENGTH + 4)).join("a");
++let initialString = longString.substring(0,
++  tempScope.DebuggerServer.LONG_STRING_INITIAL_LENGTH);
++
+ let inputValues = [
+   // [showsPropertyPanel?, input value, expected output format,
+   //    print() output, console output, optional console API test]
+ 
+   // 0
+   [false, "'hello \\nfrom \\rthe \\\"string world!'",
+     '"hello \\nfrom \\rthe \\"string world!"',
+     "hello \nfrom \rthe \"string world!"],
+@@ -82,18 +89,26 @@ let inputValues = [
+   [true, "[1,2,3,'a','b','c','4','5']", '[1, 2, 3, "a", "b", "c", "4", "5"]',
+     '1,2,3,a,b,c,4,5',
+     '[1, 2, 3, "a", "b", "c", "4", "5"]'],
+ 
+   // 17
+   [true, "({a:'b', c:'d', e:1, f:'2'})", '({a:"b", c:"d", e:1, f:"2"})',
+     "[object Object",
+     '({a:"b", c:"d", e:1, f:"2"})'],
++
++  // 18
++  [false, "'" + longString + "'",
++    '"' + initialString + "\"\u2026", initialString],
+ ];
+ 
++longString = null;
++initialString = null;
++tempScope = null;
++
+ let eventHandlers = [];
+ let popupShown = [];
+ let HUD;
+ let testDriver;
+ 
+ function tabLoad(aEvent) {
+   browser.removeEventListener(aEvent.type, tabLoad, true);
+ 
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -407,10 +461,109 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    onRelease: function NEA_onRelease()
    {
      this.release();
+diff --git a/toolkit/devtools/webconsole/test/common.js b/toolkit/devtools/webconsole/test/common.js
+--- a/toolkit/devtools/webconsole/test/common.js
++++ b/toolkit/devtools/webconsole/test/common.js
+@@ -132,8 +132,33 @@ function checkHeadersOrCookies(aArray, a
+     if (expected instanceof RegExp) {
+       ok(expected.test(elem.value), elem.name + ": " + expected);
+     }
+     else {
+       is(elem.value, expected, elem.name);
+     }
+   }
+ }
++
++var gTestState = {};
++
++function runTests(aTests, aEndCallback)
++{
++  function driver()
++  {
++    let lastResult, sendToNext;
++    for (let i = 0; i < aTests.length; i++) {
++      gTestState.index = i;
++      let fn = aTests[i];
++      info("will run test #" + i + ": " + fn.name);
++      lastResult = fn(sendToNext, lastResult);
++      sendToNext = yield lastResult;
++    }
++    yield aEndCallback(sendToNext, lastResult);
++  }
++  gTestState.driver = driver();
++  return gTestState.driver.next();
++}
++
++function nextTest(aMessage)
++{
++  return gTestState.driver.send(aMessage);
++}
+diff --git a/toolkit/devtools/webconsole/test/test_consoleapi.html b/toolkit/devtools/webconsole/test/test_consoleapi.html
+--- a/toolkit/devtools/webconsole/test/test_consoleapi.html
++++ b/toolkit/devtools/webconsole/test/test_consoleapi.html
+@@ -13,22 +13,25 @@
+ 
+ <script class="testbody" type="text/javascript;version=1.8">
+ SimpleTest.waitForExplicitFinish();
+ 
+ let expectedConsoleCalls = [];
+ 
+ function doConsoleCalls(aState)
+ {
++  let longString = (new Array(DebuggerServer.LONG_STRING_LENGTH + 2)).join("a");
++
+   console.log("foobarBaz-log", undefined);
+   console.info("foobarBaz-info", null);
+   console.warn("foobarBaz-warn", document.body);
+   console.debug(null);
+   console.trace();
+   console.dir(document, window);
++  console.log("foo", longString);
+ 
+   expectedConsoleCalls = [
+     {
+       level: "log",
+       filename: /test_consoleapi/,
+       functionName: "doConsoleCalls",
+       timeStamp: /^\d+$/,
+       arguments: ["foobarBaz-log", { type: "undefined" }],
+@@ -93,16 +96,32 @@ function doConsoleCalls(aState)
+           value: 2,
+         },
+         {
+           name: "CDATA_SECTION_NODE",
+           value: 4,
+         }, // ...
+       ],
+     },
++    {
++      level: "log",
++      filename: /test_consoleapi/,
++      functionName: "doConsoleCalls",
++      timeStamp: /^\d+$/,
++      arguments: [
++        "foo",
++        {
++          type: "longString",
++          initial: longString.substring(0,
++            DebuggerServer.LONG_STRING_INITIAL_LENGTH),
++          length: longString.length,
++          actor: /[a-z]/,
++        },
++      ],
++    },
+   ];
+ }
+ 
+ function startTest()
+ {
+   removeEventListener("load", startTest);
+ 
+   attachConsole(["ConsoleAPI"], onAttach);
 diff --git a/toolkit/devtools/webconsole/test/test_jsterm.html b/toolkit/devtools/webconsole/test/test_jsterm.html
 --- a/toolkit/devtools/webconsole/test/test_jsterm.html
 +++ b/toolkit/devtools/webconsole/test/test_jsterm.html
-@@ -9,31 +9,37 @@
+@@ -9,137 +9,211 @@
       - http://creativecommons.org/publicdomain/zero/1.0/ -->
  </head>
  <body>
@@ -419,8 +572,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_jsterm.html b/toolkit/devtool
  <script class="testbody" type="text/javascript;version=1.8">
  SimpleTest.waitForExplicitFinish();
  
-+let tests = [onAutocomplete1, onAutocomplete2, onEval1, onEval2,
-+             onEvalWithException, onEvalWithHelper];
++let gState;
 +
  function startTest()
  {
@@ -441,30 +593,271 @@ diff --git a/toolkit/devtools/webconsole/test/test_jsterm.html b/toolkit/devtool
 +  top.foobarObject.omgstr = "foobarz" +
 +    (new Array(DebuggerServer.LONG_STRING_LENGTH * 2)).join("abb");
  
-   info("test autocomplete for 'window.foo'");
-   onAutocomplete1 = onAutocomplete1.bind(null, aState);
-   aState.client.autocomplete("window.foo", 0, onAutocomplete1);
+-  info("test autocomplete for 'window.foo'");
+-  onAutocomplete1 = onAutocomplete1.bind(null, aState);
+-  aState.client.autocomplete("window.foo", 0, onAutocomplete1);
++  gState = aState;
++
++  let tests = [doAutocomplete1, doAutocomplete2, doSimpleEval, doWindowEval,
++    doEvalWithException, doEvalWithHelper, doEvalString, doEvalLongString];
++  runTests(tests, testEnd);
  }
  
- function onAutocomplete1(aState, aResponse)
+-function onAutocomplete1(aState, aResponse)
++function doAutocomplete1()
++{
++  info("test autocomplete for 'window.foo'");
++  gState.client.autocomplete("window.foo", 0, onAutocomplete1);
++}
++
++function onAutocomplete1(aResponse)
  {
-@@ -50,17 +56,18 @@ function onAutocomplete1(aState, aRespon
+   let matches = aResponse.matches;
+ 
+   is(aResponse.matchProp, "foo", "matchProp");
+   is(matches.length, 1, "matches.length");
+   is(matches[0], "foobarObject", "matches[0]");
+ 
+-  info("test autocomplete for 'window.foobarObject.'");
+-
+-  onAutocomplete2 = onAutocomplete2.bind(null, aState);
+-  aState.client.autocomplete("window.foobarObject.", 0, onAutocomplete2);
++  nextTest();
  }
  
- function onAutocomplete2(aState, aResponse)
+-function onAutocomplete2(aState, aResponse)
++function doAutocomplete2()
++{
++  info("test autocomplete for 'window.foobarObject.'");
++  gState.client.autocomplete("window.foobarObject.", 0, onAutocomplete2);
++}
++
++function onAutocomplete2(aResponse)
  {
    let matches = aResponse.matches;
  
    ok(!aResponse.matchProp, "matchProp");
-   is(matches.length, 5, "matches.length");
+-  is(matches.length, 5, "matches.length");
 -  checkObject(matches, ["foo", "foobar", "foobaz", "omg", "omgfoo"]);
++  is(matches.length, 7, "matches.length");
 +  checkObject(matches,
 +    ["foo", "foobar", "foobaz", "omg", "omgfoo", "omgstr", "strfoo"]);
  
-   info("test eval '2+2'");
- 
-   onEval1 = onEval1.bind(null, aState);
-   aState.client.evaluateJS("2+2", onEval1);
+-  info("test eval '2+2'");
+-
+-  onEval1 = onEval1.bind(null, aState);
+-  aState.client.evaluateJS("2+2", onEval1);
++  nextTest();
  }
  
- function onEval1(aState, aResponse)
+-function onEval1(aState, aResponse)
++function doSimpleEval()
++{
++  info("test eval '2+2'");
++  gState.client.evaluateJS("2+2", onSimpleEval);
++}
++
++function onSimpleEval(aResponse)
+ {
+   checkObject(aResponse, {
+-    from: aState.actor,
++    from: gState.actor,
+     input: "2+2",
+     result: 4,
+   });
+ 
+   ok(!aResponse.error, "no js error");
+   ok(!aResponse.helperResult, "no helper result");
+ 
+-  info("test eval 'window'");
+-  onEval2 = onEval2.bind(null, aState);
+-  aState.client.evaluateJS("window", onEval2);
++  nextTest();
+ }
+ 
+-function onEval2(aState, aResponse)
++function doWindowEval()
++{
++  info("test eval 'window'");
++  gState.client.evaluateJS("window", onWindowEval);
++}
++
++function onWindowEval(aResponse)
+ {
+   checkObject(aResponse, {
+-    from: aState.actor,
++    from: gState.actor,
+     input: "window",
+     result: {
+       type: "object",
+       className: "Window",
+       actor: /[a-z]/,
+     },
+   });
+ 
+   ok(!aResponse.error, "no js error");
+   ok(!aResponse.helperResult, "no helper result");
+ 
+-  info("test eval with exception");
+-
+-  onEvalWithException = onEvalWithException.bind(null, aState);
+-  aState.client.evaluateJS("window.doTheImpossible()",
+-                           onEvalWithException);
++  nextTest();
+ }
+ 
+-function onEvalWithException(aState, aResponse)
++function doEvalWithException()
++{
++  info("test eval with exception");
++  gState.client.evaluateJS("window.doTheImpossible()", onEvalWithException);
++}
++
++function onEvalWithException(aResponse)
+ {
+   checkObject(aResponse, {
+-    from: aState.actor,
++    from: gState.actor,
+     input: "window.doTheImpossible()",
+     result: {
+       type: "undefined",
+     },
+     errorMessage: /doTheImpossible/,
+   });
+ 
+   ok(aResponse.error, "js error object");
+   ok(!aResponse.helperResult, "no helper result");
+ 
+-  info("test eval with helper");
+-
+-  onEvalWithHelper = onEvalWithHelper.bind(null, aState);
+-  aState.client.evaluateJS("clear()", onEvalWithHelper);
++  nextTest();
+ }
+ 
+-function onEvalWithHelper(aState, aResponse)
++function doEvalWithHelper()
++{
++  info("test eval with helper");
++  gState.client.evaluateJS("clear()", onEvalWithHelper);
++}
++
++function onEvalWithHelper(aResponse)
+ {
+   checkObject(aResponse, {
+-    from: aState.actor,
++    from: gState.actor,
+     input: "clear()",
+     result: {
+       type: "undefined",
+     },
+     helperResult: { type: "clearOutput" },
+   });
+ 
+   ok(!aResponse.error, "no js error");
+ 
+-  closeDebugger(aState, function() {
++  nextTest();
++}
++
++function doEvalString()
++{
++  gState.client.evaluateJS("window.foobarObject.strfoo", onEvalString);
++}
++
++function onEvalString(aResponse)
++{
++  checkObject(aResponse, {
++    from: gState.actor,
++    input: "window.foobarObject.strfoo",
++    result: "foobarz",
++  });
++
++  nextTest();
++}
++
++function doEvalLongString()
++{
++  gState.client.evaluateJS("window.foobarObject.omgstr", onEvalLongString);
++}
++
++function onEvalLongString(aResponse)
++{
++  let str = top.foobarObject.omgstr;
++  let initial = str.substring(0, DebuggerServer.LONG_STRING_INITIAL_LENGTH);
++
++  checkObject(aResponse, {
++    from: gState.actor,
++    input: "window.foobarObject.omgstr",
++    result: {
++      type: "longString",
++      initial: initial,
++      length: str.length,
++    },
++  });
++
++  nextTest();
++}
++
++function testEnd()
++{
++  closeDebugger(gState, function() {
++    gState = null;
+     SimpleTest.finish();
+   });
+ }
+ 
+ addEventListener("load", startTest);
+ </script>
+ </body>
+ </html>
+diff --git a/toolkit/devtools/webconsole/test/test_object_actor.html b/toolkit/devtools/webconsole/test/test_object_actor.html
+--- a/toolkit/devtools/webconsole/test/test_object_actor.html
++++ b/toolkit/devtools/webconsole/test/test_object_actor.html
+@@ -23,17 +23,20 @@ function startTest()
+   attachConsole(["ConsoleAPI"], onAttach, true);
+ }
+ 
+ function onAttach(aState, aResponse)
+ {
+   onConsoleCall = onConsoleCall.bind(null, aState);
+   aState.dbgClient.addListener("consoleAPICall", onConsoleCall);
+ 
++  let longString = (new Array(DebuggerServer.LONG_STRING_LENGTH + 3)).join("\u0629");
++
+   window.foobarObject = Object.create(null);
++  foobarObject.tamarbuta = longString;
+   foobarObject.foo = 1;
+   foobarObject.foobar = "hello";
+   foobarObject.foobaz = document;
+   foobarObject.omg = null;
+   foobarObject.testfoo = false;
+   foobarObject.notInspectable = {};
+   foobarObject.omgfn = function _omgfn() {
+     return "myResult";
+@@ -115,16 +118,25 @@ function onAttach(aState, aResponse)
+         type: "function",
+         className: "function",
+         displayString: /function _omgfn/,
+         actor: /[a-z]/,
+         inspectable: false,
+       },
+     },
+     {
++      name: "tamarbuta",
++      value: {
++        type: "longString",
++        initial: longString.substring(0,
++          DebuggerServer.LONG_STRING_INITIAL_LENGTH),
++        length: longString.length,
++      },
++    },
++    {
+       name: "testfoo",
+       value: false,
+     },
+   ];
+ }
+ 
+ function onConsoleCall(aState, aType, aPacket)
+ {
