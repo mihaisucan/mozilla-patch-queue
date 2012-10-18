@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 738d6a3b49c24cc627b62096544fa451dc0c1301
+# Parent 3bd9b134aa1ca5adbc720cbddefc8cb9b13c5a01
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1350041190 -10800
+# Date 1350587093 -10800
 
 Bug 798764 - Global console: add support for a global ConsoleProgressListener
 
@@ -361,7 +361,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_file_uri.html b/toolkit/devto
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/test/test_file_uri.html
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,97 @@
 +<!DOCTYPE HTML>
 +<html lang="en">
 +<head>
@@ -378,10 +378,38 @@ new file mode 100644
 +<script class="testbody" type="text/javascript;version=1.8">
 +SimpleTest.waitForExplicitFinish();
 +
++Cu.import("resource://gre/modules/NetUtil.jsm");
++Cu.import("resource://gre/modules/FileUtils.jsm");
++
++let gState;
++let gTmpFile;
++
 +function doFileActivity()
 +{
++  info("doFileActivity");
++  let fileContent = "<p>hello world from bug 798764";
++
++  gTmpFile = FileUtils.getFile("TmpD", ["bug798764.html"]);
++  gTmpFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
++
++  let fout = FileUtils.openSafeFileOutputStream(gTmpFile,
++    FileUtils.MODE_WRONLY | FileUtils.MODE_CREATE | FileUtils.MODE_TRUNCATE);
++
++  let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"].
++                  createInstance(Ci.nsIScriptableUnicodeConverter);
++  converter.charset = "UTF-8";
++  let fileContentStream = converter.convertToInputStream(fileContent);
++
++  NetUtil.asyncCopy(fileContentStream, fout, addIframe);
++}
++
++function addIframe(aStatus)
++{
++  ok(Components.isSuccessCode(aStatus),
++     "the temporary file was saved successfully");
++
 +  let iframe = document.createElement("iframe");
-+  iframe.src = "chrome://mochitests/content/chrome/toolkit/devtools/webconsole/test/network_requests_iframe.html";
++  iframe.src = NetUtil.newURI(gTmpFile).spec;
 +  document.body.appendChild(iframe);
 +}
 +
@@ -394,22 +422,37 @@ new file mode 100644
 +
 +function onAttach(aState, aResponse)
 +{
-+  onFileActivity = onFileActivity.bind(null, aState);
-+  aState.dbgClient.addListener("fileActivity", onFileActivity);
++  gState = aState;
++  gState.dbgClient.addListener("fileActivity", onFileActivity);
 +  doFileActivity();
 +}
 +
-+function onFileActivity(aState, aType, aPacket)
++function onFileActivity(aType, aPacket)
 +{
-+  is(aPacket.from, aState.actor, "fileActivity actor");
++  is(aPacket.from, gState.actor, "fileActivity actor");
 +
-+  aState.dbgClient.removeListener("fileActivity", onFileActivity);
++  gState.dbgClient.removeListener("fileActivity", onFileActivity);
 +
-+  ok(/network_requests_iframe\.html$/.test(aPacket.uri), "file URI match");
++  ok(/bug798764\.html$/.test(aPacket.uri), "file URI match");
 +
-+  closeDebugger(aState, function() {
++  testEnd();
++}
++
++function testEnd()
++{
++  if (gTmpFile) {
++    gTmpFile.remove(false);
++    gTmpFile = null;
++  }
++
++  if (gState) {
++    closeDebugger(gState, function() {
++      gState = null;
++      SimpleTest.finish();
++    });
++  } else {
 +    SimpleTest.finish();
-+  });
++  }
 +}
 +
 +addEventListener("load", startTest);

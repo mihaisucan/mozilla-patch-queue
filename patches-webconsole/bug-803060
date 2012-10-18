@@ -1,0 +1,132 @@
+# HG changeset patch
+# Parent e1f859ea03a47dc3043defde4040d99c34b027d7
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1350588935 -10800
+Bug 803060 - nsIScriptError window ID is missing for errors coming from content processes
+
+diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
+--- a/dom/ipc/ContentChild.cpp
++++ b/dom/ipc/ContentChild.cpp
+@@ -196,33 +196,39 @@ ConsoleListener::Observe(nsIConsoleMessa
+     if (!mChild)
+         return NS_OK;
+     
+     nsCOMPtr<nsIScriptError> scriptError = do_QueryInterface(aMessage);
+     if (scriptError) {
+         nsString msg, sourceName, sourceLine;
+         nsXPIDLCString category;
+         uint32_t lineNum, colNum, flags;
++        uint64_t innerWindowID, outerWindowID;
+ 
+         nsresult rv = scriptError->GetErrorMessage(msg);
+         NS_ENSURE_SUCCESS(rv, rv);
+         rv = scriptError->GetSourceName(sourceName);
+         NS_ENSURE_SUCCESS(rv, rv);
+         rv = scriptError->GetSourceLine(sourceLine);
+         NS_ENSURE_SUCCESS(rv, rv);
+         rv = scriptError->GetCategory(getter_Copies(category));
+         NS_ENSURE_SUCCESS(rv, rv);
+         rv = scriptError->GetLineNumber(&lineNum);
+         NS_ENSURE_SUCCESS(rv, rv);
+         rv = scriptError->GetColumnNumber(&colNum);
+         NS_ENSURE_SUCCESS(rv, rv);
+         rv = scriptError->GetFlags(&flags);
+         NS_ENSURE_SUCCESS(rv, rv);
++        rv = scriptError->GetInnerWindowID(&innerWindowID);
++        NS_ENSURE_SUCCESS(rv, rv);
++        rv = scriptError->GetOuterWindowID(&outerWindowID);
++        NS_ENSURE_SUCCESS(rv, rv);
+         mChild->SendScriptError(msg, sourceName, sourceLine,
+-                               lineNum, colNum, flags, category);
++                               lineNum, colNum, flags, category,
++                               innerWindowID, outerWindowID);
+         return NS_OK;
+     }
+ 
+     nsXPIDLString msg;
+     nsresult rv = aMessage->GetMessageMoz(getter_Copies(msg));
+     NS_ENSURE_SUCCESS(rv, rv);
+     mChild->SendConsoleMessage(msg);
+     return NS_OK;
+diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
+--- a/dom/ipc/ContentParent.cpp
++++ b/dom/ipc/ContentParent.cpp
+@@ -1884,25 +1884,28 @@ ContentParent::RecvConsoleMessage(const 
+ 
+ bool
+ ContentParent::RecvScriptError(const nsString& aMessage,
+                                       const nsString& aSourceName,
+                                       const nsString& aSourceLine,
+                                       const uint32_t& aLineNumber,
+                                       const uint32_t& aColNumber,
+                                       const uint32_t& aFlags,
+-                                      const nsCString& aCategory)
++                                      const nsCString& aCategory,
++                                      const uint64_t& aInnerWindowID,
++                                      const uint64_t& aOuterWindowID)
+ {
+   nsCOMPtr<nsIConsoleService> svc(do_GetService(NS_CONSOLESERVICE_CONTRACTID));
+   if (!svc)
+       return true;
+ 
+   nsCOMPtr<nsIScriptError> msg(do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
+-  nsresult rv = msg->Init(aMessage, aSourceName, aSourceLine,
+-                          aLineNumber, aColNumber, aFlags, aCategory.get());
++  nsresult rv = msg->InitWithWindowID(aMessage, aSourceName, aSourceLine,
++                                      aLineNumber, aColNumber, aFlags,
++                                      aCategory.get(), aInnerWindowID);
+   if (NS_FAILED(rv))
+     return true;
+ 
+   svc->LogMessage(msg);
+   return true;
+ }
+ 
+ bool
+diff --git a/dom/ipc/ContentParent.h b/dom/ipc/ContentParent.h
+--- a/dom/ipc/ContentParent.h
++++ b/dom/ipc/ContentParent.h
+@@ -300,17 +300,19 @@ private:
+ 
+     virtual bool RecvConsoleMessage(const nsString& aMessage);
+     virtual bool RecvScriptError(const nsString& aMessage,
+                                  const nsString& aSourceName,
+                                  const nsString& aSourceLine,
+                                  const uint32_t& aLineNumber,
+                                  const uint32_t& aColNumber,
+                                  const uint32_t& aFlags,
+-                                 const nsCString& aCategory);
++                                 const nsCString& aCategory,
++                                 const uint64_t& aInnerWindowID,
++                                 const uint64_t& aOuterWindowID);
+ 
+     virtual bool RecvPrivateDocShellsExist(const bool& aExist);
+ 
+     virtual bool RecvFirstIdle();
+ 
+     virtual void ProcessingError(Result what) MOZ_OVERRIDE;
+ 
+     GeckoChildProcessHost* mSubprocess;
+diff --git a/dom/ipc/PContent.ipdl b/dom/ipc/PContent.ipdl
+--- a/dom/ipc/PContent.ipdl
++++ b/dom/ipc/PContent.ipdl
+@@ -315,17 +315,18 @@ parent:
+                        int64_t aContentLength, OptionalURIParams aReferrer);
+ 
+     AddGeolocationListener();
+     RemoveGeolocationListener();
+ 
+     ConsoleMessage(nsString message);
+     ScriptError(nsString message, nsString sourceName, nsString sourceLine,
+                 uint32_t lineNumber, uint32_t colNumber, uint32_t flags,
+-                nsCString category); 
++                nsCString category, uint64_t innerWindowID,
++                uint64_t outerWindowID);
+ 
+     // nsIPermissionManager messages
+     sync ReadPermissions() returns (Permission[] permissions);
+ 
+     // These clipboard methods are only really used on Android since
+     // the clipboard is not available in the content process.
+     SetClipboardText(nsString text, bool isPrivateData, int32_t whichClipboard);
+     sync GetClipboardText(int32_t whichClipboard)
