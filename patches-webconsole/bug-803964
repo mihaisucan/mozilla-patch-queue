@@ -1,0 +1,57 @@
+# HG changeset patch
+# Parent 0c34dd4742b6a0581009894955fb739693e6474e
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1350939552 -10800
+
+Bug 803964 - Cannot show window object with inspect viewer in remote web console
+
+diff --git a/dom/base/nsDOMClassInfo.cpp b/dom/base/nsDOMClassInfo.cpp
+--- a/dom/base/nsDOMClassInfo.cpp
++++ b/dom/base/nsDOMClassInfo.cpp
+@@ -6650,16 +6650,23 @@ ConstructorEnabled(const nsGlobalNameStr
+ 
+   // Don't expose CSSSupportsRule unless @supports processing is enabled.
+   if (aStruct->mDOMClassInfoID == eDOMClassInfo_CSSSupportsRule_id) {
+     if (!CSSSupportsRule::PrefEnabled()) {
+       return false;
+     }
+   }
+ 
++#ifdef MOZ_DISABLE_DOMCRYPTO
++  // Don't expose Crypto unless MOZ_DISABLE_DOMCRYPTO is disabled.
++  if (aStruct->mDOMClassInfoID == eDOMClassInfo_Crypto_id) {
++    return false;
++  }
++#endif
++
+   return true;
+ }
+ 
+ // static
+ nsresult
+ nsWindowSH::GlobalResolve(nsGlobalWindow *aWin, JSContext *cx,
+                           JSObject *obj, jsid id, bool *did_resolve)
+ {
+diff --git a/dom/base/nsGlobalWindow.cpp b/dom/base/nsGlobalWindow.cpp
+--- a/dom/base/nsGlobalWindow.cpp
++++ b/dom/base/nsGlobalWindow.cpp
+@@ -3361,17 +3361,18 @@ nsGlobalWindow::GetApplicationCache(nsID
+ 
+   return NS_OK;
+ }
+ 
+ NS_IMETHODIMP
+ nsGlobalWindow::GetCrypto(nsIDOMCrypto** aCrypto)
+ {
+ #ifdef MOZ_DISABLE_DOMCRYPTO
+-  return NS_ERROR_NOT_IMPLEMENTED;
++  *aCrypto = nullptr;
++  return NS_OK;
+ #else
+   FORWARD_TO_OUTER(GetCrypto, (aCrypto), NS_ERROR_NOT_INITIALIZED);
+ 
+   if (!mCrypto) {
+     mCrypto = do_CreateInstance(kCryptoContractID);
+   }
+ 
+   NS_IF_ADDREF(*aCrypto = mCrypto);
