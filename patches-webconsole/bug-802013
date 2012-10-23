@@ -1,0 +1,117 @@
+# HG changeset patch
+# Parent 8243477987d83c3ae38e66317bf52bfbd7a65bc9
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1351006621 -10800
+
+Bug 802013 - Intermittent test_cached_messages.html | number of cached page errors - got 6, expected 2
+
+diff --git a/toolkit/devtools/webconsole/test/test_cached_messages.html b/toolkit/devtools/webconsole/test/test_cached_messages.html
+--- a/toolkit/devtools/webconsole/test/test_cached_messages.html
++++ b/toolkit/devtools/webconsole/test/test_cached_messages.html
+@@ -10,17 +10,18 @@
+ </head>
+ <body>
+ <p>Test for cached messages</p>
+ 
+ <script class="testbody" type="application/javascript;version=1.8">
+ let expectedConsoleCalls = [];
+ let expectedPageErrors = [];
+ 
+-(function() {
++function doPageErrors()
++{
+   Services.console.reset();
+ 
+   expectedPageErrors = [
+     {
+       _type: "PageError",
+       errorMessage: /fooColor/,
+       sourceName: /.+/,
+       category: "CSS Parser",
+@@ -48,17 +49,17 @@ let expectedPageErrors = [];
+   body.appendChild(container);
+   container.textContent = "document.documentElement.style.color = 'fooColor';";
+   body.removeChild(container);
+ 
+   container = top.document.createElementNS(XHTML_NS, "script");
+   body.appendChild(container);
+   container.textContent = "document.doTheImpossible();";
+   body.removeChild(container);
+-})();
++}
+ 
+ function doConsoleCalls()
+ {
+   top.console.log("foobarBaz-log", undefined);
+   top.console.info("foobarBaz-info", null);
+   top.console.warn("foobarBaz-warn", document.body);
+ 
+   expectedConsoleCalls = [
+@@ -88,28 +89,36 @@ function doConsoleCalls()
+     },
+   ];
+ }
+ </script>
+ 
+ <script class="testbody" type="text/javascript;version=1.8">
+ SimpleTest.waitForExplicitFinish();
+ 
+-let consoleAPIListener;
+-
++let consoleAPIListener, pageErrorListener;
+ let consoleAPICalls = 0;
++let pageErrors = 0;
+ 
+ let handlers = {
+   onConsoleAPICall: function onConsoleAPICall()
+   {
+     consoleAPICalls++;
+     if (consoleAPICalls == expectedConsoleCalls.length) {
+       checkConsoleAPICache();
+     }
+   },
++
++  onPageError: function onPageError()
++  {
++    pageErrors++;
++    if (pageErrors == expectedPageErrors.length) {
++      testPageErrors();
++    }
++  },
+ };
+ 
+ function startTest()
+ {
+   removeEventListener("load", startTest);
+ 
+   consoleAPIListener = new ConsoleAPIListener(top, handlers);
+   consoleAPIListener.init();
+@@ -137,21 +146,27 @@ function onCachedConsoleAPI(aState, aRes
+   is(msgs.length, expectedConsoleCalls.length,
+      "number of cached console messages");
+ 
+   expectedConsoleCalls.forEach(function(aMessage, aIndex) {
+     info("checking received cached message #" + aIndex);
+     checkConsoleAPICall(msgs[aIndex], expectedConsoleCalls[aIndex]);
+   });
+ 
+-  closeDebugger(aState, testPageErrors);
++  closeDebugger(aState, function() {
++    pageErrorListener = new PageErrorListener(null, handlers);
++    pageErrorListener.init();
++    doPageErrors();
++  });
+ }
+ 
+ function testPageErrors()
+ {
++  pageErrorListener.destroy();
++  pageErrorListener = null;
+   attachConsole(["PageError"], onAttach2);
+ }
+ 
+ function onAttach2(aState, aResponse)
+ {
+   aState.client.getCachedMessages(["PageError"],
+                                   onCachedPageErrors.bind(null, aState));
+ }

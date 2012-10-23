@@ -1,57 +1,188 @@
 # HG changeset patch
-# Parent 0c34dd4742b6a0581009894955fb739693e6474e
+# Parent 8243477987d83c3ae38e66317bf52bfbd7a65bc9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1350939552 -10800
+# Date 1351017515 -10800
 
 Bug 803964 - Cannot show window object with inspect viewer in remote web console
 
 diff --git a/dom/base/nsDOMClassInfo.cpp b/dom/base/nsDOMClassInfo.cpp
 --- a/dom/base/nsDOMClassInfo.cpp
 +++ b/dom/base/nsDOMClassInfo.cpp
-@@ -6650,16 +6650,23 @@ ConstructorEnabled(const nsGlobalNameStr
+@@ -561,16 +561,22 @@ using mozilla::dom::indexedDB::IDBWrappe
+ using namespace mozilla;
+ using namespace mozilla::dom;
  
-   // Don't expose CSSSupportsRule unless @supports processing is enabled.
-   if (aStruct->mDOMClassInfoID == eDOMClassInfo_CSSSupportsRule_id) {
-     if (!CSSSupportsRule::PrefEnabled()) {
-       return false;
-     }
-   }
+ static NS_DEFINE_CID(kDOMSOF_CID, NS_DOM_SCRIPT_OBJECT_FACTORY_CID);
+ 
+ static const char kDOMStringBundleURL[] =
+   "chrome://global/locale/dom/dom.properties";
  
 +#ifdef MOZ_DISABLE_DOMCRYPTO
-+  // Don't expose Crypto unless MOZ_DISABLE_DOMCRYPTO is disabled.
-+  if (aStruct->mDOMClassInfoID == eDOMClassInfo_Crypto_id) {
-+    return false;
-+  }
++  static const bool domCryptoEnabled = false;
++#else
++  static const bool domCryptoEnabled = true;
 +#endif
 +
-   return true;
- }
+ // NOTE: DEFAULT_SCRIPTABLE_FLAGS and DOM_DEFAULT_SCRIPTABLE_FLAGS
+ //       are defined in nsIDOMClassInfo.h.
  
- // static
+ #define WINDOW_SCRIPTABLE_FLAGS                                               \
+  (nsIXPCScriptable::WANT_GETPROPERTY |                                        \
+   nsIXPCScriptable::WANT_PRECREATE |                                          \
+   nsIXPCScriptable::WANT_FINALIZE |                                           \
+   nsIXPCScriptable::WANT_ENUMERATE |                                          \
+@@ -2385,17 +2391,18 @@ nsDOMClassInfo::RegisterExternalClasses(
+   DOM_CLASSINFO_MAP_ENTRY(nsIDOMJSWindow)                                      \
+   DOM_CLASSINFO_MAP_ENTRY(nsIDOMEventTarget)                                   \
+   DOM_CLASSINFO_MAP_ENTRY(nsIInlineEventHandlers)                              \
+   DOM_CLASSINFO_MAP_CONDITIONAL_ENTRY(nsIDOMStorageIndexedDB,                  \
+                                       _support_indexed_db)                     \
+   DOM_CLASSINFO_MAP_CONDITIONAL_ENTRY(nsIDOMWindowPerformance,                 \
+                                       nsGlobalWindow::HasPerformanceSupport()) \
+   DOM_CLASSINFO_MAP_CONDITIONAL_ENTRY(nsITouchEventReceiver,                   \
+-                                      nsDOMTouchEvent::PrefEnabled())
++                                      nsDOMTouchEvent::PrefEnabled())          \
++  DOM_CLASSINFO_MAP_CONDITIONAL_ENTRY(nsIWindowCrypto, domCryptoEnabled)
+ 
  nsresult
- nsWindowSH::GlobalResolve(nsGlobalWindow *aWin, JSContext *cx,
-                           JSObject *obj, jsid id, bool *did_resolve)
+ nsDOMClassInfo::Init()
  {
+   /* Errors that can trigger early returns are done first,
+      otherwise nsDOMClassInfo is left in a half inited state. */
+   MOZ_STATIC_ASSERT(sizeof(uintptr_t) == sizeof(void*),
+                     "BAD! You'll need to adjust the size of uintptr_t to the "
 diff --git a/dom/base/nsGlobalWindow.cpp b/dom/base/nsGlobalWindow.cpp
 --- a/dom/base/nsGlobalWindow.cpp
 +++ b/dom/base/nsGlobalWindow.cpp
-@@ -3361,17 +3361,18 @@ nsGlobalWindow::GetApplicationCache(nsID
+@@ -1240,16 +1240,17 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(
+   NS_INTERFACE_MAP_ENTRY(nsIDOMEventTarget)
+   NS_INTERFACE_MAP_ENTRY(nsPIDOMWindow)
+   NS_INTERFACE_MAP_ENTRY(nsIDOMStorageIndexedDB)
+   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
+   NS_INTERFACE_MAP_ENTRY(nsIInterfaceRequestor)
+   NS_INTERFACE_MAP_ENTRY(nsIDOMWindowPerformance)
+   NS_INTERFACE_MAP_ENTRY(nsITouchEventReceiver)
+   NS_INTERFACE_MAP_ENTRY(nsIInlineEventHandlers)
++  NS_INTERFACE_MAP_ENTRY(nsIWindowCrypto)
+   NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(Window)
+   OUTER_WINDOW_ONLY
+     NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
+   END_OUTER_WINDOW_ONLY
+ NS_INTERFACE_MAP_END
  
-   return NS_OK;
- }
  
- NS_IMETHODIMP
- nsGlobalWindow::GetCrypto(nsIDOMCrypto** aCrypto)
+ NS_IMPL_CYCLE_COLLECTING_ADDREF(nsGlobalWindow)
+diff --git a/dom/base/nsGlobalWindow.h b/dom/base/nsGlobalWindow.h
+--- a/dom/base/nsGlobalWindow.h
++++ b/dom/base/nsGlobalWindow.h
+@@ -265,17 +265,18 @@ class nsGlobalWindow : public nsPIDOMWin
+                        public nsIDOMEventTarget,
+                        public nsIDOMStorageIndexedDB,
+                        public nsSupportsWeakReference,
+                        public nsIInterfaceRequestor,
+                        public nsWrapperCache,
+                        public PRCListStr,
+                        public nsIDOMWindowPerformance,
+                        public nsITouchEventReceiver,
+-                       public nsIInlineEventHandlers
++                       public nsIInlineEventHandlers,
++                       public nsIWindowCrypto
  {
- #ifdef MOZ_DISABLE_DOMCRYPTO
--  return NS_ERROR_NOT_IMPLEMENTED;
-+  *aCrypto = nullptr;
-+  return NS_OK;
- #else
-   FORWARD_TO_OUTER(GetCrypto, (aCrypto), NS_ERROR_NOT_INITIALIZED);
+ public:
+   friend class nsDOMMozURLProperty;
  
-   if (!mCrypto) {
-     mCrypto = do_CreateInstance(kCryptoContractID);
+   typedef mozilla::TimeStamp TimeStamp;
+   typedef mozilla::TimeDuration TimeDuration;
+   typedef mozilla::dom::Navigator Navigator;
+   typedef nsDataHashtable<nsUint64HashKey, nsGlobalWindow*> WindowByIdTable;
+@@ -330,16 +331,19 @@ public:
+   NS_DECL_NSIDOMEVENTTARGET
+ 
+   // nsITouchEventReceiver
+   NS_DECL_NSITOUCHEVENTRECEIVER
+ 
+   // nsIInlineEventHandlers
+   NS_DECL_NSIINLINEEVENTHANDLERS
+ 
++  // nsIWindowCrypto
++  NS_DECL_NSIWINDOWCRYPTO
++
+   // nsPIDOMWindow
+   virtual NS_HIDDEN_(nsPIDOMWindow*) GetPrivateRoot();
+   virtual NS_HIDDEN_(void) ActivateOrDeactivate(bool aActivate);
+   virtual NS_HIDDEN_(void) SetActive(bool aActive);
+   virtual NS_HIDDEN_(void) SetIsBackground(bool aIsBackground);
+   virtual NS_HIDDEN_(void) SetChromeEventHandler(nsIDOMEventTarget* aChromeEventHandler);
+ 
+   virtual NS_HIDDEN_(void) SetInitialPrincipalToSubject();
+diff --git a/dom/interfaces/base/nsIDOMWindow.idl b/dom/interfaces/base/nsIDOMWindow.idl
+--- a/dom/interfaces/base/nsIDOMWindow.idl
++++ b/dom/interfaces/base/nsIDOMWindow.idl
+@@ -360,19 +360,16 @@ interface nsIDOMWindow : nsISupports
+ 
+   /* [replaceable] content */
+   readonly attribute nsIDOMWindow                       content;
+ 
+   /* [replaceable] prompter */
+   [noscript] readonly attribute nsIPrompt               prompter;
+ 
+   readonly attribute boolean                            closed;
+-  // http://wiki.whatwg.org/wiki/Crypto
+-  readonly attribute nsIDOMCrypto                       crypto;
+-  readonly attribute nsIDOMPkcs11                       pkcs11;
+ 
+   // XXX Shouldn't this be in nsIDOMChromeWindow?
+   /* [replaceable] controllers */
+   readonly attribute nsIControllers                     controllers;
+ 
+            attribute DOMString                          defaultStatus;
+ 
+   readonly attribute float                              mozInnerScreenX;
+@@ -512,14 +509,25 @@ interface nsIDOMWindow : nsISupports
+ interface nsIDOMWindowPerformance : nsISupports
+ {
+   /**
+    * A namespace to hold performance related data and statistics.
+    */
+   readonly attribute nsISupports performance;
+ };
+ 
++[scriptable, uuid(2ed9ace1-172c-443f-b92f-c4f74bf8f2c5)]
++interface nsIWindowCrypto : nsISupports
++{
++  /**
++   * A namespace to hold crypto related data and statistics.
++   * http://wiki.whatwg.org/wiki/Crypto
++   */
++  readonly attribute nsIDOMCrypto                       crypto;
++  readonly attribute nsIDOMPkcs11                       pkcs11;
++};
++
+ /**
+  * Empty interface for compatibility with older versions.
+  * @deprecated Use nsIDOMWindow instead
+  */
+ [scriptable, uuid(8da641ab-906a-456e-97f2-b77df4ca2d95)]
+ interface nsIDOMWindowInternal : nsIDOMWindow {};
+diff --git a/security/manager/ssl/src/nsNSSComponent.cpp b/security/manager/ssl/src/nsNSSComponent.cpp
+--- a/security/manager/ssl/src/nsNSSComponent.cpp
++++ b/security/manager/ssl/src/nsNSSComponent.cpp
+@@ -479,17 +479,17 @@ nsNSSComponent::DispatchEventToWindow(ns
+       DispatchEventToWindow(childWin, eventType, tokenName);
+     }
    }
  
-   NS_IF_ADDREF(*aCrypto = mCrypto);
+   // check if we've enabled smart card events on this window
+   // NOTE: it's not an error to say that we aren't going to dispatch
+   // the event.
+   {
+-    nsCOMPtr<nsIDOMWindow> domWindow = domWin;
++    nsCOMPtr<nsIWindowCrypto> domWindow = do_QueryInterface(domWin);
+     if (!domWindow) {
+       return NS_OK; // nope, it's not an internal window
+     }
+ 
+     nsCOMPtr<nsIDOMCrypto> crypto;
+     domWindow->GetCrypto(getter_AddRefs(crypto));
+     if (!crypto) {
+       return NS_OK; // nope, it doesn't have a crypto property
