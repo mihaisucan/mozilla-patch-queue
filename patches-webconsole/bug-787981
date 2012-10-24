@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 67e9871590b4c54bf1f95c425531d6035b426c7c
+# Parent 8243477987d83c3ae38e66317bf52bfbd7a65bc9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1350500531 -10800
+# Date 1351072666 -10800
 
 Bug 787981 - Use LongStringActor in the Web Console actors; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
 
@@ -62,7 +62,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -3443,58 +3443,16 @@ JSTerm.prototype = {
+@@ -3478,58 +3478,16 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
@@ -124,7 +124,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-script-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
-@@ -1636,22 +1636,32 @@ LongStringActor.prototype = {
+@@ -1639,22 +1639,33 @@ LongStringActor.prototype = {
     * @param aRequest object
     *        The protocol request object.
     */
@@ -140,9 +140,10 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
 +   * Handle a request to release this LongStringActor instance.
 +   */
 +  onRelease: function LSA_onRelease() {
-+    if (this.registeredPool) {
-+      this.registeredPool.removeActor(this.actorID);
++    if (this.registeredPool.longStringActors) {
++      delete this.registeredPool.longStringActors[this.actorID];
 +    }
++    this.registeredPool.removeActor(this);
 +    return {};
 +  },
  };
@@ -184,7 +185,8 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        default:
          if (aValue === null) {
            return { type: "null" };
-@@ -682,22 +683,30 @@ var WebConsoleUtils = {
+@@ -681,23 +682,43 @@ var WebConsoleUtils = {
+    *        not.
     * @return string
     *         The object grip converted to a string.
     */
@@ -192,14 +194,27 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    {
      // Primitives like strings and numbers are not sent as objects.
      // But null and undefined are sent as objects with the type property
-     // telling which type of value we have.
+-    // telling which type of value we have.
++    // telling which type of value we have. We also have long strings which are
++    // sent using the LongStringActor.
 +
      let type = typeof(aGrip);
 +    if (type == "string" ||
 +        (aGrip && type == "object" && aGrip.type == "longString")) {
-+      let str = type == "string" ? aGrip : aGrip.initial;
-+      let suffix = type != "string" ? "\u2026" : "";
-+      return aFormatString ? this.formatResultString(str) + suffix : str;
++      let str, suffix;
++      if (type == "string") {
++        str = aGrip;
++        suffix = "";
++      }
++      else {
++        str = aGrip.initial;
++        suffix = "\u2026";
++      }
++
++      if (aFormatString) {
++        return this.formatResultString(str) + suffix;
++      }
++      return str;
 +    }
 +
      if (aGrip && type == "object") {
@@ -217,7 +232,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     * @param funtion aFunction
     *        The function whose name will be returned.
     * @return string
-@@ -808,16 +817,20 @@ var WebConsoleUtils = {
+@@ -808,16 +829,20 @@ var WebConsoleUtils = {
      if (typeof val == "string") {
        return this.formatResultString(val);
      }
