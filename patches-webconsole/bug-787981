@@ -1,10 +1,54 @@
 # HG changeset patch
 # Parent 8243477987d83c3ae38e66317bf52bfbd7a65bc9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1351072666 -10800
+# Date 1351110236 -10800
 
 Bug 787981 - Use LongStringActor in the Web Console actors; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
 
+diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/NetworkPanel.jsm
+--- a/browser/devtools/webconsole/NetworkPanel.jsm
++++ b/browser/devtools/webconsole/NetworkPanel.jsm
+@@ -212,38 +212,18 @@ NetworkPanel.prototype =
+ 
+   /**
+    *
+    * @returns boolean
+    *          True if the response body contains text, false otherwise.
+    */
+   get _isResponseBodyTextData()
+   {
+-    let contentType = this.contentType;
+-
+-    if (!contentType)
+-      return false;
+-
+-    if (contentType.indexOf("text/") == 0) {
+-      return true;
+-    }
+-
+-    switch (NetworkHelper.mimeCategoryMap[contentType]) {
+-      case "txt":
+-      case "js":
+-      case "json":
+-      case "css":
+-      case "html":
+-      case "svg":
+-      case "xml":
+-        return true;
+-
+-      default:
+-        return false;
+-    }
++    return this.contentType ?
++           NetworkHelper.isTextMimeType(this.contentType) : false;
+   },
+ 
+   /**
+    * Tells if the server response is cached.
+    *
+    * @returns boolean
+    *          Returns true if the server responded that the request is already
+    *          in the browser's cache, false otherwise.
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
@@ -62,7 +106,66 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -3478,58 +3478,16 @@ JSTerm.prototype = {
+@@ -1685,16 +1685,58 @@ WebConsoleFrame.prototype = {
+       if (aResponse.error) {
+         Cu.reportError("WCF_openNetworkPanel getEventTimings:" +
+                        aResponse.error);
+         return;
+       }
+ 
+       aHttpActivity.timings = aResponse.timings;
+ 
++      let postData = aHttpActivity.request.postData;
++      if (typeof postData.text == "object") {
++        let longString = this.webConsoleClient.longString(postData.text);
++        longString.substring(0, longString.length, onRequestPostDataFullString);
++      }
++      else {
++        onRequestPostDataFullString();
++      }
++    }.bind(this);
++
++    let onRequestPostDataFullString = function(aResponse) {
++      if (aResponse && aResponse.error) {
++        Cu.reportError("WCF_openNetworkPanel postData longString.substring:" +
++                       aResponse.error);
++        return;
++      }
++
++      if (aResponse) {
++        aHttpActivity.request.postData.text = aResponse.substring;
++      }
++
++      let content = aHttpActivity.response.content;
++      if (typeof content.text == "object") {
++        let longString = this.webConsoleClient.longString(content.text);
++        longString.substring(0, longString.length, onResponseContentFullString);
++      }
++      else {
++        onResponseContentFullString();
++      }
++    }.bind(this);
++
++    let onResponseContentFullString = function(aResponse) {
++      if (aResponse && aResponse.error) {
++        Cu.reportError("WCF_openNetworkPanel response content longString." +
++                       "substring:" + aResponse.error);
++        return;
++      }
++
++      if (aResponse) {
++        aHttpActivity.response.content.text = aResponse.substring;
++      }
++
+       openPanel();
+     }.bind(this);
+ 
+     let openPanel = function() {
+       aNode._netPanel = netPanel;
+ 
+       let panel = netPanel.panel;
+       panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
+@@ -3478,58 +3520,16 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
@@ -160,6 +263,96 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
   *
   * @param aFrame Debugger.Frame
   *        The debuggee frame.
+diff --git a/toolkit/devtools/webconsole/NetworkHelper.jsm b/toolkit/devtools/webconsole/NetworkHelper.jsm
+--- a/toolkit/devtools/webconsole/NetworkHelper.jsm
++++ b/toolkit/devtools/webconsole/NetworkHelper.jsm
+@@ -414,10 +414,41 @@ var NetworkHelper =
+     "audio/x-midi": "media",
+     "music/crescendo": "media",
+     "audio/wav": "media",
+     "audio/x-wav": "media",
+     "text/json": "json",
+     "application/x-json": "json",
+     "application/json-rpc": "json",
+     "application/x-web-app-manifest+json": "json",
+-  }
++  },
++
++  /**
++   * Check if the given MIME type is a text-only MIME type.
++   *
++   * @param string aMimeType
++   * @return boolean
++   */
++  isTextMimeType: function NH_isTextMimeType(aMimeType)
++  {
++    if (aMimeType.indexOf("text/") == 0) {
++      return true;
++    }
++
++    if (/^application\/[a-z-]+\+xml$/.test(aMimeType)) {
++      return true;
++    }
++
++    switch (NetworkHelper.mimeCategoryMap[aMimeType]) {
++      case "txt":
++      case "js":
++      case "json":
++      case "css":
++      case "html":
++      case "svg":
++      case "xml":
++        return true;
++
++      default:
++        return false;
++    }
++  },
+ }
+diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools/webconsole/WebConsoleClient.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleClient.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleClient.jsm
+@@ -290,20 +290,40 @@ WebConsoleClient.prototype = {
+       to: this._actor,
+       type: "stopListeners",
+       listeners: aListeners,
+     };
+     this._client.request(packet, aOnResponse);
+   },
+ 
+   /**
++   * Return an instance of LongStringClient for the given long string grip.
++   *
++   * @param object aGrip
++   *        The long string grip returned by the protocol.
++   * @return object
++   *         The LongStringClient for the given long string grip.
++   */
++  longString: function WCC_longString(aGrip)
++  {
++    if (aGrip.actor in this._grips) {
++      return this._grips[aGrip.actor];
++    }
++
++    let client = new LongStringClient(this._client, aGrip);
++    this._grips[aGrip.actor] = client;
++    return client;
++  },
++
++  /**
+    * Close the WebConsoleClient. This stops all the listeners on the server and
+    * detaches from the console actor.
+    *
+    * @param function aOnResponse
+    *        Function to invoke when the server response is received.
+    */
+   close: function WCC_close(aOnResponse)
+   {
+     this.stopListeners(null, aOnResponse);
++    this._grips = null;
+     this._client = null;
+   },
+ };
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
@@ -253,6 +446,36 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        return val.className;
      }
  
+@@ -1918,23 +1943,28 @@ NetworkResponseListener.prototype = {
+    */
+   _onComplete: function NRL__onComplete(aData)
+   {
+     let response = {
+       mimeType: "",
+       text: aData || "",
+     };
+ 
+-    // TODO: Bug 787981 - use LongStringActor for strings that are too long.
++    response.size = response.text.length;
+ 
+     try {
+       response.mimeType = this.request.contentType;
+     }
+     catch (ex) { }
+ 
++    if (!response.mimeType || !NetworkHelper.isTextMimeType(response.mimeType)) {
++      response.encoding = "base64";
++      response.text = btoa(response.text);
++    }
++
+     if (response.mimeType && this.request.contentCharset) {
+       response.mimeType += "; charset=" + this.request.contentCharset;
+     }
+ 
+     this.receivedData = "";
+ 
+     this.httpActivity.owner.
+       addResponseContent(response, this.httpActivity.discardResponseBody);
 diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 --- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
@@ -335,7 +558,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     * Create a grip for the given value. If the value is an object,
     * a WebConsoleObjectActor will be created.
     *
-@@ -238,55 +223,53 @@ WebConsoleActor.prototype =
+@@ -238,55 +223,68 @@ WebConsoleActor.prototype =
     *
     * @param object aObject
     *        The object you want.
@@ -345,12 +568,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    createObjectActor: function WCA_createObjectActor(aObject)
    {
 +    if (typeof aObject == "string") {
-+      if (aObject.length >= DebuggerServer.LONG_STRING_LENGTH) {
-+        let actor = new LongStringActor(aObject, this);
-+        this._actorPool.addActor(actor);
-+        return actor.grip();
-+      }
-+      return aObject;
++      return this.createStringGrip(aObject);
 +    }
 +
      // We need to unwrap the object, otherwise we cannot access the properties
@@ -363,6 +581,26 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    },
  
    /**
++   * Create a grip for the given string. If the given string is a long string,
++   * then a LongStringActor grip will be used.
++   *
++   * @param string aString
++   *        The string you want to create the grip for.
++   * @return string|object
++   *         The same string, as is, or a LongStringActor object that wraps the
++   *         given string.
++   */
++  createStringGrip: function WCA_createStringGrip(aString)
++  {
++    if (aString.length >= DebuggerServer.LONG_STRING_LENGTH) {
++      let actor = new LongStringActor(aString, this);
++      this._actorPool.addActor(actor);
++      return actor.grip();
++    }
++    return aObject;
++  },
++
++  /**
     * Get an object actor by its ID.
     *
     * @param string aActorID
@@ -406,7 +644,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
  
    /**
     * Handler for the "startListeners" request.
-@@ -702,17 +685,17 @@ WebConsoleActor.prototype =
+@@ -702,17 +700,17 @@ WebConsoleActor.prototype =
     *        The initial network request event information.
     * @return object
     *         A new NetworkEventActor is returned. This is used for tracking the
@@ -425,7 +663,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      };
  
      this.conn.send(packet);
-@@ -872,30 +855,29 @@ WebConsoleObjectActor.prototype =
+@@ -872,30 +870,29 @@ WebConsoleObjectActor.prototype =
      return grip;
    },
  
@@ -457,7 +695,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      };
    },
  
-@@ -975,17 +957,17 @@ NetworkEventActor.prototype =
+@@ -975,17 +972,17 @@ NetworkEventActor.prototype =
      };
    },
  
@@ -476,6 +714,138 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    onRelease: function NEA_onRelease()
    {
      this.release();
+@@ -1103,16 +1100,17 @@ NetworkEventActor.prototype =
+    * Add network request headers.
+    *
+    * @param array aHeaders
+    *        The request headers array.
+    */
+   addRequestHeaders: function NEA_addRequestHeaders(aHeaders)
+   {
+     this._request.headers = aHeaders;
++    this._prepareHeaders(aHeaders);
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "requestHeaders",
+       headers: aHeaders.length,
+       headersSize: this._request.headersSize,
+     };
+@@ -1124,16 +1122,17 @@ NetworkEventActor.prototype =
+    * Add network request cookies.
+    *
+    * @param array aCookies
+    *        The request cookies array.
+    */
+   addRequestCookies: function NEA_addRequestCookies(aCookies)
+   {
+     this._request.cookies = aCookies;
++    this._prepareHeaders(aCookies);
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "requestCookies",
+       cookies: aCookies.length,
+     };
+ 
+@@ -1144,16 +1143,17 @@ NetworkEventActor.prototype =
+    * Add network request POST data.
+    *
+    * @param object aPostData
+    *        The request POST data.
+    */
+   addRequestPostData: function NEA_addRequestPostData(aPostData)
+   {
+     this._request.postData = aPostData;
++    aPostData.text = this.parent.createStringGrip(aPostData.text);
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "requestPostData",
+       dataSize: aPostData.text.length,
+       discardRequestBody: this._discardRequestBody,
+     };
+@@ -1189,16 +1189,17 @@ NetworkEventActor.prototype =
+    * Add network response headers.
+    *
+    * @param array aHeaders
+    *        The response headers array.
+    */
+   addResponseHeaders: function NEA_addResponseHeaders(aHeaders)
+   {
+     this._response.headers = aHeaders;
++    this._prepareHeaders(aHeaders);
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "responseHeaders",
+       headers: aHeaders.length,
+       headersSize: this._response.headersSize,
+     };
+@@ -1210,16 +1211,17 @@ NetworkEventActor.prototype =
+    * Add network response cookies.
+    *
+    * @param array aCookies
+    *        The response cookies array.
+    */
+   addResponseCookies: function NEA_addResponseCookies(aCookies)
+   {
+     this._response.cookies = aCookies;
++    this._prepareHeaders(aCookies);
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "responseCookies",
+       cookies: aCookies.length,
+     };
+ 
+@@ -1233,16 +1235,17 @@ NetworkEventActor.prototype =
+    *        The response content.
+    * @param boolean aDiscardedResponseBody
+    *        Tells if the response content was recorded or not.
+    */
+   addResponseContent:
+   function NEA_addResponseContent(aContent, aDiscardedResponseBody)
+   {
+     this._response.content = aContent;
++    aContent.text = this.parent.createStringGrip(aContent.text);
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "responseContent",
+       mimeType: aContent.mimeType,
+       contentSize: aContent.text.length,
+       discardResponseBody: aDiscardedResponseBody,
+@@ -1268,16 +1271,23 @@ NetworkEventActor.prototype =
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "eventTimings",
+       totalTime: aTotal,
+     };
+ 
+     this.conn.send(packet);
+   },
++
++  _prepareHeaders: function NEA__prepareHeaders(aHeaders)
++  {
++    for (let header of aHeaders) {
++      header.value = this.parent.createStringGrip(header.value);
++    }
++  },
+ };
+ 
+ NetworkEventActor.prototype.requestTypes =
+ {
+   "release": NetworkEventActor.prototype.onRelease,
+   "getRequestHeaders": NetworkEventActor.prototype.onGetRequestHeaders,
+   "getRequestCookies": NetworkEventActor.prototype.onGetRequestCookies,
+   "getRequestPostData": NetworkEventActor.prototype.onGetRequestPostData,
 diff --git a/toolkit/devtools/webconsole/test/common.js b/toolkit/devtools/webconsole/test/common.js
 --- a/toolkit/devtools/webconsole/test/common.js
 +++ b/toolkit/devtools/webconsole/test/common.js
