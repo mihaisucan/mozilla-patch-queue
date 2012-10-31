@@ -1,0 +1,180 @@
+# HG changeset patch
+# Parent 9e29b38c7455433b2a52fed98d8d4e9163579326
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1351714275 -7200
+
+Bug 787981 - Use LongStringActor in the Web Console actors: console output changes
+
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -2397,16 +2397,27 @@ WebConsoleFrame.prototype = {
+       if (aContainer.firstChild) {
+         aContainer.appendChild(this.document.createTextNode(" "));
+       }
+ 
+       let text = WebConsoleUtils.objectActorGripToString(aItem);
+ 
+       if (aItem && typeof aItem != "object" || !aItem.inspectable) {
+         aContainer.appendChild(this.document.createTextNode(text));
++
++        if (typeof aItem == "object" && aItem.type == "longString") {
++          let ellipsis = this.document.createElement("description");
++          ellipsis.classList.add("hud-clickable");
++          ellipsis.textContent = l10n.getStr("longStringEllipsis");
++
++          this._addMessageLinkCallback(ellipsis,
++            this._longStringClick.bind(this, aItem, null));
++
++          aContainer.appendChild(ellipsis);
++        }
+         return;
+       }
+ 
+       // For inspectable objects.
+       let elem = this.document.createElement("description");
+       elem.classList.add("hud-clickable");
+       elem.setAttribute("aria-haspopup", "true");
+       elem.appendChild(this.document.createTextNode(text));
+@@ -2414,16 +2425,56 @@ WebConsoleFrame.prototype = {
+       this._addMessageLinkCallback(elem,
+         this._consoleLogClick.bind(this, aMessage, elem, aItem));
+ 
+       aContainer.appendChild(elem);
+     }, this);
+   },
+ 
+   /**
++   * Click event handler for the ellipsis shown immediately after a long string.
++   * This method retrieves the full string and updates the console output to
++   * show it.
++   *
++   * @private
++   * @param object aActor
++   *        The LongStringActor instance we work with.
++   * @param [function] aFormatter
++   *        Optional function you can use to format the string received from the
++   *        server, before being displayed in the console.
++   * @param nsIDOMElement aEllipsis
++   *        The DOM element the user can click on to expand the string.
++   * @param nsIDOMEvent aEvent
++   *        The DOM click event triggered by the user.
++   */
++  _longStringClick:
++  function WCF__longStringClick(aActor, aFormatter, aEllipsis, aEvent)
++  {
++    aEvent.preventDefault();
++
++    if (!aFormatter) {
++      aFormatter = function(s) s;
++    }
++
++    let longString = this.webConsoleClient.longString(aActor);
++    longString.substring(0, longString.length,
++      function WCF__onSubstring(aResponse) {
++        if (aResponse.error) {
++          Cu.reportError("WCF__longStringClick substring failure: " +
++                         aResponse.error);
++          return;
++        }
++
++        let node = aEllipsis.previousSibling;
++        node.textContent = aFormatter(aResponse.substring);
++        aEllipsis.parentNode.removeChild(aEllipsis);
++      });
++  },
++
++  /**
+    * Creates the XUL label that displays the textual location of an incoming
+    * message.
+    *
+    * @param string aSourceURL
+    *        The URL of the source file responsible for the error.
+    * @param number aSourceLine [optional]
+    *        The line number on which the error occurred. If zero or omitted,
+    *        there is no line number associated with this message.
+@@ -2868,16 +2919,33 @@ JSTerm.prototype = {
+     }
+     else {
+       node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
+                               aAfterNode, aResponse.timestamp);
+     }
+ 
+     if (result && typeof result == "object" && result.actor) {
+       node._objectActors = [result.actor];
++
++      if (result.type == "longString") {
++        let body = node.querySelector(".webconsole-msg-body");
++        let ellipsis = this.hud.document.createElement("description");
++        ellipsis.classList.add("hud-clickable");
++        ellipsis.textContent = l10n.getStr("longStringEllipsis");
++
++        let formatter = null;
++        if (!helperHasRawOutput) {
++          formatter = WebConsoleUtils.formatResultString.bind(WebConsoleUtils);
++        }
++
++        this.hud._addMessageLinkCallback(ellipsis,
++          this.hud._longStringClick.bind(this.hud, result, formatter));
++
++        body.appendChild(ellipsis);
++      }
+     }
+   },
+ 
+   /**
+    * Execute a string. Execution happens asynchronously in the content process.
+    *
+    * @param string [aExecuteString]
+    *        The string you want to execute. If this is not provided, the current
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -160,8 +160,13 @@ remoteWebConsoleSelectTabTitle=Tab list 
+ 
+ # LOCALIZATION NOTE (remoteWebConsoleSelectTabMessage): The message displayed on the
+ # Web Console prompt asking the user to pick a tab to attach to.
+ remoteWebConsoleSelectTabMessage=Select one of the tabs you want to attach to, or select the global console.
+ 
+ # LOCALIZATION NOTE (listTabs.globalConsoleActor): The string displayed for the
+ # global console in the tabs selection.
+ listTabs.globalConsoleActor=*Global Console*
++
++# LOCALIZATION NOTE (longStringEllipsis): The string displayed after a long
++# string. This string is clickable such that the rest of the string is retrieved
++# from the server.
++longStringEllipsis=[…]
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -688,28 +688,19 @@ var WebConsoleUtils = {
+     // Primitives like strings and numbers are not sent as objects.
+     // But null and undefined are sent as objects with the type property
+     // telling which type of value we have. We also have long strings which are
+     // sent using the LongStringActor.
+ 
+     let type = typeof(aGrip);
+     if (type == "string" ||
+         (aGrip && type == "object" && aGrip.type == "longString")) {
+-      let str, suffix;
+-      if (type == "string") {
+-        str = aGrip;
+-        suffix = "";
+-      }
+-      else {
+-        str = aGrip.initial;
+-        suffix = "\u2026";
+-      }
+-
++      let str = type == "string" ? aGrip : aGrip.initial;
+       if (aFormatString) {
+-        return this.formatResultString(str) + suffix;
++        return this.formatResultString(str);
+       }
+       return str;
+     }
+ 
+     if (aGrip && type == "object") {
+       return aGrip.displayString || aGrip.className || aGrip.type || type;
+     }
+ 

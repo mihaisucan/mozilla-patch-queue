@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 8116fd47e9d81e9f7bf17e2a11018ba5f8ee9cc5
+# Parent bb37616b7145a802d3c1f58d05238cc76e3d0e38
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1351178785 -10800
+# Date 1351699018 -7200
 
 Bug 787981 - Use LongStringActor in the Web Console actors; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
 
@@ -224,6 +224,29 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        the user input string that was evaluated to inspect an object and
     *        the result object which is to be inspected.
     */
+diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
+--- a/toolkit/devtools/debugger/dbg-client.jsm
++++ b/toolkit/devtools/debugger/dbg-client.jsm
+@@ -7,17 +7,18 @@
+ "use strict";
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ var EXPORTED_SYMBOLS = ["DebuggerTransport",
+                         "DebuggerClient",
+-                        "debuggerSocketConnect"];
++                        "debuggerSocketConnect",
++                        "LongStringClient"];
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/NetUtil.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "socketTransportService",
+                                    "@mozilla.org/network/socket-transport-service;1",
+                                    "nsISocketTransportService");
 diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-script-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
@@ -312,7 +335,7 @@ diff --git a/toolkit/devtools/webconsole/NetworkHelper.jsm b/toolkit/devtools/we
 diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools/webconsole/WebConsoleClient.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleClient.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleClient.jsm
-@@ -5,16 +5,21 @@
+@@ -5,34 +5,42 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  "use strict";
@@ -334,7 +357,28 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools
   *
   * @param object aDebuggerClient
   *        The DebuggerClient instance we live for.
-@@ -290,20 +295,40 @@ WebConsoleClient.prototype = {
+  * @param string aActor
+  *        The WebConsoleActor ID.
+  */
+ function WebConsoleClient(aDebuggerClient, aActor)
+ {
+   this._actor = aActor;
+   this._client = aDebuggerClient;
++  this._grips = {};
+ }
+ 
+ WebConsoleClient.prototype = {
++  _grips: null,
++
+   /**
+    * Retrieve the cached messages from the server.
+    *
+    * @see this.CACHED_MESSAGES
+    * @param array aTypes
+    *        The array of message types you want from the server. See
+    *        this.CACHED_MESSAGES for known types.
+    * @param function aOnResponse
+@@ -290,20 +298,40 @@ WebConsoleClient.prototype = {
        to: this._actor,
        type: "stopListeners",
        listeners: aListeners,
