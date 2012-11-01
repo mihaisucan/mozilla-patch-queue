@@ -1,14 +1,235 @@
 # HG changeset patch
-# Parent 9e29b38c7455433b2a52fed98d8d4e9163579326
+# Parent 63850a5b25a5be94eb6a1299a102fefd56fa482f
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1351714275 -7200
+# Date 1351803109 -7200
 
 Bug 787981 - Use LongStringActor in the Web Console actors: console output changes
 
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -114,16 +114,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_cached_messages.js \
+ 	browser_bug664688_sandbox_update_after_navigation.js \
+ 	browser_webconsole_menustatus.js \
+ 	browser_result_format_as_string.js \
+ 	browser_webconsole_bug_737873_mixedcontent.js \
+ 	browser_output_breaks_after_console_dir_uninspectable.js \
+ 	browser_console_log_inspectable_object.js \
+ 	browser_bug_638949_copy_link_location.js \
++	browser_output_longstring_expand.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ MOCHITEST_BROWSER_FILES += \
+ 	test-console.html \
+ 	test-network.html \
+ 	test-network-request.html \
+ 	test-mutation.html \
+diff --git a/browser/devtools/webconsole/test/browser_output_longstring_expand.js b/browser/devtools/webconsole/test/browser_output_longstring_expand.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_output_longstring_expand.js
+@@ -0,0 +1,153 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Test that long strings can be expanded in the console output.
++
++function test()
++{
++  waitForExplicitFinish();
++
++  let tempScope = {};
++  Cu.import("resource://gre/modules/devtools/dbg-server.jsm", tempScope);
++  let DebuggerServer = tempScope.DebuggerServer;
++
++  let longString = (new Array(DebuggerServer.LONG_STRING_LENGTH + 4)).join("a") +
++                   "foobar";
++  let initialString =
++    longString.substring(0, DebuggerServer.LONG_STRING_INITIAL_LENGTH);
++
++  addTab("data:text/html;charset=utf8,test for bug 787981 - check that long strings can be expanded in the output.");
++
++  let hud = null;
++
++  gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
++    gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
++    openConsole(null, performTest);
++  }, true);
++
++  function performTest(aHud)
++  {
++    hud = aHud;
++
++    hud.jsterm.clearOutput(true);
++    hud.jsterm.execute("console.log('bazbaz', '" + longString +"', 'boom')");
++
++    waitForSuccess(waitForConsoleLog);
++  }
++
++  let waitForConsoleLog = {
++    name: "console.log output shown",
++    validatorFn: function()
++    {
++      return hud.outputNode.querySelector(".webconsole-msg-console");
++    },
++    successFn: function()
++    {
++      let msg = hud.outputNode.querySelector(".webconsole-msg-console");
++      is(msg.textContent.indexOf("foobar"), -1,
++         "foobar is not shown");
++      isnot(msg.textContent.indexOf("bazbaz"), -1,
++            "bazbaz is shown");
++      isnot(msg.textContent.indexOf("boom"), -1,
++            "boom is shown");
++      isnot(msg.textContent.indexOf(initialString), -1,
++            "initial string is shown");
++
++      let clickable = msg.querySelector(".longStringEllipsis");
++      ok(clickable, "long string ellipsis is shown");
++
++      scrollToVisible(clickable);
++
++      executeSoon(function() {
++        EventUtils.synthesizeMouse(clickable, 2, 2, {}, hud.iframeWindow);
++        waitForSuccess(waitForFullString);
++      });
++    },
++    failureFn: finishTest,
++  };
++
++  let waitForFullString = {
++    name: "full string shown",
++    validatorFn: function()
++    {
++      let msg = hud.outputNode.querySelector(".webconsole-msg-log");
++      return msg.textContent.indexOf(longString) > -1;
++    },
++    successFn: function()
++    {
++      let msg = hud.outputNode.querySelector(".webconsole-msg-log");
++      isnot(msg.textContent.indexOf("bazbaz"), -1,
++            "bazbaz is shown");
++      isnot(msg.textContent.indexOf("boom"), -1,
++            "boom is shown");
++
++      let clickable = msg.querySelector(".longStringEllipsis");
++      ok(!clickable, "long string ellipsis is not shown");
++
++      executeSoon(function() {
++        hud.jsterm.clearOutput(true);
++        hud.jsterm.execute("'" + longString +"'");
++        waitForSuccess(waitForExecute);
++      });
++    },
++    failureFn: finishTest,
++  };
++
++  let waitForExecute = {
++    name: "execute() output shown",
++    validatorFn: function()
++    {
++      return hud.outputNode.querySelector(".webconsole-msg-output");
++    },
++    successFn: function()
++    {
++      let msg = hud.outputNode.querySelector(".webconsole-msg-output");
++      isnot(msg.textContent.indexOf(initialString), -1,
++           "initial string is shown");
++      is(msg.textContent.indexOf(longString), -1,
++         "full string is not shown");
++
++      let clickable = msg.querySelector(".longStringEllipsis");
++      ok(clickable, "long string ellipsis is shown");
++
++      scrollToVisible(clickable);
++
++      executeSoon(function() {
++        EventUtils.synthesizeMouse(clickable, 3, 4, {}, hud.iframeWindow);
++        waitForSuccess(waitForFullStringAfterExecute);
++      });
++    },
++    failureFn: finishTest,
++  };
++
++  let waitForFullStringAfterExecute = {
++    name: "full string shown again",
++    validatorFn: function()
++    {
++      let msg = hud.outputNode.querySelector(".webconsole-msg-output");
++      return msg.textContent.indexOf(longString) > -1;
++    },
++    successFn: function()
++    {
++      let msg = hud.outputNode.querySelector(".webconsole-msg-output");
++      let clickable = msg.querySelector(".longStringEllipsis");
++      ok(!clickable, "long string ellipsis is not shown");
++
++      executeSoon(finishTest);
++    },
++    failureFn: finishTest,
++  };
++
++  function scrollToVisible(aNode)
++  {
++    let richListBoxNode = aNode.parentNode;
++    while (richListBoxNode.tagName != "richlistbox") {
++      richListBoxNode = richListBoxNode.parentNode;
++    }
++
++    let boxObject = richListBoxNode.scrollBoxObject;
++    let nsIScrollBoxObject = boxObject.QueryInterface(Ci.nsIScrollBoxObject);
++    nsIScrollBoxObject.ensureElementIsVisible(aNode);
++  }
++}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+@@ -92,17 +92,17 @@ let inputValues = [
+ 
+   // 17
+   [true, "({a:'b', c:'d', e:1, f:'2'})", '({a:"b", c:"d", e:1, f:"2"})',
+     "[object Object",
+     '({a:"b", c:"d", e:1, f:"2"})'],
+ 
+   // 18
+   [false, "'" + longString + "'",
+-    '"' + initialString + "\"\u2026", initialString],
++    '"' + initialString + "\"[\u2026]", initialString],
+ ];
+ 
+ longString = null;
+ initialString = null;
+ tempScope = null;
+ 
+ let eventHandlers = [];
+ let popupShown = [];
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -2397,16 +2397,27 @@ WebConsoleFrame.prototype = {
+@@ -1068,16 +1068,19 @@ WebConsoleFrame.prototype = {
+       case "dir":
+       case "groupEnd": {
+         body = { arguments: args };
+         let clipboardArray = [];
+         args.forEach(function(aValue) {
+           clipboardArray.push(WebConsoleUtils.objectActorGripToString(aValue));
+           if (aValue && typeof aValue == "object" && aValue.actor) {
+             objectActors.push(aValue.actor);
++            if (aValue.type == "longString") {
++              clipboardArray.push(l10n.getStr("longStringEllipsis"));
++            }
+           }
+         }, this);
+         clipboardText = clipboardArray.join(" ");
+         sourceURL = aMessage.filename;
+         sourceLine = aMessage.lineNumber;
+ 
+         if (level == "dir") {
+           body.objectProperties = aMessage.objectProperties;
+@@ -2397,16 +2400,28 @@ WebConsoleFrame.prototype = {
        if (aContainer.firstChild) {
          aContainer.appendChild(this.document.createTextNode(" "));
        }
@@ -21,10 +242,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +        if (typeof aItem == "object" && aItem.type == "longString") {
 +          let ellipsis = this.document.createElement("description");
 +          ellipsis.classList.add("hud-clickable");
++          ellipsis.classList.add("longStringEllipsis");
 +          ellipsis.textContent = l10n.getStr("longStringEllipsis");
 +
 +          this._addMessageLinkCallback(ellipsis,
-+            this._longStringClick.bind(this, aItem, null));
++            this._longStringClick.bind(this, aMessage, aItem, null));
 +
 +          aContainer.appendChild(ellipsis);
 +        }
@@ -36,7 +258,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        elem.classList.add("hud-clickable");
        elem.setAttribute("aria-haspopup", "true");
        elem.appendChild(this.document.createTextNode(text));
-@@ -2414,16 +2425,56 @@ WebConsoleFrame.prototype = {
+@@ -2414,16 +2429,63 @@ WebConsoleFrame.prototype = {
        this._addMessageLinkCallback(elem,
          this._consoleLogClick.bind(this, aMessage, elem, aItem));
  
@@ -50,6 +272,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   * show it.
 +   *
 +   * @private
++   * @param nsIDOMElement aMessage
++   *        The message element.
 +   * @param object aActor
 +   *        The LongStringActor instance we work with.
 +   * @param [function] aFormatter
@@ -61,7 +285,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   *        The DOM click event triggered by the user.
 +   */
 +  _longStringClick:
-+  function WCF__longStringClick(aActor, aFormatter, aEllipsis, aEvent)
++  function WCF__longStringClick(aMessage, aActor, aFormatter, aEllipsis, aEvent)
 +  {
 +    aEvent.preventDefault();
 +
@@ -81,6 +305,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +        let node = aEllipsis.previousSibling;
 +        node.textContent = aFormatter(aResponse.substring);
 +        aEllipsis.parentNode.removeChild(aEllipsis);
++
++        if (aMessage.category == CATEGORY_WEBDEV ||
++            aMessage.category == CATEGORY_OUTPUT) {
++          aMessage.clipboardText = aMessage.textContent;
++        }
 +      });
 +  },
 +
@@ -93,7 +322,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param number aSourceLine [optional]
     *        The line number on which the error occurred. If zero or omitted,
     *        there is no line number associated with this message.
-@@ -2868,16 +2919,33 @@ JSTerm.prototype = {
+@@ -2868,16 +2930,36 @@ JSTerm.prototype = {
      }
      else {
        node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
@@ -107,6 +336,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +        let body = node.querySelector(".webconsole-msg-body");
 +        let ellipsis = this.hud.document.createElement("description");
 +        ellipsis.classList.add("hud-clickable");
++        ellipsis.classList.add("longStringEllipsis");
 +        ellipsis.textContent = l10n.getStr("longStringEllipsis");
 +
 +        let formatter = null;
@@ -115,9 +345,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +        }
 +
 +        this.hud._addMessageLinkCallback(ellipsis,
-+          this.hud._longStringClick.bind(this.hud, result, formatter));
++          this.hud._longStringClick.bind(this.hud, node, result, formatter));
 +
 +        body.appendChild(ellipsis);
++
++        node.clipboardText += " " + ellipsis.textContent;
 +      }
      }
    },
@@ -127,10 +359,30 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
+@@ -2885,17 +2967,18 @@ JSTerm.prototype = {
+    * @param function [aCallback]
+    *        Optional function to invoke when the result is displayed.
+    */
+   execute: function JST_execute(aExecuteString, aCallback)
+   {
+     // attempt to execute the content of the inputNode
+     aExecuteString = aExecuteString || this.inputNode.value;
+     if (!aExecuteString) {
+-      this.writeOutput("no value to execute", CATEGORY_OUTPUT, SEVERITY_LOG);
++      this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
++                       SEVERITY_LOG);
+       return;
+     }
+ 
+     let node = this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
+     let onResult = this._executeResultCallback.bind(this, node, aCallback);
+ 
+     this.webConsoleClient.evaluateJS(aExecuteString, onResult);
+ 
 diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 --- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
-@@ -160,8 +160,13 @@ remoteWebConsoleSelectTabTitle=Tab list 
+@@ -160,8 +160,17 @@ remoteWebConsoleSelectTabTitle=Tab list 
  
  # LOCALIZATION NOTE (remoteWebConsoleSelectTabMessage): The message displayed on the
  # Web Console prompt asking the user to pick a tab to attach to.
@@ -144,6 +396,10 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +# string. This string is clickable such that the rest of the string is retrieved
 +# from the server.
 +longStringEllipsis=[…]
++
++# LOCALIZATION NOTE (executeEmptyInput): This is displayed when the user tries
++# to execute code, but the input is empty.
++executeEmptyInput=No value to execute.
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
