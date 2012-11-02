@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 63850a5b25a5be94eb6a1299a102fefd56fa482f
+# Parent 659b79c86ff335fc07a325629a6dfa66a0a77834
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1351803109 -7200
+# Date 1351892374 -7200
 
 Bug 787981 - Use LongStringActor in the Web Console actors: console output changes
 
@@ -229,7 +229,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
          if (level == "dir") {
            body.objectProperties = aMessage.objectProperties;
-@@ -2397,16 +2400,28 @@ WebConsoleFrame.prototype = {
+@@ -2399,16 +2402,28 @@ WebConsoleFrame.prototype = {
        if (aContainer.firstChild) {
          aContainer.appendChild(this.document.createTextNode(" "));
        }
@@ -258,7 +258,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        elem.classList.add("hud-clickable");
        elem.setAttribute("aria-haspopup", "true");
        elem.appendChild(this.document.createTextNode(text));
-@@ -2414,16 +2429,63 @@ WebConsoleFrame.prototype = {
+@@ -2416,16 +2431,63 @@ WebConsoleFrame.prototype = {
        this._addMessageLinkCallback(elem,
          this._consoleLogClick.bind(this, aMessage, elem, aItem));
  
@@ -294,7 +294,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    }
 +
 +    let longString = this.webConsoleClient.longString(aActor);
-+    longString.substring(0, longString.length,
++    longString.substring(longString.initial.length, longString.length,
 +      function WCF__onSubstring(aResponse) {
 +        if (aResponse.error) {
 +          Cu.reportError("WCF__longStringClick substring failure: " +
@@ -303,7 +303,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +        }
 +
 +        let node = aEllipsis.previousSibling;
-+        node.textContent = aFormatter(aResponse.substring);
++        node.textContent = aFormatter(longString.initial + aResponse.substring);
 +        aEllipsis.parentNode.removeChild(aEllipsis);
 +
 +        if (aMessage.category == CATEGORY_WEBDEV ||
@@ -322,7 +322,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param number aSourceLine [optional]
     *        The line number on which the error occurred. If zero or omitted,
     *        there is no line number associated with this message.
-@@ -2868,16 +2930,36 @@ JSTerm.prototype = {
+@@ -2870,16 +2932,51 @@ JSTerm.prototype = {
      }
      else {
        node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
@@ -331,21 +331,36 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      if (result && typeof result == "object" && result.actor) {
        node._objectActors = [result.actor];
++      if (typeof result.displayString == "object" &&
++          result.displayString.type == "longString") {
++        node._objectActors.push(result.displayString.actor);
++      }
 +
++      // Add an ellipsis to expand the short string if the object is not
++      // inspectable.
++      let longString = null;
++      let formatter = null;
 +      if (result.type == "longString") {
++        longString = result;
++        if (!helperHasRawOutput) {
++          formatter = WebConsoleUtils.formatResultString.bind(WebConsoleUtils);
++        }
++      }
++      else if (!inspectable && !errorMessage &&
++               typeof result.displayString == "object" &&
++               result.displayString.type == "longString") {
++        longString = result.displayString;
++      }
++
++      if (longString) {
 +        let body = node.querySelector(".webconsole-msg-body");
 +        let ellipsis = this.hud.document.createElement("description");
 +        ellipsis.classList.add("hud-clickable");
 +        ellipsis.classList.add("longStringEllipsis");
 +        ellipsis.textContent = l10n.getStr("longStringEllipsis");
 +
-+        let formatter = null;
-+        if (!helperHasRawOutput) {
-+          formatter = WebConsoleUtils.formatResultString.bind(WebConsoleUtils);
-+        }
-+
 +        this.hud._addMessageLinkCallback(ellipsis,
-+          this.hud._longStringClick.bind(this.hud, node, result, formatter));
++          this.hud._longStringClick.bind(this.hud, node, longString, formatter));
 +
 +        body.appendChild(ellipsis);
 +
@@ -359,7 +374,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
-@@ -2885,17 +2967,18 @@ JSTerm.prototype = {
+@@ -2887,17 +2984,18 @@ JSTerm.prototype = {
     * @param function [aCallback]
     *        Optional function to invoke when the result is displayed.
     */
@@ -400,10 +415,31 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +# LOCALIZATION NOTE (executeEmptyInput): This is displayed when the user tries
 +# to execute code, but the input is empty.
 +executeEmptyInput=No value to execute.
+diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-script-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
+@@ -1648,16 +1648,17 @@ LongStringActor.prototype = {
+ 
+   /**
+    * Handle a request to release this LongStringActor instance.
+    */
+   onRelease: function LSA_onRelease() {
+     // TODO: also check if registeredPool === threadActor.threadLifetimePool
+     // when the web console moves aray from manually releasing pause-scoped
+     // actors.
++    dump("releaseActor " + this.actorID + "\n");
+     if (this.registeredPool.longStringActors) {
+       delete this.registeredPool.longStringActors[this.actorID];
+     }
+     this.registeredPool.removeActor(this);
+     return {};
+   },
+ };
+ 
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -688,28 +688,19 @@ var WebConsoleUtils = {
+@@ -688,33 +688,28 @@ var WebConsoleUtils = {
      // Primitives like strings and numbers are not sent as objects.
      // But null and undefined are sent as objects with the type property
      // telling which type of value we have. We also have long strings which are
@@ -431,6 +467,76 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
      }
  
      if (aGrip && type == "object") {
++      if (aGrip.displayString && typeof aGrip.displayString == "object" &&
++          aGrip.displayString.type == "longString") {
++        return aGrip.displayString.initial;
++      }
        return aGrip.displayString || aGrip.className || aGrip.type || type;
      }
  
+     return aGrip + "";
+   },
+ 
+   /**
+    * Helper function to deduce the name of the provided function.
+@@ -841,16 +836,21 @@ var WebConsoleUtils = {
+     if (val.type == "function" && val.functionName) {
+       return "function " + val.functionName + "(" +
+              val.functionArguments.join(", ") + ")";
+     }
+     if (val.type == "object" && val.className) {
+       return val.className;
+     }
+ 
++    if (val.displayString && typeof val.displayString == "object" &&
++        val.displayString.type == "longString") {
++      return val.displayString.initial;
++    }
++
+     return val.displayString || val.type;
+   },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // Localization
+ //////////////////////////////////////////////////////////////////////////
+ 
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -274,16 +274,17 @@ WebConsoleActor.prototype =
+   /**
+    * Release an actor.
+    *
+    * @param object aActor
+    *        The actor instance you want to release.
+    */
+   releaseActor: function WCA_releaseActor(aActor)
+   {
++    dump("releaseActor " + aActor.actorID + "\n");
+     this._actorPool.removeActor(aActor.actorID);
+   },
+ 
+   //////////////////
+   // Request handlers for known packet types.
+   //////////////////
+ 
+   /**
+@@ -862,16 +863,17 @@ WebConsoleObjectActor.prototype =
+ 
+   /**
+    * Returns a grip for this actor for returning in a protocol message.
+    */
+   grip: function WCOA_grip()
+   {
+     let grip = WebConsoleUtils.getObjectGrip(this.obj);
+     grip.actor = this.actorID;
++    grip.displayString = this.parent.createStringGrip(grip.displayString);
+     return grip;
+   },
+ 
+   /**
+    * Releases this actor from the pool.
+    */
+   release: function WCOA_release()
+   {

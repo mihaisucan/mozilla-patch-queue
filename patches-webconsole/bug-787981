@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent bb37616b7145a802d3c1f58d05238cc76e3d0e38
+# Parent 5bd5bb168eb1d25d43ad61dde8fed56d2a4346a9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1351699018 -7200
+# Date 1351887575 -7200
 
 Bug 787981 - Use LongStringActor in the Web Console actors; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
 
@@ -106,7 +106,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -1685,16 +1685,58 @@ WebConsoleFrame.prototype = {
+@@ -1685,16 +1685,60 @@ WebConsoleFrame.prototype = {
        if (aResponse.error) {
          Cu.reportError("WCF_openNetworkPanel getEventTimings:" +
                         aResponse.error);
@@ -118,7 +118,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      let postData = aHttpActivity.request.postData;
 +      if (typeof postData.text == "object") {
 +        let longString = this.webConsoleClient.longString(postData.text);
-+        longString.substring(0, longString.length, onRequestPostDataFullString);
++        longString.substring(longString.initial.length, longString.length,
++                             onRequestPostDataFullString);
 +      }
 +      else {
 +        onRequestPostDataFullString();
@@ -133,13 +134,14 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      }
 +
 +      if (aResponse) {
-+        aHttpActivity.request.postData.text = aResponse.substring;
++        aHttpActivity.request.postData.text += aResponse.substring;
 +      }
 +
 +      let content = aHttpActivity.response.content;
 +      if (typeof content.text == "object") {
 +        let longString = this.webConsoleClient.longString(content.text);
-+        longString.substring(0, longString.length, onResponseContentFullString);
++        longString.substring(longString.initial.length, longString.length,
++                             onResponseContentFullString);
 +      }
 +      else {
 +        onResponseContentFullString();
@@ -154,7 +156,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      }
 +
 +      if (aResponse) {
-+        aHttpActivity.response.content.text = aResponse.substring;
++        aHttpActivity.response.content.text += aResponse.substring;
 +      }
 +
        openPanel();
@@ -165,7 +167,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
        let panel = netPanel.panel;
        panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
-@@ -3478,58 +3520,16 @@ JSTerm.prototype = {
+@@ -3478,58 +3522,16 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
@@ -247,10 +249,28 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  XPCOMUtils.defineLazyServiceGetter(this, "socketTransportService",
                                     "@mozilla.org/network/socket-transport-service;1",
                                     "nsISocketTransportService");
+@@ -1163,16 +1164,17 @@ GripClient.prototype = {
+ function LongStringClient(aClient, aGrip) {
+   this._grip = aGrip;
+   this._client = aClient;
+ }
+ 
+ LongStringClient.prototype = {
+   get actor() { return this._grip.actor; },
+   get length() { return this._grip.length; },
++  get initial() { return this._grip.initial; },
+ 
+   valid: true,
+ 
+   /**
+    * Get the substring of this LongString from aStart to aEnd.
+    *
+    * @param aStart Number
+    *        The starting index.
 diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-script-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
-@@ -1639,22 +1639,33 @@ LongStringActor.prototype = {
+@@ -1639,22 +1639,36 @@ LongStringActor.prototype = {
     * @param aRequest object
     *        The protocol request object.
     */
@@ -266,6 +286,9 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
 +   * Handle a request to release this LongStringActor instance.
 +   */
 +  onRelease: function LSA_onRelease() {
++    // TODO: also check if registeredPool === threadActor.threadLifetimePool
++    // when the web console moves aray from manually releasing pause-scoped
++    // actors.
 +    if (this.registeredPool.longStringActors) {
 +      delete this.registeredPool.longStringActors[this.actorID];
 +    }
@@ -364,11 +387,11 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools
  {
    this._actor = aActor;
    this._client = aDebuggerClient;
-+  this._grips = {};
++  this._longStrings = {};
  }
  
  WebConsoleClient.prototype = {
-+  _grips: null,
++  _longStrings: null,
 +
    /**
     * Retrieve the cached messages from the server.
@@ -396,12 +419,12 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools
 +   */
 +  longString: function WCC_longString(aGrip)
 +  {
-+    if (aGrip.actor in this._grips) {
-+      return this._grips[aGrip.actor];
++    if (aGrip.actor in this._longStrings) {
++      return this._longStrings[aGrip.actor];
 +    }
 +
 +    let client = new LongStringClient(this._client, aGrip);
-+    this._grips[aGrip.actor] = client;
++    this._longStrings[aGrip.actor] = client;
 +    return client;
 +  },
 +
@@ -415,7 +438,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools
    close: function WCC_close(aOnResponse)
    {
      this.stopListeners(null, aOnResponse);
-+    this._grips = null;
++    this._longStrings = null;
      this._client = null;
    },
  };
