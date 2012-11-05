@@ -1,0 +1,253 @@
+# HG changeset patch
+# Parent b859dbfdb81fcbbc679cb6248c3db35b1b252722
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1352141332 -7200
+
+Bug 787981 - Use LongStringActor in the Web Console actors: network panel updates
+
+diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/NetworkPanel.jsm
+--- a/browser/devtools/webconsole/NetworkPanel.jsm
++++ b/browser/devtools/webconsole/NetworkPanel.jsm
+@@ -27,25 +27,32 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ this.EXPORTED_SYMBOLS = ["NetworkPanel"];
+ 
+ /**
+  * Creates a new NetworkPanel.
+  *
++ * @constructor
+  * @param nsIDOMNode aParent
+  *        Parent node to append the created panel to.
+  * @param object aHttpActivity
+  *        HttpActivity to display in the panel.
++ * @param object aWebConsoleFrame
++ *        The parent WebConsoleFrame object that owns this network panel
++ *        instance.
+  */
+-this.NetworkPanel = function NetworkPanel(aParent, aHttpActivity)
++this.NetworkPanel =
++function NetworkPanel(aParent, aHttpActivity, aWebConsoleFrame)
+ {
+   let doc = aParent.ownerDocument;
+   this.httpActivity = aHttpActivity;
++  this.webConsole = aWebConsoleFrame;
++  this._longStringClick = this._longStringClick.bind(this);
+ 
+   // Create the underlaying panel
+   this.panel = createElement(doc, "panel", {
+     label: l10n.getStr("NetworkPanel.label"),
+     titlebar: "normal",
+     noautofocus: "true",
+     noautohide: "true",
+     close: "true"
+@@ -237,16 +244,19 @@ NetworkPanel.prototype =
+    * Tells if the request body includes form data.
+    *
+    * @returns boolean
+    *          Returns true if the posted body contains form data.
+    */
+   get _isRequestBodyFormData()
+   {
+     let requestBody = this.httpActivity.request.postData.text;
++    if (typeof requestBody == "object" && requestBody.type == "longString") {
++      requestBody = requestBody.initial;
++    }
+     return this._fromDataRegExp.test(requestBody);
+   },
+ 
+   /**
+    * Appends the node with id=aId by the text aValue.
+    *
+    * @param string aId
+    * @param string aValue
+@@ -277,21 +287,27 @@ NetworkPanel.prototype =
+     let doc = this.document;
+ 
+     aList.sort(function(a, b) {
+       return a.name.toLowerCase() < b.name.toLowerCase();
+     });
+ 
+     aList.forEach(function(aItem) {
+       let name = aItem.name;
+-      let value = aItem.value;
+       if (aIgnoreCookie && name == "Cookie") {
+         return;
+       }
+ 
++      let value = aItem.value;
++      let longString = null;
++      if (typeof value == "object" && value.type == "longString") {
++        value = value.initial;
++        longString = this.webConsole.webConsoleClient.longString(value);
++      }
++
+       /**
+        * The following code creates the HTML:
+        * <tr>
+        * <th scope="row" class="property-name">${line}:</th>
+        * <td class="property-value">${aList[line]}</td>
+        * </tr>
+        * and adds it to parent.
+        */
+@@ -302,22 +318,50 @@ NetworkPanel.prototype =
+       th.setAttribute("class", "property-name");
+       th.appendChild(textNode);
+       row.appendChild(th);
+ 
+       textNode = doc.createTextNode(value);
+       let td = doc.createElement("td");
+       td.setAttribute("class", "property-value");
+       td.appendChild(textNode);
++
++      if (longString) {
++        let a = doc.createElement("a");
++        a.href = "#";
++        a.className = "longStringEllipsis";
++        a.addEventListener("click", this._longStringClick.bind(this, longString));
++        a.textContent = l10n.getStr("longStringEllipsis");
++        td.appendChild(a);
++      }
++
+       row.appendChild(td);
+ 
+       parent.appendChild(row);
+     });
+   },
+ 
++  _longStringClick: function NP__longStringClick(aLongString, aEvent)
++  {
++    aEvent.preventDefault();
++
++    aLongString.substring(aLongString.initial.length, aLongString.length,
++      function NP__onLongStringSubstring(aResponse)
++      {
++        if (aResponse.error) {
++          Cu.reportError("NP__onLongStringSubstring " + aResponse.error);
++          return;
++        }
++
++        let textNode = aEvent.target.previousSibling;
++        textNode.textContent += aResponse.substring;
++        textNode.parentNode.removeChild(aEvent.target);
++      });
++  },
++
+   /**
+    * Displays the node with id=aId.
+    *
+    * @param string aId
+    * @returns void
+    */
+   _displayNode: function NP_displayNode(aId)
+   {
+@@ -428,17 +472,22 @@ NetworkPanel.prototype =
+         deltaDuration += ms;
+       }
+     });
+ 
+     this._appendTextNode("responseHeadersInfo",
+       this._format("durationMS", [deltaDuration]));
+ 
+     this._displayNode("responseContainer");
+-    this._appendList("responseHeadersContent", response.headers);
++    this._appendList("responseHeadersContent", response.headers, true);
++
++    if (request.cookies.length > 0) {
++      this._displayNode("responseCookie");
++      this._appendList("responseCookieContent", response.cookies);
++    }
+   },
+ 
+   /**
+    * Displays the respones image section, sets the source of the image displayed
+    * in the image response section to the request URL and the duration between
+    * the receiving of the response header and the end of the request. Once the
+    * image is loaded, the size of the requested image is set.
+    *
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -1693,62 +1693,16 @@ WebConsoleFrame.prototype = {
+       if (aResponse.error) {
+         Cu.reportError("WCF_openNetworkPanel getEventTimings:" +
+                        aResponse.error);
+         return;
+       }
+ 
+       aHttpActivity.timings = aResponse.timings;
+ 
+-      let postData = aHttpActivity.request.postData;
+-      if (typeof postData.text == "object") {
+-        let longString = this.webConsoleClient.longString(postData.text);
+-        longString.substring(longString.initial.length, longString.length,
+-                             onRequestPostDataFullString);
+-      }
+-      else {
+-        onRequestPostDataFullString();
+-      }
+-    }.bind(this);
+-
+-    let onRequestPostDataFullString = function(aResponse) {
+-      if (aResponse && aResponse.error) {
+-        Cu.reportError("WCF_openNetworkPanel postData longString.substring:" +
+-                       aResponse.error);
+-        return;
+-      }
+-
+-      if (aResponse) {
+-        let initial = aHttpActivity.request.postData.text.initial;
+-        aHttpActivity.request.postData.text = initial + aResponse.substring;
+-      }
+-
+-      let content = aHttpActivity.response.content;
+-      if (typeof content.text == "object") {
+-        let longString = this.webConsoleClient.longString(content.text);
+-        longString.substring(longString.initial.length, longString.length,
+-                             onResponseContentFullString);
+-      }
+-      else {
+-        onResponseContentFullString();
+-      }
+-    }.bind(this);
+-
+-    let onResponseContentFullString = function(aResponse) {
+-      if (aResponse && aResponse.error) {
+-        Cu.reportError("WCF_openNetworkPanel response content longString." +
+-                       "substring:" + aResponse.error);
+-        return;
+-      }
+-
+-      if (aResponse) {
+-        let initial = aHttpActivity.response.content.text.initial;
+-        aHttpActivity.response.content.text = initial + aResponse.substring;
+-      }
+-
+       openPanel();
+     }.bind(this);
+ 
+     let openPanel = function() {
+       aNode._netPanel = netPanel;
+ 
+       let panel = netPanel.panel;
+       panel.openPopup(aNode, "after_pointer", 0, 0, false, false);
+@@ -1760,17 +1714,17 @@ WebConsoleFrame.prototype = {
+ 
+         aNode._panelOpen = false;
+         aNode._netPanel = null;
+       });
+ 
+       aNode._panelOpen = true;
+     }.bind(this);
+ 
+-    let netPanel = new NetworkPanel(this.popupset, aHttpActivity);
++    let netPanel = new NetworkPanel(this.popupset, aHttpActivity, this);
+     netPanel.linkNode = aNode;
+ 
+     if (!actor) {
+       openPanel();
+     }
+ 
+     return netPanel;
+   },

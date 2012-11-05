@@ -1,10 +1,34 @@
 # HG changeset patch
-# Parent 659b79c86ff335fc07a325629a6dfa66a0a77834
+# Parent 40b6c6ccb7158de247172b46a91c6a7fb5b2f60b
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1351892374 -7200
+# Date 1352137244 -7200
 
 Bug 787981 - Use LongStringActor in the Web Console actors: console output changes
 
+diff --git a/browser/devtools/webconsole/PropertyPanel.jsm b/browser/devtools/webconsole/PropertyPanel.jsm
+--- a/browser/devtools/webconsole/PropertyPanel.jsm
++++ b/browser/devtools/webconsole/PropertyPanel.jsm
+@@ -142,16 +142,20 @@ PropertyTreeView.prototype = {
+       aItem._open = false;
+       aItem._children = null;
+ 
+       if (this._releaseObject) {
+         ["value", "get", "set"].forEach(function(aProp) {
+           let val = aItem[aProp];
+           if (val && val.actor) {
+             this._objectActors.push(val.actor);
++            if (typeof val.displayString == "object" &&
++                val.displayString.type == "longString") {
++              this._objectActors.push(val.displayString.actor);
++            }
+           }
+         }, this);
+       }
+     }, this);
+   },
+ 
+   /**
+    * Inspect a local object.
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
 +++ b/browser/devtools/webconsole/test/Makefile.in
@@ -209,7 +233,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -1068,16 +1068,19 @@ WebConsoleFrame.prototype = {
+@@ -1068,16 +1068,24 @@ WebConsoleFrame.prototype = {
        case "dir":
        case "groupEnd": {
          body = { arguments: args };
@@ -218,8 +242,13 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            clipboardArray.push(WebConsoleUtils.objectActorGripToString(aValue));
            if (aValue && typeof aValue == "object" && aValue.actor) {
              objectActors.push(aValue.actor);
-+            if (aValue.type == "longString") {
++            let displayStringIsLong = typeof aValue.displayString == "object" &&
++                                      aValue.displayString.type == "longString";
++            if (aValue.type == "longString" || displayStringIsLong) {
 +              clipboardArray.push(l10n.getStr("longStringEllipsis"));
++            }
++            if (displayStringIsLong) {
++              objectActors.push(aValue.displayString.actor);
 +            }
            }
          }, this);
@@ -229,7 +258,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
          if (level == "dir") {
            body.objectProperties = aMessage.objectProperties;
-@@ -2399,16 +2402,28 @@ WebConsoleFrame.prototype = {
+@@ -2399,16 +2407,38 @@ WebConsoleFrame.prototype = {
        if (aContainer.firstChild) {
          aContainer.appendChild(this.document.createTextNode(" "));
        }
@@ -239,14 +268,24 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        if (aItem && typeof aItem != "object" || !aItem.inspectable) {
          aContainer.appendChild(this.document.createTextNode(text));
 +
-+        if (typeof aItem == "object" && aItem.type == "longString") {
++        let longString = null;
++        if (aItem.type == "longString") {
++          longString = aItem;
++        }
++        else if (!aItem.inspectable &&
++                 typeof aItem.displayString == "object" &&
++                 aItem.displayString.type == "longString") {
++          longString = aItem.displayString;
++        }
++
++        if (longString) {
 +          let ellipsis = this.document.createElement("description");
 +          ellipsis.classList.add("hud-clickable");
 +          ellipsis.classList.add("longStringEllipsis");
 +          ellipsis.textContent = l10n.getStr("longStringEllipsis");
 +
 +          this._addMessageLinkCallback(ellipsis,
-+            this._longStringClick.bind(this, aMessage, aItem, null));
++            this._longStringClick.bind(this, aMessage, longString, null));
 +
 +          aContainer.appendChild(ellipsis);
 +        }
@@ -258,7 +297,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        elem.classList.add("hud-clickable");
        elem.setAttribute("aria-haspopup", "true");
        elem.appendChild(this.document.createTextNode(text));
-@@ -2416,16 +2431,63 @@ WebConsoleFrame.prototype = {
+@@ -2416,16 +2446,63 @@ WebConsoleFrame.prototype = {
        this._addMessageLinkCallback(elem,
          this._consoleLogClick.bind(this, aMessage, elem, aItem));
  
@@ -322,7 +361,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param number aSourceLine [optional]
     *        The line number on which the error occurred. If zero or omitted,
     *        there is no line number associated with this message.
-@@ -2870,16 +2932,51 @@ JSTerm.prototype = {
+@@ -2870,16 +2947,51 @@ JSTerm.prototype = {
      }
      else {
        node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
@@ -374,7 +413,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
-@@ -2887,17 +2984,18 @@ JSTerm.prototype = {
+@@ -2887,17 +2999,18 @@ JSTerm.prototype = {
     * @param function [aCallback]
     *        Optional function to invoke when the result is displayed.
     */
@@ -415,31 +454,10 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +# LOCALIZATION NOTE (executeEmptyInput): This is displayed when the user tries
 +# to execute code, but the input is empty.
 +executeEmptyInput=No value to execute.
-diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
---- a/toolkit/devtools/debugger/server/dbg-script-actors.js
-+++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
-@@ -1648,16 +1648,17 @@ LongStringActor.prototype = {
- 
-   /**
-    * Handle a request to release this LongStringActor instance.
-    */
-   onRelease: function LSA_onRelease() {
-     // TODO: also check if registeredPool === threadActor.threadLifetimePool
-     // when the web console moves aray from manually releasing pause-scoped
-     // actors.
-+    dump("releaseActor " + this.actorID + "\n");
-     if (this.registeredPool.longStringActors) {
-       delete this.registeredPool.longStringActors[this.actorID];
-     }
-     this.registeredPool.removeActor(this);
-     return {};
-   },
- };
- 
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -688,33 +688,28 @@ var WebConsoleUtils = {
+@@ -688,33 +688,28 @@ this.WebConsoleUtils = {
      // Primitives like strings and numbers are not sent as objects.
      // But null and undefined are sent as objects with the type property
      // telling which type of value we have. We also have long strings which are
@@ -479,7 +497,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  
    /**
     * Helper function to deduce the name of the provided function.
-@@ -841,16 +836,21 @@ var WebConsoleUtils = {
+@@ -841,16 +836,21 @@ this.WebConsoleUtils = {
      if (val.type == "function" && val.functionName) {
        return "function " + val.functionName + "(" +
               val.functionArguments.join(", ") + ")";
@@ -504,25 +522,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 --- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -274,16 +274,17 @@ WebConsoleActor.prototype =
-   /**
-    * Release an actor.
-    *
-    * @param object aActor
-    *        The actor instance you want to release.
-    */
-   releaseActor: function WCA_releaseActor(aActor)
-   {
-+    dump("releaseActor " + aActor.actorID + "\n");
-     this._actorPool.removeActor(aActor.actorID);
-   },
- 
-   //////////////////
-   // Request handlers for known packet types.
-   //////////////////
- 
-   /**
-@@ -862,16 +863,17 @@ WebConsoleObjectActor.prototype =
+@@ -862,16 +862,17 @@ WebConsoleObjectActor.prototype =
  
    /**
     * Returns a grip for this actor for returning in a protocol message.
@@ -540,3 +540,61 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     */
    release: function WCOA_release()
    {
+diff --git a/toolkit/devtools/webconsole/test/test_object_actor.html b/toolkit/devtools/webconsole/test/test_object_actor.html
+--- a/toolkit/devtools/webconsole/test/test_object_actor.html
++++ b/toolkit/devtools/webconsole/test/test_object_actor.html
+@@ -44,16 +44,22 @@ function onAttach(aState, aResponse)
+   foobarObject.abArray = ["a", "b"];
+ 
+   Object.defineProperty(foobarObject, "getterAndSetter", {
+     enumerable: true,
+     get: function fooGet() { return "foo"; },
+     set: function fooSet() { 1+2 },
+   });
+ 
++  foobarObject.longStringObj = {
++    toSource: function() longString,
++    toString: function() longString,
++    boom: "explode",
++  };
++
+   console.log("hello", foobarObject);
+ 
+   expectedProps = [
+     {
+       name: "abArray",
+       value: {
+         type: "object",
+         className: "Array",
+@@ -95,16 +101,31 @@ function onAttach(aState, aResponse)
+         type: "function",
+         className: "function",
+         displayString: /function fooSet/,
+         actor: /[a-z]/,
+         inspectable: false,
+       },
+     },
+     {
++      name: "longStringObj",
++      value: {
++        type: "object",
++        className: "Object",
++        actor: /[a-z]/,
++        inspectable: true,
++        displayString: {
++          type: "longString",
++          initial: longString.substring(0,
++            DebuggerServer.LONG_STRING_INITIAL_LENGTH),
++          length: longString.length,
++        },
++      },
++    },
++    {
+       name: "notInspectable",
+       value: {
+         type: "object",
+         className: "Object",
+         actor: /[a-z]/,
+         inspectable: false,
+       },
+     },
