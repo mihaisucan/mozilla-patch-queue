@@ -1,14 +1,14 @@
 # HG changeset patch
 # Parent b859dbfdb81fcbbc679cb6248c3db35b1b252722
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1352141332 -7200
+# Date 1352239122 -7200
 
 Bug 787981 - Use LongStringActor in the Web Console actors: network panel updates
 
 diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/NetworkPanel.jsm
 --- a/browser/devtools/webconsole/NetworkPanel.jsm
 +++ b/browser/devtools/webconsole/NetworkPanel.jsm
-@@ -27,25 +27,32 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+@@ -27,25 +27,33 @@ XPCOMUtils.defineLazyModuleGetter(this, 
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
  let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
  
@@ -34,6 +34,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
    this.httpActivity = aHttpActivity;
 +  this.webConsole = aWebConsoleFrame;
 +  this._longStringClick = this._longStringClick.bind(this);
++  this._responseBodyFetch = this._responseBodyFetch.bind(this);
  
    // Create the underlaying panel
    this.panel = createElement(doc, "panel", {
@@ -42,7 +43,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
      noautofocus: "true",
      noautohide: "true",
      close: "true"
-@@ -237,16 +244,19 @@ NetworkPanel.prototype =
+@@ -237,30 +245,37 @@ NetworkPanel.prototype =
     * Tells if the request body includes form data.
     *
     * @returns boolean
@@ -60,9 +61,30 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
    /**
     * Appends the node with id=aId by the text aValue.
     *
++   * @private
     * @param string aId
     * @param string aValue
-@@ -277,21 +287,27 @@ NetworkPanel.prototype =
+-   * @returns void
++   * @return nsIDOMElement
++   *         The DOM element with id=aId.
+    */
+-  _appendTextNode: function NP_appendTextNode(aId, aValue)
++  _appendTextNode: function NP__appendTextNode(aId, aValue)
+   {
+     let textNode = this.document.createTextNode(aValue);
+-    this.document.getElementById(aId).appendChild(textNode);
++    let elem = this.document.getElementById(aId);
++    elem.appendChild(textNode);
++    return elem;
+   },
+ 
+   /**
+    * Generates some HTML to display the key-value pair of the aList data. The
+    * generated HTML is added to node with id=aParentId.
+    *
+    * @param string aParentId
+    *        Id of the parent node to append the list to.
+@@ -277,19 +292,25 @@ NetworkPanel.prototype =
      let doc = this.document;
  
      aList.sort(function(a, b) {
@@ -71,27 +93,26 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
  
      aList.forEach(function(aItem) {
        let name = aItem.name;
--      let value = aItem.value;
-       if (aIgnoreCookie && name == "Cookie") {
-         return;
-       }
- 
-+      let value = aItem.value;
++      if (aIgnoreCookie && (name == "Cookie" || name == "Set-Cookie")) {
++        return;
++      }
++
+       let value = aItem.value;
+-      if (aIgnoreCookie && name == "Cookie") {
+-        return;
 +      let longString = null;
 +      if (typeof value == "object" && value.type == "longString") {
 +        value = value.initial;
 +        longString = this.webConsole.webConsoleClient.longString(value);
-+      }
-+
+       }
+ 
        /**
         * The following code creates the HTML:
         * <tr>
         * <th scope="row" class="property-name">${line}:</th>
         * <td class="property-value">${aList[line]}</td>
         * </tr>
-        * and adds it to parent.
-        */
-@@ -302,22 +318,50 @@ NetworkPanel.prototype =
+@@ -302,31 +323,66 @@ NetworkPanel.prototype =
        th.setAttribute("class", "property-name");
        th.appendChild(textNode);
        row.appendChild(th);
@@ -105,7 +126,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 +        let a = doc.createElement("a");
 +        a.href = "#";
 +        a.className = "longStringEllipsis";
-+        a.addEventListener("click", this._longStringClick.bind(this, longString));
++        a.addEventListener("mousedown", this._longStringClick.bind(this, aItem));
 +        a.textContent = l10n.getStr("longStringEllipsis");
 +        td.appendChild(a);
 +      }
@@ -113,36 +134,56 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
        row.appendChild(td);
  
        parent.appendChild(row);
-     });
-   },
- 
-+  _longStringClick: function NP__longStringClick(aLongString, aEvent)
+-    });
++    }.bind(this));
++  },
++
++  _longStringClick: function NP__longStringClick(aHeader, aEvent)
 +  {
 +    aEvent.preventDefault();
 +
-+    aLongString.substring(aLongString.initial.length, aLongString.length,
++    let longString = this.webConsole.webConsoleClient.longString(aHeader.value);
++
++    longString.substring(longString.initial.length, longString.length,
 +      function NP__onLongStringSubstring(aResponse)
 +      {
 +        if (aResponse.error) {
-+          Cu.reportError("NP__onLongStringSubstring " + aResponse.error);
++          Cu.reportError("NP__onLongStringSubstring error: " + aResponse.error);
 +          return;
 +        }
++
++        aHeader.value = aHeader.value.initial + aResponse.substring;
 +
 +        let textNode = aEvent.target.previousSibling;
 +        textNode.textContent += aResponse.substring;
 +        textNode.parentNode.removeChild(aEvent.target);
 +      });
-+  },
-+
+   },
+ 
    /**
     * Displays the node with id=aId.
     *
++   * @private
     * @param string aId
-    * @returns void
+-   * @returns void
++   * @return nsIDOMElement
++   *         The element with id=aId.
     */
-   _displayNode: function NP_displayNode(aId)
+-  _displayNode: function NP_displayNode(aId)
++  _displayNode: function NP__displayNode(aId)
    {
-@@ -428,17 +472,22 @@ NetworkPanel.prototype =
+-    this.document.getElementById(aId).style.display = "block";
++    let elem = this.document.getElementById(aId);
++    elem.style.display = "block";
+   },
+ 
+   /**
+    * Sets the request URL, request method, the timing information when the
+    * request started and the request header content on the NetworkPanel.
+    * If the request header contains cookie data, a list of sent cookies is
+    * generated and a special sent cookie section is displayed + the cookie list
+    * added to it.
+@@ -428,41 +484,64 @@ NetworkPanel.prototype =
          deltaDuration += ms;
        }
      });
@@ -154,7 +195,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 -    this._appendList("responseHeadersContent", response.headers);
 +    this._appendList("responseHeadersContent", response.headers, true);
 +
-+    if (request.cookies.length > 0) {
++    if (response.cookies.length > 0) {
 +      this._displayNode("responseCookie");
 +      this._appendList("responseCookieContent", response.cookies);
 +    }
@@ -166,6 +207,281 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
     * the receiving of the response header and the end of the request. Once the
     * image is loaded, the size of the requested image is set.
     *
+    * @returns void
+    */
+   _displayResponseImage: function NP__displayResponseImage()
+   {
+     let self = this;
+     let timing = this.httpActivity.timings;
+     let request = this.httpActivity.request;
++    let response = this.httpActivity.response;
+     let cached = "";
+ 
+     if (this._isResponseCached) {
+       cached = "Cached";
+     }
+ 
++    let text = response.content.text;
++    let longString = null;
++    if (typeof text == "object" && text.type == "longString") {
++      longString = this.webConsole.webConsoleClient.longString(text);
++      text = text.initial;
++
++      let elem = this._appendTextNode("responseBodyFetchLink",
++        this._format("fetchRemainingContentLink",
++                     [response.content.size - text.length]));
++
++      elem.style.display = "block";
++      elem.addEventListener("mousedown", this._responseBodyFetch);
++    }
++
+     let imageNode = this.document.getElementById("responseImage" +
+                                                  cached + "Node");
+-    imageNode.setAttribute("src", request.url);
++    if (!longString) {
++      imageNode.setAttribute("src",
++        "data:" + this.contentType + ";base64," + text);
++    }
+ 
+     // This function is called to set the imageInfo.
+     function setImageInfo() {
+       self._appendTextNode("responseImage" + cached + "Info",
+         self._format("imageSizeDeltaDurationMS",
+           [ imageNode.width, imageNode.height, timing.receive ]
+         )
+       );
+@@ -495,18 +574,64 @@ NetworkPanel.prototype =
+     let timing = this.httpActivity.timings;
+     let response = this.httpActivity.response;
+     let cached =  this._isResponseCached ? "Cached" : "";
+ 
+     this._appendTextNode("responseBody" + cached + "Info",
+       this._format("durationMS", [timing.receive]));
+ 
+     this._displayNode("responseBody" + cached);
+-    this._appendTextNode("responseBody" + cached + "Content",
+-                         response.content.text);
++
++    let text;
++    if (typeof response.content.text == "object") {
++      text = response.content.text.initial;
++
++      let elem = this._appendTextNode("responseBodyFetchLink",
++        this._format("fetchRemainingContentLink",
++                     [response.content.size - text.length]));
++
++      elem.style.display = "block";
++      elem.addEventListener("mousedown", this._responseBodyFetch);
++    }
++    else {
++      text = response.content.text;
++    }
++
++    this._appendTextNode("responseBody" + cached + "Content", text);
++  },
++
++  _responseBodyFetch: function NP__responseBodyFetch(aEvent)
++  {
++    aEvent.target.style.display = "none";
++    aEvent.target.removeEventListener("mousedown", this._responseBodyFetch);
++
++    let content = this.httpActivity.response.content;
++    let longString = this.webConsole.webConsoleClient.longString(content.text);
++    longString.substring(longString.initial.length, longString.length,
++      function NP__onLongStringSubstring(aResponse)
++      {
++        if (aResponse.error) {
++          Cu.reportError("NP__onLongStringSubstring error: " + aResponse.error);
++          return;
++        }
++
++        content.text = content.text.initial + aResponse.substring;
++        let cached =  this._isResponseCached ? "Cached" : "";
++
++        if (this._responseIsImage) {
++          let imageNode = this.document.getElementById("responseImage" +
++                                                       cached + "Node");
++          imageNode.src =
++            "data:" + this.contentType + ";base64," + content.text;
++        }
++        else {
++          this._appendTextNode("responseBody" + cached + "Content",
++                               aResponse.substring);
++        }
++      }.bind(this));
+   },
+ 
+   /**
+    * Displays the `Unknown Content-Type hint` and sets the duration between the
+    * receiving of the response header on the NetworkPanel.
+    *
+    * @returns void
+    */
+diff --git a/browser/devtools/webconsole/NetworkPanel.xhtml b/browser/devtools/webconsole/NetworkPanel.xhtml
+--- a/browser/devtools/webconsole/NetworkPanel.xhtml
++++ b/browser/devtools/webconsole/NetworkPanel.xhtml
+@@ -62,16 +62,21 @@
+ 
+ <div class="group" id="responseContainer" style="display:none">
+   <h1>
+     &networkPanel.responseHeaders;
+     <span id="responseHeadersInfo" class="info">&Delta;</span>
+   </h1>
+   <table class="property-table" id="responseHeadersContent"></table>
+ 
++  <div id="responseCookie" style="display:none">
++    <h1>&networkPanel.responseCookie;</h1>
++    <table class="property-table" id="responseCookieContent"></table>
++  </div>
++
+   <div id="responseBody" style="display:none">
+     <h1>
+       &networkPanel.responseBody;
+       <span class="info" id="responseBodyInfo">&Delta;</span>
+     </h1>
+     <table class="property-table" id="responseBodyContent"></table>
+   </div>
+   <div id="responseBodyCached" style="display:none">
+@@ -107,11 +112,12 @@
+     <h1>
+       &networkPanel.responseImageCached;
+       <span id="responseImageCachedInfo" class="info"></span>
+     </h1>
+     <div id="responseImageNodeDiv">
+       <img id="responseImageCachedNode" />
+     </div>
+   </div>
++  <p id="responseBodyFetchLink" style="display:none"></p>
+ </div>
+ </body>
+ </html>
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
+@@ -4,16 +4,26 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ // Tests that the network panel works.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ const TEST_IMG = "http://example.com/browser/browser/devtools/webconsole/test/test-image.png";
+ const TEST_ENCODING_ISO_8859_1 = "http://example.com/browser/browser/devtools/webconsole/test/test-encoding-ISO-8859-1.html";
+ 
++const TEST_IMG_BASE64 =
++  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAVRJREFU" +
++  "OI2lk7FLw0AUxr+YpC1CBqcMWfsvCCLdXFzqEJCgDl1EQRGxg9AhSBEJONhFhG52UCuFDjq5dxD8" +
++  "FwoO0qGDOBQkl7vLOeWa2EQDffDBvTu+373Hu1OEEJgntGgxGD6J+7fLXKbt5VNUyhsKAChRBQcP" +
++  "FVFeWskFGH694mZroCQqCLlAwPxcgJBP254CmAD5B7C7dgHLMLF3uzoL4DQEod+Z5sP1FizDxGgy" +
++  "BqfhLID9AahX29J89bwPFgMsSEAQglAf9WobhPpScbPXr4FQHyzIADTsDizDRMPuIOC+zEeTMZo9" +
++  "BwH3EfAMACccbtfGaDKGZZg423yUZrdrg3EqxQlPr0BTdTR7joREN2uqnlBmCwW1hIJagtev4f3z" +
++  "A16/JvfiigMSYyzqJXlw/XKUyOORMUaBor6YavgdjKa8xGOnidadmwtwsnMu18q83/kHSou+bFND" +
++  "Dr4AAAAASUVORK5CYII=";
++
+ let testDriver;
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, testNetworkPanel);
+   }, true);
+@@ -75,16 +85,17 @@ function testGen() {
+       cookies: [],
+       headers: [
+         { name: "foo", value: "bar" },
+       ],
+     },
+     response: {
+       headers: [],
+       content: {},
++      cookies: [],
+     },
+     timings: {},
+   };
+ 
+   let networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
+ 
+   is(filterBox._netPanel, networkPanel,
+      "Network panel stored on the anchor object");
+@@ -235,16 +246,17 @@ function testGen() {
+   checkNodeContent(networkPanel, "responseBodyInfo", "2ms");
+ 
+   networkPanel.panel.hidePopup();
+ 
+   // Check image request.
+   info("test 7: image request");
+   httpActivity.response.headers[1].value = "image/png";
+   httpActivity.response.content.mimeType = "image/png";
++  httpActivity.response.content.text = TEST_IMG_BASE64;
+   httpActivity.request.url = TEST_IMG;
+ 
+   networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
+   networkPanel._onUpdate = function() {
+     networkPanel._onUpdate = null;
+     executeSoon(function() {
+       testDriver.next();
+     });
+@@ -259,36 +271,39 @@ function testGen() {
+     responseContainer: true,
+     responseBody: false,
+     responseNoBody: false,
+     responseImage: true,
+     responseImageCached: false
+   });
+ 
+   let imgNode = networkPanel.document.getElementById("responseImageNode");
+-  is(imgNode.getAttribute("src"), TEST_IMG, "Displayed image is correct");
++  is(imgNode.getAttribute("src"), "data:image/png;base64," + TEST_IMG_BASE64,
++      "Displayed image is correct");
+ 
+   function checkImageResponseInfo() {
+     checkNodeContent(networkPanel, "responseImageInfo", "2ms");
+     checkNodeContent(networkPanel, "responseImageInfo", "16x16px");
+   }
+ 
+   // Check if the image is loaded already.
+   if (imgNode.width == 0) {
+     imgNode.addEventListener("load", function onLoad() {
+       imgNode.removeEventListener("load", onLoad, false);
+       checkImageResponseInfo();
++      return;
+       networkPanel.panel.hidePopup();
+       testDriver.next();
+     }, false);
+     // Wait until the image is loaded.
+     yield;
+   }
+   else {
+     checkImageResponseInfo();
++    return;
+     networkPanel.panel.hidePopup();
+   }
+ 
+   // Check cached image request.
+   info("test 8: cached image request");
+   httpActivity.response.httpVersion = "HTTP/1.1";
+   httpActivity.response.status = 304;
+   httpActivity.response.statusText = "Not Modified";
+@@ -310,17 +325,18 @@ function testGen() {
+     responseContainer: true,
+     responseBody: false,
+     responseNoBody: false,
+     responseImage: false,
+     responseImageCached: true
+   });
+ 
+   let imgNode = networkPanel.document.getElementById("responseImageCachedNode");
+-  is(imgNode.getAttribute("src"), TEST_IMG, "Displayed image is correct");
++  is(imgNode.getAttribute("src"), "data:image/png;base64," + TEST_IMG_BASE64,
++     "Displayed image is correct");
+ 
+   networkPanel.panel.hidePopup();
+ 
+   // Test sent form data.
+   info("test 9: sent form data");
+   httpActivity.request.postData.text = [
+     "Content-Type:      application/x-www-form-urlencoded",
+     "Content-Length: 59",
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -251,3 +567,206 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      return netPanel;
    },
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
+--- a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
++++ b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
+@@ -15,16 +15,17 @@
+ <!ENTITY networkPanel.statusCode                  "Status Code">
+ 
+ <!ENTITY networkPanel.requestHeaders              "Request Headers">
+ <!ENTITY networkPanel.requestCookie               "Sent Cookie">
+ <!ENTITY networkPanel.requestBody                 "Request Body">
+ <!ENTITY networkPanel.requestFormData             "Sent Form Data">
+ 
+ <!ENTITY networkPanel.responseHeaders             "Response Headers">
++<!ENTITY networkPanel.responseCookie              "Received Cookie">
+ <!ENTITY networkPanel.responseBody                "Response Body">
+ <!ENTITY networkPanel.responseBodyCached          "Cached Data">
+ <!ENTITY networkPanel.responseBodyUnknownType     "Unknown Content Type">
+ <!ENTITY networkPanel.responseNoBody              "No Response Body">
+ <!ENTITY networkPanel.responseImage               "Received Image">
+ <!ENTITY networkPanel.responseImageCached         "Cached Image">
+ 
+ <!-- LOCALIZATION NOTE (saveBodies.label): You can see this string in the Web
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -169,8 +169,13 @@ listTabs.globalConsoleActor=*Global Cons
+ # LOCALIZATION NOTE (longStringEllipsis): The string displayed after a long
+ # string. This string is clickable such that the rest of the string is retrieved
+ # from the server.
+ longStringEllipsis=[…]
+ 
+ # LOCALIZATION NOTE (executeEmptyInput): This is displayed when the user tries
+ # to execute code, but the input is empty.
+ executeEmptyInput=No value to execute.
++
++# LOCALIZATION NOTE (NetworkPanel.fetchRemainingContentLink): This is displayed
++# in the network panel when the request/response body is only partially
++# available.
++NetworkPanel.fetchRemainingContentLink=Fetch the remaining %1$S bytes.
+diff --git a/browser/themes/gnomestripe/devtools/webconsole_networkpanel.css b/browser/themes/gnomestripe/devtools/webconsole_networkpanel.css
+--- a/browser/themes/gnomestripe/devtools/webconsole_networkpanel.css
++++ b/browser/themes/gnomestripe/devtools/webconsole_networkpanel.css
+@@ -79,8 +79,14 @@ div.group,
+ img#responseImageNode {
+   box-shadow: rgba(0,0,0,0.2) 0px 3px 3.5px;
+   max-width: 100%;
+ }
+ 
+ #responseImageNodeDiv {
+   padding: 5px;
+ }
++
++#responseBodyFetchLink {
++  padding: 5px;
++  margin: 0;
++  cursor: pointer;
++}
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -269,22 +269,23 @@ WebConsoleActor.prototype =
+   getObjectActorByID: function WCA_getObjectActorByID(aActorID)
+   {
+     return this._actorPool.get(aActorID);
+   },
+ 
+   /**
+    * Release an actor.
+    *
+-   * @param object aActor
+-   *        The actor instance you want to release.
++   * @param object|string aActor
++   *        The actor instance you want to release, or the actor ID.
+    */
+   releaseActor: function WCA_releaseActor(aActor)
+   {
+-    this._actorPool.removeActor(aActor.actorID);
++    let id = typeof aActor == "string" ? aActor : aActor.actorID;
++    this._actorPool.removeActor(id);
+   },
+ 
+   //////////////////
+   // Request handlers for known packet types.
+   //////////////////
+ 
+   /**
+    * Handler for the "startListeners" request.
+@@ -942,26 +943,28 @@ function NetworkEventActor(aNetworkEvent
+ 
+   this._response = {
+     headers: [],
+     cookies: [],
+     content: {},
+   };
+ 
+   this._timings = {};
++  this._longStringActors = [];
+ 
+   this._discardRequestBody = aNetworkEvent.discardRequestBody;
+   this._discardResponseBody = aNetworkEvent.discardResponseBody;
+ }
+ 
+ NetworkEventActor.prototype =
+ {
+   _request: null,
+   _response: null,
+   _timings: null,
++  _longStringActors: null,
+ 
+   actorPrefix: "netEvent",
+ 
+   /**
+    * Returns a grip for this actor for returning in a protocol message.
+    */
+   grip: function NEA_grip()
+   {
+@@ -973,16 +976,20 @@ NetworkEventActor.prototype =
+     };
+   },
+ 
+   /**
+    * Releases this actor from the pool.
+    */
+   release: function NEA_release()
+   {
++    for (let actor of this._longStringActors) {
++      this.parent.releaseActor(actor.actor);
++    }
++    this._longStringActors = [];
+     this.parent.releaseActor(this);
+   },
+ 
+   /**
+    * Handle a protocol request to release a grip.
+    */
+   onRelease: function NEA_onRelease()
+   {
+@@ -1145,16 +1152,19 @@ NetworkEventActor.prototype =
+    *
+    * @param object aPostData
+    *        The request POST data.
+    */
+   addRequestPostData: function NEA_addRequestPostData(aPostData)
+   {
+     this._request.postData = aPostData;
+     aPostData.text = this.parent.createStringGrip(aPostData.text);
++    if (typeof aPostData.text == "object") {
++      this._longStringActors.push(aPostData.text);
++    }
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "requestPostData",
+       dataSize: aPostData.text.length,
+       discardRequestBody: this._discardRequestBody,
+     };
+@@ -1237,16 +1247,19 @@ NetworkEventActor.prototype =
+    * @param boolean aDiscardedResponseBody
+    *        Tells if the response content was recorded or not.
+    */
+   addResponseContent:
+   function NEA_addResponseContent(aContent, aDiscardedResponseBody)
+   {
+     this._response.content = aContent;
+     aContent.text = this.parent.createStringGrip(aContent.text);
++    if (typeof aContent.text == "object") {
++      this._longStringActors.push(aContent.text);
++    }
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "responseContent",
+       mimeType: aContent.mimeType,
+       contentSize: aContent.text.length,
+       discardResponseBody: aDiscardedResponseBody,
+@@ -1277,22 +1290,26 @@ NetworkEventActor.prototype =
+ 
+     this.conn.send(packet);
+   },
+ 
+   /**
+    * Prepare the headers array to be sent to the client by using the
+    * LongStringActor for the header values, when needed.
+    *
++   * @private
+    * @param array aHeaders
+    */
+   _prepareHeaders: function NEA__prepareHeaders(aHeaders)
+   {
+     for (let header of aHeaders) {
+       header.value = this.parent.createStringGrip(header.value);
++      if (typeof header.value == "object") {
++        this._longStringActors.push(header.value);
++      }
+     }
+   },
+ };
+ 
+ NetworkEventActor.prototype.requestTypes =
+ {
+   "release": NetworkEventActor.prototype.onRelease,
+   "getRequestHeaders": NetworkEventActor.prototype.onGetRequestHeaders,
