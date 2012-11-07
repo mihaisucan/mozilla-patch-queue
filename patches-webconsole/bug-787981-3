@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent b859dbfdb81fcbbc679cb6248c3db35b1b252722
+# Parent 12dbe9aa1f635777a5690715559a2c87978befa8
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1352239122 -7200
+# Date 1352322980 -7200
 
 Bug 787981 - Use LongStringActor in the Web Console actors: network panel updates
 
@@ -32,7 +32,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
  {
    let doc = aParent.ownerDocument;
    this.httpActivity = aHttpActivity;
-+  this.webConsole = aWebConsoleFrame;
++  this.webconsole = aWebConsoleFrame;
 +  this._longStringClick = this._longStringClick.bind(this);
 +  this._responseBodyFetch = this._responseBodyFetch.bind(this);
  
@@ -43,7 +43,25 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
      noautofocus: "true",
      noautohide: "true",
      close: "true"
-@@ -237,30 +245,37 @@ NetworkPanel.prototype =
+@@ -62,16 +70,17 @@ this.NetworkPanel = function NetworkPane
+ 
+   // Destroy the panel when it's closed.
+   this.panel.addEventListener("popuphidden", function onPopupHide() {
+     self.panel.removeEventListener("popuphidden", onPopupHide, false);
+     self.panel.parentNode.removeChild(self.panel);
+     self.panel = null;
+     self.iframe = null;
+     self.httpActivity = null;
++    self.webconsole = null;
+ 
+     if (self.linkNode) {
+       self.linkNode._panelOpen = false;
+       self.linkNode = null;
+     }
+   }, false);
+ 
+   // Set the document object and update the content once the panel is loaded.
+@@ -237,30 +246,37 @@ NetworkPanel.prototype =
     * Tells if the request body includes form data.
     *
     * @returns boolean
@@ -84,7 +102,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
     *
     * @param string aParentId
     *        Id of the parent node to append the list to.
-@@ -277,19 +292,25 @@ NetworkPanel.prototype =
+@@ -277,19 +293,25 @@ NetworkPanel.prototype =
      let doc = this.document;
  
      aList.sort(function(a, b) {
@@ -103,7 +121,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 +      let longString = null;
 +      if (typeof value == "object" && value.type == "longString") {
 +        value = value.initial;
-+        longString = this.webConsole.webConsoleClient.longString(value);
++        longString = true;
        }
  
        /**
@@ -112,7 +130,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
         * <th scope="row" class="property-name">${line}:</th>
         * <td class="property-value">${aList[line]}</td>
         * </tr>
-@@ -302,31 +323,66 @@ NetworkPanel.prototype =
+@@ -302,31 +324,76 @@ NetworkPanel.prototype =
        th.setAttribute("class", "property-name");
        th.appendChild(textNode);
        row.appendChild(th);
@@ -138,11 +156,21 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 +    }.bind(this));
 +  },
 +
++  /**
++   * The click event handler for the ellipsis which allows the user to retrieve
++   * the full header value.
++   *
++   * @private
++   * @param object aHeader
++   *        The header object with the |name| and |value| properties.
++   * @param nsIDOMEvent aEvent
++   *        The DOM click event object.
++   */
 +  _longStringClick: function NP__longStringClick(aHeader, aEvent)
 +  {
 +    aEvent.preventDefault();
 +
-+    let longString = this.webConsole.webConsoleClient.longString(aHeader.value);
++    let longString = this.webconsole.webConsoleClient.longString(aHeader.value);
 +
 +    longString.substring(longString.initial.length, longString.length,
 +      function NP__onLongStringSubstring(aResponse)
@@ -183,7 +211,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
     * If the request header contains cookie data, a list of sent cookies is
     * generated and a special sent cookie section is displayed + the cookie list
     * added to it.
-@@ -428,41 +484,64 @@ NetworkPanel.prototype =
+@@ -428,41 +495,64 @@ NetworkPanel.prototype =
          deltaDuration += ms;
        }
      });
@@ -224,7 +252,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 +    let text = response.content.text;
 +    let longString = null;
 +    if (typeof text == "object" && text.type == "longString") {
-+      longString = this.webConsole.webConsoleClient.longString(text);
++      longString = true;
 +      text = text.initial;
 +
 +      let elem = this._appendTextNode("responseBodyFetchLink",
@@ -250,7 +278,7 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
            [ imageNode.width, imageNode.height, timing.receive ]
          )
        );
-@@ -495,18 +574,64 @@ NetworkPanel.prototype =
+@@ -495,18 +585,71 @@ NetworkPanel.prototype =
      let timing = this.httpActivity.timings;
      let response = this.httpActivity.response;
      let cached =  this._isResponseCached ? "Cached" : "";
@@ -280,13 +308,20 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 +    this._appendTextNode("responseBody" + cached + "Content", text);
 +  },
 +
++  /**
++   * Click event handler for the link that allows users to fetch the remaining
++   * response body.
++   *
++   * @private
++   * @param nsIDOMEvent aEvent
++   */
 +  _responseBodyFetch: function NP__responseBodyFetch(aEvent)
 +  {
 +    aEvent.target.style.display = "none";
 +    aEvent.target.removeEventListener("mousedown", this._responseBodyFetch);
 +
 +    let content = this.httpActivity.response.content;
-+    let longString = this.webConsole.webConsoleClient.longString(content.text);
++    let longString = this.webconsole.webConsoleClient.longString(content.text);
 +    longString.substring(longString.initial.length, longString.length,
 +      function NP__onLongStringSubstring(aResponse)
 +      {
@@ -320,6 +355,39 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/web
 diff --git a/browser/devtools/webconsole/NetworkPanel.xhtml b/browser/devtools/webconsole/NetworkPanel.xhtml
 --- a/browser/devtools/webconsole/NetworkPanel.xhtml
 +++ b/browser/devtools/webconsole/NetworkPanel.xhtml
+@@ -15,29 +15,29 @@
+ <head>
+   <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+   <link rel="stylesheet" href="chrome://browser/skin/devtools/webconsole_networkpanel.css" type="text/css"/>
+ </head>
+ <body role="application">
+ <table id="header">
+   <tr>
+     <th class="property-name"
+-        scope="row">&networkPanel.requestURL;:</th>
++        scope="row">&networkPanel.requestURL;</th>
+     <td class="property-value"
+         id="headUrl"></td>
+   </tr>
+   <tr>
+     <th class="property-name"
+-        scope="row">&networkPanel.requestMethod;:</th>
++        scope="row">&networkPanel.requestMethod;</th>
+     <td class="property-value"
+         id="headMethod"></td>
+   </tr>
+   <tr>
+     <th class="property-name"
+-        scope="row">&networkPanel.statusCode;:</th>
++        scope="row">&networkPanel.statusCode;</th>
+     <td class="property-value"
+         id="headStatus"></td>
+   </tr>
+ </table>
+ 
+ <div class="group">
+   <h1>
+     &networkPanel.requestHeaders;
 @@ -62,16 +62,21 @@
  
  <div class="group" id="responseContainer" style="display:none">
@@ -355,6 +423,310 @@ diff --git a/browser/devtools/webconsole/NetworkPanel.xhtml b/browser/devtools/w
  </div>
  </body>
  </html>
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -115,16 +115,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_bug664688_sandbox_update_after_navigation.js \
+ 	browser_webconsole_menustatus.js \
+ 	browser_result_format_as_string.js \
+ 	browser_webconsole_bug_737873_mixedcontent.js \
+ 	browser_output_breaks_after_console_dir_uninspectable.js \
+ 	browser_console_log_inspectable_object.js \
+ 	browser_bug_638949_copy_link_location.js \
+ 	browser_output_longstring_expand.js \
++	browser_netpanel_longstring_expand.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ MOCHITEST_BROWSER_FILES += \
+ 	test-console.html \
+ 	test-network.html \
+ 	test-network-request.html \
+ 	test-mutation.html \
+diff --git a/browser/devtools/webconsole/test/browser_netpanel_longstring_expand.js b/browser/devtools/webconsole/test/browser_netpanel_longstring_expand.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_netpanel_longstring_expand.js
+@@ -0,0 +1,278 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++// Tests that the network panel works.
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
++const TEST_IMG = "http://example.com/browser/browser/devtools/webconsole/test/test-image.png";
++const TEST_ENCODING_ISO_8859_1 = "http://example.com/browser/browser/devtools/webconsole/test/test-encoding-ISO-8859-1.html";
++
++const TEST_IMG_BASE64 =
++  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAVRJREFU" +
++  "OI2lk7FLw0AUxr+YpC1CBqcMWfsvCCLdXFzqEJCgDl1EQRGxg9AhSBEJONhFhG52UCuFDjq5dxD8" +
++  "FwoO0qGDOBQkl7vLOeWa2EQDffDBvTu+373Hu1OEEJgntGgxGD6J+7fLXKbt5VNUyhsKAChRBQcP" +
++  "FVFeWskFGH694mZroCQqCLlAwPxcgJBP254CmAD5B7C7dgHLMLF3uzoL4DQEod+Z5sP1FizDxGgy" +
++  "BqfhLID9AahX29J89bwPFgMsSEAQglAf9WobhPpScbPXr4FQHyzIADTsDizDRMPuIOC+zEeTMZo9" +
++  "BwH3EfAMACccbtfGaDKGZZg423yUZrdrg3EqxQlPr0BTdTR7joREN2uqnlBmCwW1hIJagtev4f3z" +
++  "A16/JvfiigMSYyzqJXlw/XKUyOORMUaBor6YavgdjKa8xGOnidadmwtwsnMu18q83/kHSou+bFND" +
++  "Dr4AAAAASUVORK5CYII=";
++
++let testDriver;
++
++function test() {
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, testNetworkPanel);
++  }, true);
++}
++
++function testNetworkPanel() {
++  testDriver = testGen();
++  testDriver.next();
++}
++
++function checkIsVisible(aPanel, aList) {
++  for (let id in aList) {
++    let node = aPanel.document.getElementById(id);
++    let isVisible = aList[id];
++    is(node.style.display, (isVisible ? "block" : "none"), id + " isVisible=" + isVisible);
++  }
++}
++
++function checkNodeContent(aPanel, aId, aContent) {
++  let node = aPanel.document.getElementById(aId);
++  if (node == null) {
++    ok(false, "Tried to access node " + aId + " that doesn't exist!");
++  }
++  else if (node.textContent.indexOf(aContent) != -1) {
++    ok(true, "checking content of " + aId);
++  }
++  else {
++    ok(false, "Got false value for " + aId + ": " + node.textContent + " doesn't have " + aContent);
++  }
++}
++
++function checkNodeKeyValue(aPanel, aId, aKey, aValue) {
++  let node = aPanel.document.getElementById(aId);
++
++  let headers = node.querySelectorAll("th");
++  for (let i = 0; i < headers.length; i++) {
++    if (headers[i].textContent == (aKey + ":")) {
++      is(headers[i].nextElementSibling.textContent, aValue,
++         "checking content of " + aId + " for key " + aKey);
++      return;
++    }
++  }
++
++  ok(false, "content check failed for " + aId + ", key " + aKey);
++}
++
++function testGen() {
++  let hud = HUDService.getHudByWindow(content);
++  let filterBox = hud.ui.filterBox;
++
++  let headerValue = (new Array(456)).join("fooz bar");
++  let headerValueGrip = {
++    type: "longString",
++    initial: headerValue.substr(0, 123),
++    length: headerValue.length,
++    actor: "faktor",
++    _fullString: headerValue,
++  };
++
++  let imageContentGrip = {
++    type: "longString",
++    initial: TEST_IMG_BASE64.substr(0, 143),
++    length: TEST_IMG_BASE64.length,
++    actor: "faktor2",
++    _fullString: TEST_IMG_BASE64,
++  };
++
++  let httpActivity = {
++    updates: ["responseContent", "eventTimings"],
++    discardRequestBody: true,
++    discardResponseBody: false,
++    startedDateTime: (new Date()).toISOString(),
++    request: {
++      url: TEST_IMG,
++      method: "GET",
++      cookies: [],
++      headers: [
++        { name: "foo", value: "bar" },
++        { name: "loongstring", value: headerValueGrip },
++      ],
++    },
++    response: {
++      httpVersion: "HTTP/3.14",
++      status: 2012,
++      statusText: "ddahl likes tacos :)",
++      headers: [
++        { name: "Content-Type", value: "image/png" },
++      ],
++      content: { mimeType: "image/png", text: imageContentGrip },
++      cookies: [],
++    },
++    timings: { wait: 15, receive: 23 },
++  };
++
++  let networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
++
++  is(filterBox._netPanel, networkPanel,
++     "Network panel stored on the anchor object");
++
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
++
++  yield;
++
++  info("test 1: check if a header value is expandable");
++
++  checkIsVisible(networkPanel, {
++    requestCookie: false,
++    requestFormData: false,
++    requestBody: false,
++    responseContainer: true,
++    responseBody: false,
++    responseNoBody: false,
++    responseImage: true,
++    responseImageCached: false,
++    responseBodyFetchLink: true,
++  });
++
++  checkNodeKeyValue(networkPanel, "requestHeadersContent", "foo", "bar");
++  checkNodeKeyValue(networkPanel, "requestHeadersContent", "loongstring",
++                    headerValueGrip.initial + "[\u2026]");
++
++  let webConsoleClient = networkPanel.webconsole.webConsoleClient;
++  let longStringFn = webConsoleClient.longString;
++
++  let expectedGrip = headerValueGrip;
++
++  function longStringClientProvider(aLongString)
++  {
++    is(aLongString, expectedGrip,
++       "longString grip is correct");
++
++    return {
++      initial: expectedGrip.initial,
++      length: expectedGrip.length,
++      substring: function(aStart, aEnd, aCallback) {
++        is(aStart, expectedGrip.initial.length,
++           "substring start is correct");
++        is(aEnd, expectedGrip.length,
++           "substring end is correct");
++
++        executeSoon(function() {
++          aCallback({
++            substring: expectedGrip._fullString.substring(aStart, aEnd),
++          });
++
++          executeSoon(function() {
++            testDriver.next();
++          });
++        });
++      },
++    };
++  }
++
++  webConsoleClient.longString = longStringClientProvider;
++
++  let clickable = networkPanel.document
++                  .querySelector("#requestHeadersContent .longStringEllipsis");
++  ok(clickable, "long string ellipsis is shown");
++
++  EventUtils.sendMouseEvent({ type: "mousedown"}, clickable,
++                             networkPanel.document.defaultView);
++
++  yield;
++
++  clickable = networkPanel.document
++              .querySelector("#requestHeadersContent .longStringEllipsis");
++  ok(!clickable, "long string ellipsis is not shown");
++
++  checkNodeKeyValue(networkPanel, "requestHeadersContent", "loongstring",
++                    expectedGrip._fullString);
++
++  info("test 2: check that response body image fetching works");
++  expectedGrip = imageContentGrip;
++
++  let imgNode = networkPanel.document.getElementById("responseImageNode");
++  ok(!imgNode.getAttribute("src"), "no image is displayed");
++
++  clickable = networkPanel.document.querySelector("#responseBodyFetchLink");
++  EventUtils.sendMouseEvent({ type: "mousedown"}, clickable,
++                             networkPanel.document.defaultView);
++
++  yield;
++
++  webConsoleClient.longString = longStringFn;
++
++  imgNode = networkPanel.document.getElementById("responseImageNode");
++  is(imgNode.getAttribute("src"), "data:image/png;base64," + TEST_IMG_BASE64,
++     "displayed image is correct");
++  is(clickable.style.display, "none", "#responseBodyFetchLink is not visible");
++
++  networkPanel.panel.hidePopup();
++
++  info("test 3; reponse body long text");
++
++  httpActivity.response.content.mimeType = "text/plain";
++  httpActivity.response.headers[0].value = "text/plain";
++
++  // Reset response.content.text to avoid caching of the full string.
++  httpActivity.response.content.text = imageContentGrip;
++
++  networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
++  is(filterBox._netPanel, networkPanel,
++     "Network panel stored on httpActivity object");
++
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
++
++  yield;
++
++  checkIsVisible(networkPanel, {
++    requestCookie: false,
++    requestFormData: false,
++    requestBody: false,
++    responseContainer: true,
++    responseBody: true,
++    responseNoBody: false,
++    responseImage: false,
++    responseImageCached: false,
++    responseBodyFetchLink: true,
++  });
++
++  checkNodeContent(networkPanel, "responseBodyContent", expectedGrip.initial);
++
++  webConsoleClient.longString = longStringClientProvider;
++
++  clickable = networkPanel.document.querySelector("#responseBodyFetchLink");
++  EventUtils.sendMouseEvent({ type: "mousedown"}, clickable,
++                             networkPanel.document.defaultView);
++
++  yield;
++
++  webConsoleClient.longString = longStringFn;
++  is(clickable.style.display, "none", "#responseBodyFetchLink is not visible");
++  checkNodeContent(networkPanel, "responseBodyContent", TEST_IMG_BASE64);
++
++  networkPanel.panel.hidePopup();
++
++  // All done!
++  testDriver = null;
++  executeSoon(finishTest);
++
++  yield;
++}
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_network_panel.js
@@ -403,11 +775,67 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
  
    is(filterBox._netPanel, networkPanel,
       "Network panel stored on the anchor object");
-@@ -235,16 +246,17 @@ function testGen() {
+@@ -218,33 +229,73 @@ function testGen() {
+ 
+   yield;
+ 
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestFormData: false,
+     requestCookie: true,
+     responseContainer: true,
++    responseCookie: false,
+     responseBody: true,
+     responseNoBody: false,
+     responseImage: false,
+     responseImageCached: false
+   });
+ 
+   checkNodeKeyValue(networkPanel, "requestCookieContent", "foo", "bar");
+   checkNodeKeyValue(networkPanel, "requestCookieContent", "hello", "world");
+   checkNodeContent(networkPanel, "responseBodyContent", "get out here");
    checkNodeContent(networkPanel, "responseBodyInfo", "2ms");
  
    networkPanel.panel.hidePopup();
  
++  // Third run: Test for response cookies.
++  info("test 6b: response cookies");
++  httpActivity.response.cookies.push(
++    { name: "foobar", value: "boom" },
++    { name: "foobaz", value: "omg" }
++  );
++
++  networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
++  is(filterBox._netPanel, networkPanel,
++     "Network panel stored on httpActivity object");
++
++  networkPanel._onUpdate = function() {
++    networkPanel._onUpdate = null;
++    executeSoon(function() {
++      testDriver.next();
++    });
++  };
++
++  yield;
++
++  checkIsVisible(networkPanel, {
++    requestBody: true,
++    requestFormData: false,
++    requestCookie: true,
++    responseContainer: true,
++    responseCookie: true,
++    responseBody: true,
++    responseNoBody: false,
++    responseImage: false,
++    responseImageCached: false,
++    responseBodyFetchLink: false,
++  });
++
++  checkNodeKeyValue(networkPanel, "responseCookieContent", "foobar", "boom");
++  checkNodeKeyValue(networkPanel, "responseCookieContent", "foobaz", "omg");
++
++  networkPanel.panel.hidePopup();
++
    // Check image request.
    info("test 7: image request");
    httpActivity.response.headers[1].value = "image/png";
@@ -421,12 +849,18 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
      executeSoon(function() {
        testDriver.next();
      });
-@@ -259,36 +271,39 @@ function testGen() {
+@@ -255,42 +306,37 @@ function testGen() {
+   checkIsVisible(networkPanel, {
+     requestBody: true,
+     requestFormData: false,
+     requestCookie: true,
      responseContainer: true,
      responseBody: false,
      responseNoBody: false,
      responseImage: true,
-     responseImageCached: false
+-    responseImageCached: false
++    responseImageCached: false,
++    responseBodyFetchLink: false,
    });
  
    let imgNode = networkPanel.document.getElementById("responseImageNode");
@@ -440,29 +874,34 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_network_panel.j
    }
  
    // Check if the image is loaded already.
-   if (imgNode.width == 0) {
-     imgNode.addEventListener("load", function onLoad() {
-       imgNode.removeEventListener("load", onLoad, false);
-       checkImageResponseInfo();
-+      return;
-       networkPanel.panel.hidePopup();
-       testDriver.next();
-     }, false);
-     // Wait until the image is loaded.
-     yield;
-   }
-   else {
+-  if (imgNode.width == 0) {
+-    imgNode.addEventListener("load", function onLoad() {
+-      imgNode.removeEventListener("load", onLoad, false);
+-      checkImageResponseInfo();
+-      networkPanel.panel.hidePopup();
+-      testDriver.next();
+-    }, false);
+-    // Wait until the image is loaded.
+-    yield;
+-  }
+-  else {
++  imgNode.addEventListener("load", function onLoad() {
++    imgNode.removeEventListener("load", onLoad, false);
      checkImageResponseInfo();
-+    return;
      networkPanel.panel.hidePopup();
-   }
+-  }
++    testDriver.next();
++  }, false);
++  yield;
  
    // Check cached image request.
    info("test 8: cached image request");
    httpActivity.response.httpVersion = "HTTP/1.1";
    httpActivity.response.status = 304;
    httpActivity.response.statusText = "Not Modified";
-@@ -310,17 +325,18 @@ function testGen() {
+ 
+   networkPanel = hud.ui.openNetworkPanel(filterBox, httpActivity);
+@@ -310,17 +356,18 @@ function testGen() {
      responseContainer: true,
      responseBody: false,
      responseNoBody: false,
@@ -570,8 +1009,21 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 diff --git a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
 --- a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
 +++ b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
-@@ -15,16 +15,17 @@
- <!ENTITY networkPanel.statusCode                  "Status Code">
+@@ -5,26 +5,27 @@
+ <!-- LOCALIZATION NOTE : FILE The correct localization of this file might be to
+   - keep it in English, or another language commonly spoken among web developers.
+   - You want to make that choice consistent across the developer tools.
+   - A good criteria is the language in which you'd find the best
+   - documentation on web development on the web. -->
+ 
+ <!ENTITY window.title "Web Console">
+ 
+-<!ENTITY networkPanel.requestURL                  "Request URL">
+-<!ENTITY networkPanel.requestMethod               "Request Method">
+-<!ENTITY networkPanel.statusCode                  "Status Code">
++<!ENTITY networkPanel.requestURL                  "Request URL:">
++<!ENTITY networkPanel.requestMethod               "Request Method:">
++<!ENTITY networkPanel.statusCode                  "Status Code:">
  
  <!ENTITY networkPanel.requestHeaders              "Request Headers">
  <!ENTITY networkPanel.requestCookie               "Sent Cookie">
@@ -608,7 +1060,7 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 diff --git a/browser/themes/gnomestripe/devtools/webconsole_networkpanel.css b/browser/themes/gnomestripe/devtools/webconsole_networkpanel.css
 --- a/browser/themes/gnomestripe/devtools/webconsole_networkpanel.css
 +++ b/browser/themes/gnomestripe/devtools/webconsole_networkpanel.css
-@@ -79,8 +79,14 @@ div.group,
+@@ -79,8 +79,18 @@ div.group,
  img#responseImageNode {
    box-shadow: rgba(0,0,0,0.2) 0px 3px 3.5px;
    max-width: 100%;
@@ -622,6 +1074,54 @@ diff --git a/browser/themes/gnomestripe/devtools/webconsole_networkpanel.css b/b
 +  padding: 5px;
 +  margin: 0;
 +  cursor: pointer;
++}
++
++.longStringEllipsis {
++  margin-left: 0.6em;
++}
+diff --git a/browser/themes/pinstripe/devtools/webconsole_networkpanel.css b/browser/themes/pinstripe/devtools/webconsole_networkpanel.css
+--- a/browser/themes/pinstripe/devtools/webconsole_networkpanel.css
++++ b/browser/themes/pinstripe/devtools/webconsole_networkpanel.css
+@@ -80,8 +80,18 @@ div.group,
+ img#responseImageNode {
+   box-shadow: rgba(0,0,0,0.2) 0px 3px 3.5px;
+   max-width: 100%;
+ }
+ 
+ #responseImageNodeDiv {
+   padding: 5px;
+ }
++
++#responseBodyFetchLink {
++  padding: 5px;
++  margin: 0;
++  cursor: pointer;
++}
++
++.longStringEllipsis {
++  margin-left: 0.6em;
++}
+diff --git a/browser/themes/winstripe/devtools/webconsole_networkpanel.css b/browser/themes/winstripe/devtools/webconsole_networkpanel.css
+--- a/browser/themes/winstripe/devtools/webconsole_networkpanel.css
++++ b/browser/themes/winstripe/devtools/webconsole_networkpanel.css
+@@ -80,8 +80,18 @@ div.group,
+ img#responseImageNode {
+   box-shadow: rgba(0,0,0,0.2) 0px 3px 3.5px;
+   max-width: 100%;
+ }
+ 
+ #responseImageNodeDiv {
+   padding: 5px;
+ }
++
++#responseBodyFetchLink {
++  padding: 5px;
++  margin: 0;
++  cursor: pointer;
++}
++
++.longStringEllipsis {
++  margin-left: 0.6em;
 +}
 diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 --- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
@@ -770,3 +1270,194 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
  {
    "release": NetworkEventActor.prototype.onRelease,
    "getRequestHeaders": NetworkEventActor.prototype.onGetRequestHeaders,
+diff --git a/toolkit/devtools/webconsole/test/Makefile.in b/toolkit/devtools/webconsole/test/Makefile.in
+--- a/toolkit/devtools/webconsole/test/Makefile.in
++++ b/toolkit/devtools/webconsole/test/Makefile.in
+@@ -17,12 +17,13 @@ MOCHITEST_CHROME_FILES = \
+     test_consoleapi.html \
+     test_jsterm.html \
+     test_object_actor.html \
+     test_network_get.html \
+     test_network_post.html \
+     test_file_uri.html \
+     network_requests_iframe.html \
+     data.json \
++    data.json^headers^ \
+     common.js \
+     $(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/toolkit/devtools/webconsole/test/common.js b/toolkit/devtools/webconsole/test/common.js
+--- a/toolkit/devtools/webconsole/test/common.js
++++ b/toolkit/devtools/webconsole/test/common.js
+@@ -95,50 +95,58 @@ function checkConsoleAPICall(aCall, aExp
+ }
+ 
+ function checkObject(aObject, aExpected)
+ {
+   for (let name of Object.keys(aExpected))
+   {
+     let expected = aExpected[name];
+     let value = aObject[name];
+-    if (value === undefined) {
+-      ok(false, "'" + name + "' is undefined");
+-    }
+-    else if (typeof expected == "string" ||
+-        typeof expected == "number" ||
+-        typeof expected == "boolean") {
+-      is(value, expected, "property '" + name + "'");
+-    }
+-    else if (expected instanceof RegExp) {
+-      ok(expected.test(value), name + ": " + expected);
+-    }
+-    else if (Array.isArray(expected)) {
+-      info("checking array for property '" + name + "'");
+-      checkObject(value, expected);
+-    }
+-    else if (typeof expected == "object") {
+-      info("checking object for property '" + name + "'");
+-      checkObject(value, expected);
+-    }
++    checkValue(name, value, expected);
++  }
++}
++
++function checkValue(aName, aValue, aExpected)
++{
++  if (aValue === undefined) {
++    ok(false, "'" + aName + "' is undefined");
++  }
++  else if (typeof aExpected == "string" || typeof aExpected == "number" ||
++           typeof aExpected == "boolean") {
++    is(aValue, aExpected, "property '" + aName + "'");
++  }
++  else if (aExpected instanceof RegExp) {
++    ok(aExpected.test(aValue), aName + ": " + aExpected);
++  }
++  else if (Array.isArray(aExpected)) {
++    info("checking array for property '" + aName + "'");
++    checkObject(aValue, aExpected);
++  }
++  else if (typeof aExpected == "object") {
++    info("checking object for property '" + aName + "'");
++    checkObject(aValue, aExpected);
+   }
+ }
+ 
+ function checkHeadersOrCookies(aArray, aExpected)
+ {
++  let foundHeaders = {};
++
+   for (let elem of aArray) {
+     if (!(elem.name in aExpected)) {
+       continue;
+     }
+-    let expected = aExpected[elem.name];
+-    if (expected instanceof RegExp) {
+-      ok(expected.test(elem.value), elem.name + ": " + expected);
+-    }
+-    else {
+-      is(elem.value, expected, elem.name);
++    foundHeaders[elem.name] = true;
++    info("checking value of header " + elem.name);
++    checkValue(elem.name, elem.value, aExpected[elem.name]);
++  }
++
++  for (let header in aExpected) {
++    if (!(header in foundHeaders)) {
++      ok(false, header + " was not found");
+     }
+   }
+ }
+ 
+ var gTestState = {};
+ 
+ function runTests(aTests, aEndCallback)
+ {
+diff --git a/toolkit/devtools/webconsole/test/data.json^headers^ b/toolkit/devtools/webconsole/test/data.json^headers^
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/data.json^headers^
+@@ -0,0 +1,2 @@
++x-very-long: Lorem ipsum dolor sit amet, consectetur adipiscing elit. Suspendisse a ipsum massa. Phasellus at elit dictum libero laoreet sagittis. Phasellus condimentum ultricies imperdiet. Nam eu ligula justo, ut tincidunt quam. Etiam sollicitudin, tortor sed egestas blandit, sapien sem tincidunt nulla, eu luctus libero odio quis leo. Nam elit massa, mattis quis blandit ac, facilisis vitae arcu. Donec vitae dictum neque. Proin ornare nisl at lectus commodo iaculis eget eget est. Quisque scelerisque vestibulum quam sed interdum.
++x-very-short: hello world
+diff --git a/toolkit/devtools/webconsole/test/test_network_get.html b/toolkit/devtools/webconsole/test/test_network_get.html
+--- a/toolkit/devtools/webconsole/test/test_network_get.html
++++ b/toolkit/devtools/webconsole/test/test_network_get.html
+@@ -21,16 +21,23 @@ function startTest()
+   removeEventListener("load", startTest);
+   attachConsole(["NetworkActivity"], onAttach, true);
+ }
+ 
+ function onAttach(aState, aResponse)
+ {
+   info("test network GET request");
+ 
++  window.ORIGINAL_LONG_STRING_LENGTH = DebuggerServer.LONG_STRING_LENGTH;
++  window.ORIGINAL_LONG_STRING_INITIAL_LENGTH =
++    DebuggerServer.LONG_STRING_INITIAL_LENGTH;
++
++  DebuggerServer.LONG_STRING_LENGTH = 400;
++  DebuggerServer.LONG_STRING_INITIAL_LENGTH = 400;
++
+   onNetworkEvent = onNetworkEvent.bind(null, aState);
+   aState.dbgClient.addListener("networkEvent", onNetworkEvent);
+   onNetworkEventUpdate = onNetworkEventUpdate.bind(null, aState);
+   aState.dbgClient.addListener("networkEventUpdate", onNetworkEventUpdate);
+ 
+   let iframe = document.querySelector("iframe").contentWindow;
+   iframe.wrappedJSObject.testXhrGet();
+ }
+@@ -172,24 +179,31 @@ function onRequestPostData(aState, aResp
+ 
+   onResponseHeaders = onResponseHeaders.bind(null, aState);
+   aState.client.getResponseHeaders(aState.netActor,
+                                    onResponseHeaders);
+ }
+ 
+ function onResponseHeaders(aState, aResponse)
+ {
+-  info("checking response headers");
++  info("checking response headers: " + aResponse.headers.length);
+ 
+   ok(aResponse.headers.length > 0, "response headers > 0");
+   ok(aResponse.headersSize > 0, "response headersSize > 0");
+ 
+   checkHeadersOrCookies(aResponse.headers, {
+     "Content-Type": /^application\/(json|octet-stream)$/,
+     "Content-Length": /^\d+$/,
++    "x-very-short": "hello world",
++    "x-very-long": {
++      "type": "longString",
++      "length": 521,
++      "initial": /^Lorem ipsum.+\. Donec vitae d$/,
++      "actor": /[a-z]/,
++    },
+   });
+ 
+   onResponseCookies = onResponseCookies.bind(null, aState);
+   aState.client.getResponseCookies(aState.netActor,
+                                   onResponseCookies);
+ }
+ 
+ function onResponseCookies(aState, aResponse)
+@@ -227,16 +241,19 @@ function onEventTimings(aState, aRespons
+       send: /^-1|\d+$/,
+       wait: /^-1|\d+$/,
+       receive: /^-1|\d+$/,
+     },
+     totalTime: /^\d+$/,
+   });
+ 
+   closeDebugger(aState, function() {
++    DebuggerServer.LONG_STRING_LENGTH = ORIGINAL_LONG_STRING_LENGTH;
++    DebuggerServer.LONG_STRING_INITIAL_LENGTH = ORIGINAL_LONG_STRING_INITIAL_LENGTH;
++
+     SimpleTest.finish();
+   });
+ }
+ 
+ addEventListener("load", startTest);
+ </script>
+ </body>
+ </html>
