@@ -1,0 +1,264 @@
+# HG changeset patch
+# Parent 79dd02225e4e9e951c1534ec18b65fb40e6c049a
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1353089778 -7200
+
+Bug 811282 - Remote Console fails to close completely in the event of a connection error
+
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -160,16 +160,18 @@ const OUTPUT_INTERVAL = 50; // milliseco
+ const THROTTLE_UPDATES = 1000; // milliseconds
+ 
+ // The preference prefix for all of the Web Console filters.
+ const FILTER_PREFS_PREFIX = "devtools.webconsole.filter.";
+ 
+ // The minimum font size.
+ const MIN_FONT_SIZE = 10;
+ 
++const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
++
+ /**
+  * A WebConsoleFrame instance is an interactive console initialized *per tab*
+  * that displays console log data as well as provides an interactive terminal to
+  * manipulate the current tab's document content.
+  *
+  * The WebConsoleFrame is responsible for the actual Web Console UI
+  * implementation.
+  *
+@@ -186,16 +188,17 @@ function WebConsoleFrame(aWebConsoleOwne
+   this._cssNodes = {};
+   this._outputQueue = [];
+   this._pruneCategoriesQueue = {};
+   this._networkRequests = {};
+ 
+   this._toggleFilter = this._toggleFilter.bind(this);
+   this._onPositionConsoleCommand = this._onPositionConsoleCommand.bind(this);
+   this._flushMessageQueue = this._flushMessageQueue.bind(this);
++  this._connectionTimeout = this._connectionTimeout.bind(this);
+ 
+   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+   this._outputTimerInitialized = false;
+ 
+   this._initDefaultFilterPrefs();
+   this._commandController = new CommandController(this);
+   this.positionConsole(aPosition, window);
+ 
+@@ -218,16 +221,23 @@ WebConsoleFrame.prototype = {
+    * the remote server, using the remote debugging protocol.
+    *
+    * @see WebConsoleConnectionProxy
+    * @type object
+    */
+   proxy: null,
+ 
+   /**
++   * Timer used for the connection.
++   * @private
++   * @type object
++   */
++  _connectTimer: null,
++
++  /**
+    * Getter for the xul:popupset that holds any popups we open.
+    * @type nsIDOMElement
+    */
+   get popupset() this.owner.mainPopupSet,
+ 
+   /**
+    * Holds the network requests currently displayed by the Web Console. Each key
+    * represents the connection ID and the value is network request information.
+@@ -363,23 +373,64 @@ WebConsoleFrame.prototype = {
+    */
+   _initConnection: function WCF__initConnection()
+   {
+     this.proxy = new WebConsoleConnectionProxy(this, {
+       host: this.owner.remoteHost,
+       port: this.owner.remotePort,
+     });
+ 
++    let timeout = Services.prefs.getIntPref(PREF_CONNECTION_TIMEOUT);
++    this._connectTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++    this._connectTimer.initWithCallback(this._connectionTimeout,
++                                        timeout, Ci.nsITimer.TYPE_ONE_SHOT);
++
+     this.proxy.connect(function() {
+-      this.saveRequestAndResponseBodies = this._saveRequestAndResponseBodies;
+-      this._onInitComplete();
++      if (this._connectTimer) {
++        this._connectTimer.cancel();
++        this._connectTimer = null;
++        this.saveRequestAndResponseBodies = this._saveRequestAndResponseBodies;
++        this._onInitComplete();
++      }
+     }.bind(this));
+   },
+ 
+   /**
++   * Connection timeout handler. This method simply prints a message informing
++   * the user that the connection timed-out.
++   * @private
++   */
++  _connectionTimeout: function WCF__connectionTimeout()
++  {
++    this._connectTimer = null;
++
++    let node = this.createMessageNode(CATEGORY_JS, SEVERITY_ERROR,
++                                      l10n.getStr("connectionTimeout"));
++    this.outputMessage(CATEGORY_JS, node);
++
++    // Allow initialization to complete.
++    this._onInitComplete();
++  },
++
++  /**
++   * Reset the connection timeout timer.
++   * @private
++   */
++  _resetConnectionTimeout: function WCF__resetConnectionTimeout()
++  {
++    let timer = this._connectTimer;
++    if (timer) {
++      let timeout = timer.delay;
++      timer.cancel();
++      timer.initWithCallback(this._connectionTimeout, timeout,
++                             Ci.nsITimer.TYPE_ONE_SHOT);
++    }
++  },
++
++  /**
+    * Find the Web Console UI elements and setup event listeners as needed.
+    * @private
+    */
+   _initUI: function WCF__initUI()
+   {
+     let doc = this.document;
+ 
+     this.filterBox = doc.querySelector(".hud-filter-box");
+@@ -2727,16 +2778,21 @@ WebConsoleFrame.prototype = {
+     this._networkRequests = {};
+ 
+     if (this._outputTimerInitialized) {
+       this._outputTimerInitialized = false;
+       this._outputTimer.cancel();
+     }
+     this._outputTimer = null;
+ 
++    if (this._connectTimer) {
++      this._connectTimer.cancel();
++    }
++    this._connectTimer = null;
++
+     if (this.proxy) {
+       this.proxy.disconnect(aOnDestroy);
+       this.proxy = null;
+     }
+ 
+     if (this.jsterm) {
+       this.jsterm.destroy();
+       this.jsterm = null;
+@@ -4087,16 +4143,18 @@ WebConsoleConnectionProxy.prototype = {
+    * @param object aResponse
+    *        The JSON response object received from the server.
+    */
+   _onListTabs: function WCCP__onListTabs(aCallback, aResponse)
+   {
+     let selectedTab;
+ 
+     if (this.remoteHost) {
++      this.owner._connectTimer.cancel();
++
+       let tabs = [];
+       for (let tab of aResponse.tabs) {
+         tabs.push(tab.title);
+       }
+ 
+       tabs.push(l10n.getStr("listTabs.globalConsoleActor"));
+ 
+       let selected = {};
+@@ -4116,16 +4174,18 @@ WebConsoleConnectionProxy.prototype = {
+     if (selectedTab) {
+       this._consoleActor = selectedTab.consoleActor;
+       this.owner.onLocationChange(selectedTab.url, selectedTab.title);
+     }
+     else {
+       this._consoleActor = aResponse.consoleActor;
+     }
+ 
++    this.owner._resetConnectionTimeout();
++
+     let listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
+                      "FileActivity", "LocationChange"];
+     this.client.attachConsole(this._consoleActor, listeners,
+                               this._onAttachConsole.bind(this, aCallback));
+   },
+ 
+   /**
+    * The "attachConsole" response handler.
+@@ -4313,23 +4373,48 @@ WebConsoleConnectionProxy.prototype = {
+    */
+   disconnect: function WCCP_disconnect(aOnDisconnect)
+   {
+     if (!this.client) {
+       aOnDisconnect && aOnDisconnect();
+       return;
+     }
+ 
++    let onDisconnect = function() {
++      if (timer) {
++        timer.cancel();
++        timer = null;
++      }
++      if (aOnDisconnect) {
++        aOnDisconnect();
++        aOnDisconnect = null;
++      }
++    };
++
++    let timer = null;
++    if (aOnDisconnect) {
++      timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++      timer.initWithCallback(onDisconnect, 1500, Ci.nsITimer.TYPE_ONE_SHOT);
++    }
++
+     this.client.removeListener("pageError", this._onPageError);
+     this.client.removeListener("consoleAPICall", this._onConsoleAPICall);
+     this.client.removeListener("networkEvent", this._onNetworkEvent);
+     this.client.removeListener("networkEventUpdate", this._onNetworkEventUpdate);
+     this.client.removeListener("fileActivity", this._onFileActivity);
+     this.client.removeListener("locationChange", this._onLocationChange);
+-    this.client.close(aOnDisconnect);
++
++    try {
++      this.client.close(onDisconnect);
++    }
++    catch (ex) {
++      Cu.reportError("Web Console disconnect exception: " + ex);
++      Cu.reportError(ex.stack);
++      onDisconnect();
++    }
+ 
+     this.client = null;
+     this.webConsoleClient = null;
+     this.connected = false;
+     this.owner = null;
+   },
+ };
+ 
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -179,8 +179,12 @@ executeEmptyInput=No value to execute.
+ # displayed in the network panel when the response body is only partially
+ # available.
+ NetworkPanel.fetchRemainingResponseContentLink=Fetch the remaining %1$S bytes
+ 
+ # LOCALIZATION NOTE (NetworkPanel.fetchRemainingRequestContentLink): This is
+ # displayed in the network panel when the request body is only partially
+ # available.
+ NetworkPanel.fetchRemainingRequestContentLink=Fetch the request body (%1$S bytes)
++
++# LOCALIZATION NOTE (connectionTimeout): Message displayed when the Remote Web
++# Console fails to connect to the server due to a timeout.
++connectionTimeout=Connection timeout. Check the Error Console on both ends for potential error messages. Reopen the Web Console to try again.
