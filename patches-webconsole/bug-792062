@@ -1,0 +1,82 @@
+# HG changeset patch
+# Parent 132d2e88ef03a52666072c46c9ced0ac81febf2a
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1353923566 -7200
+
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -3991,16 +3991,22 @@ WebConsoleConnectionProxy.prototype = {
+    * The owning Web Console instance.
+    *
+    * @see WebConsoleFrame
+    * @type object
+    */
+   owner: null,
+ 
+   /**
++   * The target that the console connects to.
++   * @type RemoteTarget
++   */
++  target: null,
++
++  /**
+    * The DebuggerClient object.
+    *
+    * @see DebuggerClient
+    * @type object
+    */
+   client: null,
+ 
+   /**
+@@ -4065,16 +4071,17 @@ WebConsoleConnectionProxy.prototype = {
+     }
+ 
+     client.addListener("pageError", this._onPageError);
+     client.addListener("consoleAPICall", this._onConsoleAPICall);
+     client.addListener("networkEvent", this._onNetworkEvent);
+     client.addListener("networkEventUpdate", this._onNetworkEventUpdate);
+     client.addListener("fileActivity", this._onFileActivity);
+     client.addListener("locationChange", this._onLocationChange);
++    client.addListener("tabNavigated", this._onLocationChange);
+ 
+     if (this.target.isRemote) {
+       this._consoleActor = this.target.form.consoleActor;
+       if (!this.target.chrome) {
+         this.owner.onLocationChange(this.target.url, this.target.name);
+       }
+ 
+       let listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
+@@ -4097,24 +4104,32 @@ WebConsoleConnectionProxy.prototype = {
+    * @param object aResponse
+    *        The JSON response object received from the server.
+    */
+   _onListTabs: function WCCP__onListTabs(aCallback, aResponse)
+   {
+     let selectedTab = aResponse.tabs[aResponse.selected];
+     if (selectedTab) {
+       this._consoleActor = selectedTab.consoleActor;
++      this._tabActor = selectedTab.actor;
+       this.owner.onLocationChange(selectedTab.url, selectedTab.title);
+     }
+     else {
+       this._consoleActor = aResponse.consoleActor;
++      this._tabActor = aResponse.actor;
+     }
+ 
+     this.owner._resetConnectionTimeout();
+ 
++    this.client.attachTab(this._tabActor,
++                          this._onAttachTab.bind(this, aCallback));
++  },
++
++  _onAttachTab: function WCCP__onAttachTab(aCallback, aResponse, aTabClient)
++  {
+     let listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
+                      "FileActivity", "LocationChange"];
+     this.client.attachConsole(this._consoleActor, listeners,
+                               this._onAttachConsole.bind(this, aCallback));
+   },
+ 
+   /**
+    * The "attachConsole" response handler.
