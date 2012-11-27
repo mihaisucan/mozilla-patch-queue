@@ -1,12 +1,25 @@
 # HG changeset patch
-# Parent 132d2e88ef03a52666072c46c9ced0ac81febf2a
+# Parent 0623a7283c59e13c741f44fe8c2363d037d15008
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1353923566 -7200
+# Date 1354040900 -7200
 
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -3991,16 +3991,22 @@ WebConsoleConnectionProxy.prototype = {
+@@ -3979,58 +3979,79 @@ function WebConsoleConnectionProxy(aWebC
+   this.target = aTarget;
+ 
+   this._onPageError = this._onPageError.bind(this);
+   this._onConsoleAPICall = this._onConsoleAPICall.bind(this);
+   this._onNetworkEvent = this._onNetworkEvent.bind(this);
+   this._onNetworkEventUpdate = this._onNetworkEventUpdate.bind(this);
+   this._onFileActivity = this._onFileActivity.bind(this);
+   this._onLocationChange = this._onLocationChange.bind(this);
++  this._onTabNavigated = this._onTabNavigated.bind(this);
+ }
+ 
+ WebConsoleConnectionProxy.prototype = {
+   /**
     * The owning Web Console instance.
     *
     * @see WebConsoleFrame
@@ -29,7 +42,51 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    client: null,
  
    /**
-@@ -4065,16 +4071,17 @@ WebConsoleConnectionProxy.prototype = {
+    * The WebConsoleClient object.
+    *
+    * @see WebConsoleClient
+    * @type object
+    */
+   webConsoleClient: null,
+ 
+   /**
++   * The TabClient instance we use.
++   * @type object
++   */
++  tabClient: null,
++
++  /**
+    * Tells if the connection is established.
+    * @type boolean
+    */
+   connected: false,
+ 
+   /**
+    * The WebConsoleActor ID.
+    *
+    * @private
+    * @type string
+    */
+   _consoleActor: null,
+ 
+   /**
++   * The TabActor ID.
++   *
++   * @private
++   * @type string
++   */
++  _tabActor: null,
++
++  /**
+    * Tells if the window.console object of the remote web page is the native
+    * object or not.
+    * @private
+    * @type boolean
+    */
+   _hasNativeConsoleAPI: false,
+ 
+   /**
+@@ -4065,16 +4086,17 @@ WebConsoleConnectionProxy.prototype = {
      }
  
      client.addListener("pageError", this._onPageError);
@@ -38,7 +95,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      client.addListener("networkEventUpdate", this._onNetworkEventUpdate);
      client.addListener("fileActivity", this._onFileActivity);
      client.addListener("locationChange", this._onLocationChange);
-+    client.addListener("tabNavigated", this._onLocationChange);
++    client.addListener("tabNavigated", this._onTabNavigated);
  
      if (this.target.isRemote) {
        this._consoleActor = this.target.form.consoleActor;
@@ -47,7 +104,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        }
  
        let listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
-@@ -4097,24 +4104,32 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4097,24 +4119,51 @@ WebConsoleConnectionProxy.prototype = {
     * @param object aResponse
     *        The JSON response object received from the server.
     */
@@ -70,8 +127,27 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +                          this._onAttachTab.bind(this, aCallback));
 +  },
 +
++  /**
++   * The "attachTab" response handler.
++   *
++   * @private
++   * @param function [aCallback]
++   *        Optional function to invoke once the connection is established.
++   * @param object aResponse
++   *        The JSON response object received from the server.
++   * @param object aTabClient
++   *        The TabClient instance for the attached tab.
++   */
 +  _onAttachTab: function WCCP__onAttachTab(aCallback, aResponse, aTabClient)
 +  {
++    if (aResponse.error) {
++      Cu.reportError("attachTab failed: " + aResponse.error + " " +
++                     aResponse.message);
++      return;
++    }
++
++    this.tabClient = aTabClient;
++
      let listeners = ["PageError", "ConsoleAPI", "NetworkActivity",
                       "FileActivity", "LocationChange"];
      this.client.attachConsole(this._consoleActor, listeners,
@@ -80,3 +156,262 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * The "attachConsole" response handler.
+@@ -4277,16 +4326,40 @@ WebConsoleConnectionProxy.prototype = {
+ 
+     this.owner.onLocationChange(aPacket.uri, aPacket.title);
+     if (aPacket.state == "stop" && !aPacket.nativeConsoleAPI) {
+       this.owner.logWarningAboutReplacedAPI();
+     }
+   },
+ 
+   /**
++   * The "tabNavigated" message type handler. We redirect any message to
++   * the UI for displaying.
++   *
++   * @private
++   * @param string aType
++   *        Message type.
++   * @param object aPacket
++   *        The message received from the server.
++   */
++  _onTabNavigated: function WCCP__onTabNavigated(aType, aPacket)
++  {
++    if (!this.owner || aPacket.from != this._tabActor) {
++      return;
++    }
++
++    dump("WCCP__onTabNavigated state " + aPacket.state + " url " + aPacket.url + " title " + aPacket.title + " nativeConsoleAPI " + aPacket.nativeConsoleAPI + "\n");
++
++    //this.owner.onLocationChange(aPacket.uri, aPacket.title);
++    //if (aPacket.state == "stop" && !aPacket.nativeConsoleAPI) {
++    //  this.owner.logWarningAboutReplacedAPI();
++    //}
++  },
++
++  /**
+    * Release an object actor.
+    *
+    * @param string aActor
+    *        The actor ID to send the request to.
+    */
+   releaseActor: function WCCP_releaseActor(aActor)
+   {
+     if (this.client) {
+@@ -4325,30 +4398,32 @@ WebConsoleConnectionProxy.prototype = {
+     }
+ 
+     this.client.removeListener("pageError", this._onPageError);
+     this.client.removeListener("consoleAPICall", this._onConsoleAPICall);
+     this.client.removeListener("networkEvent", this._onNetworkEvent);
+     this.client.removeListener("networkEventUpdate", this._onNetworkEventUpdate);
+     this.client.removeListener("fileActivity", this._onFileActivity);
+     this.client.removeListener("locationChange", this._onLocationChange);
++    this.client.removeListener("tabNavigated", this._onTabNavigated);
+ 
+     try {
+       if (!this.target.isRemote) {
+         this.client.close(onDisconnect);
+       }
+     }
+     catch (ex) {
+       Cu.reportError("Web Console disconnect exception: " + ex);
+       Cu.reportError(ex.stack);
+       onDisconnect();
+     }
+ 
+     this.client = null;
+     this.webConsoleClient = null;
++    this.tabClient = null;
+     this.connected = false;
+     this.owner = null;
+   },
+ };
+ 
+ function gSequenceId()
+ {
+   return gSequenceId.n++;
+diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
+--- a/toolkit/devtools/debugger/dbg-client.jsm
++++ b/toolkit/devtools/debugger/dbg-client.jsm
+@@ -475,19 +475,20 @@ DebuggerClient.prototype = {
+       }
+ 
+       // Packets that indicate thread state changes get special treatment.
+       if (aPacket.type in ThreadStateTypes &&
+           aPacket.from in this._threadClients) {
+         this._threadClients[aPacket.from]._onThreadState(aPacket);
+       }
+       // On navigation the server resumes, so the client must resume as well.
+-      // We achive that by generating a fake resumption packet that triggers
++      // We achieve that by generating a fake resumption packet that triggers
+       // the client's thread state change listeners.
+-      if (aPacket.type == UnsolicitedNotifications.tabNavigated &&
++      if (this.activeThread &&
++          aPacket.type == UnsolicitedNotifications.tabNavigated &&
+           aPacket.from in this._tabClients) {
+         let resumption = { from: this.activeThread._actor, type: "resumed" };
+         this.activeThread._onThreadState(resumption);
+       }
+       this.notify(aPacket.type, aPacket);
+ 
+       if (onResponse) {
+         onResponse(aPacket);
+diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/devtools/debugger/server/dbg-browser-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-browser-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-browser-actors.js
+@@ -333,33 +333,42 @@ BrowserTabActor.prototype = {
+    */
+   removeFromParentPool: function BTA_removeFromParentPool(aActor) {
+     this.conn.removeActor(aActor);
+   },
+ 
+   // A constant prefix that will be used to form the actor ID by the server.
+   actorPrefix: "tab",
+ 
+-  grip: function BTA_grip() {
+-    dbg_assert(!this.exited,
+-               "grip() shouldn't be called on exited browser actor.");
+-    dbg_assert(this.actorID,
+-               "tab should have an actorID.");
+-
++  /**
++   * Getter for the tab title.
++   * @return string
++   *         Tab title.
++   */
++  get tabTitle() {
+     let title = this.browser.contentTitle;
+     // If contentTitle is empty (e.g. on a not-yet-restored tab), but there is a
+     // tabbrowser (i.e. desktop Firefox, but not Fennec), we can use the label
+     // as the title.
+     if (!title && this._tabbrowser) {
+       title = this._tabbrowser
+                   ._getTabForContentWindow(this.browser.contentWindow).label;
+     }
++    return title;
++  },
++
++  grip: function BTA_grip() {
++    dbg_assert(!this.exited,
++               "grip() shouldn't be called on exited browser actor.");
++    dbg_assert(this.actorID,
++               "tab should have an actorID.");
++
+     let response = {
+       actor: this.actorID,
+-      title: title,
++      title: this.tabTitle,
+       url: this.browser.currentURI.spec
+     };
+ 
+     // Walk over tab actors added by extensions and add them to a new ActorPool.
+     let actorPool = new ActorPool(this.conn);
+     this._createExtraActors(DebuggerServer.tabActorFactories, actorPool);
+     if (!actorPool.isEmpty()) {
+       this._tabActorPool = actorPool;
+@@ -565,17 +574,36 @@ BrowserTabActor.prototype = {
+     }
+ 
+     if (this._attached) {
+       this.threadActor.global = evt.target.defaultView.wrappedJSObject;
+       if (this.threadActor.attached) {
+         this.threadActor.findGlobals();
+       }
+     }
+-  }
++  },
++
++
++  /**
++   * Tells if the window.console object is native or overwritten by script in
++   * the page.
++   *
++   * @return boolean
++   *         True if the window.console object is native, or false otherwise.
++   */
++  hasNativeConsoleAPI: function BTA_hasNativeConsoleAPI() {
++    let isNative = false;
++    try {
++      let console = this.browser.contentWindow.wrappedJSObject.console;
++      isNative = "__mozillaConsole__" in console;
++    }
++    catch (ex) { }
++    dump("hasNativeConsoleAPI " + isNative + "\n");
++    return isNative;
++  },
+ };
+ 
+ /**
+  * The request types this actor can handle.
+  */
+ BrowserTabActor.prototype.requestTypes = {
+   "attach": BrowserTabActor.prototype.onAttach,
+   "detach": BrowserTabActor.prototype.onDetach
+@@ -601,41 +629,51 @@ DebuggerProgressListener.prototype = {
+     let isStart = aFlag & Ci.nsIWebProgressListener.STATE_START;
+     let isStop = aFlag & Ci.nsIWebProgressListener.STATE_STOP;
+     let isDocument = aFlag & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT;
+     let isNetwork = aFlag & Ci.nsIWebProgressListener.STATE_IS_NETWORK;
+     let isRequest = aFlag & Ci.nsIWebProgressListener.STATE_IS_REQUEST;
+     let isWindow = aFlag & Ci.nsIWebProgressListener.STATE_IS_WINDOW;
+ 
+     // Skip non-interesting states.
+-    if (isStart && isDocument && isRequest && isNetwork) {
++    if (!isDocument || !isRequest || !isNetwork ||
++        aProgress.DOMWindow != this._tabActor.browser.contentWindow) {
++      return;
++    }
++
++    if (isStart) {
+       // If the request is about to happen in a new window, we are not concerned
+       // about the request.
+-      if (aProgress.DOMWindow != this._tabActor.browser.contentWindow) {
+-        return;
++
++      // If the debuggee is not paused, then proceed normally.
++      if (this._tabActor.threadActor.state == "paused") {
++        aRequest.suspend();
++        this._tabActor.threadActor.onResume();
++        this._tabActor.threadActor.dbg.enabled = false;
++        this._tabActor._pendingNavigation = aRequest;
+       }
+ 
+-      // If the debuggee is not paused, then proceed normally.
+-      if (this._tabActor.threadActor.state != "paused") {
+-        return;
++      this._needsTabNavigated = true;
++      dump("_needsTabNavigated\n");
++    } else if (isStop && this._needsTabNavigated) {
++      dump("lolz0\n");
++      delete this._needsTabNavigated;
++      if (this._tabActor.threadActor.state == "running") {
++        this._tabActor.threadActor.dbg.enabled = true;
+       }
+-
+-      aRequest.suspend();
+-      this._tabActor.threadActor.onResume();
+-      this._tabActor.threadActor.dbg.enabled = false;
+-      this._tabActor._pendingNavigation = aRequest;
+-      this._needsTabNavigated = true;
+-    } else if (isStop && isWindow && isNetwork && this._needsTabNavigated) {
+-      delete this._needsTabNavigated;
+-      this._tabActor.threadActor.dbg.enabled = true;
++      dump("lolz1\n");
+       this._tabActor.conn.send({
+         from: this._tabActor.actorID,
+         type: "tabNavigated",
+-        url: this._tabActor.browser.contentDocument.URL
++        url: this._tabActor.browser.contentDocument.URL,
++        title: this._tabActor.tabTitle,
++        nativeConsoleAPI: this._tabActor.hasNativeConsoleAPI(),
++        state: "stop",
+       });
++      dump("lolz2\n");
+ 
+       this.destroy();
+     }
+   },
+ 
+   /**
+    * Destroy the progress listener instance.
+    */
