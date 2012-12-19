@@ -1,0 +1,174 @@
+# HG changeset patch
+# Parent 6ee0e3a037e4a9008fef9d87359466023c39d731
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1355944284 -7200
+
+Bug 783499 - Web Console should use the debugger API
+
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -66,21 +66,30 @@ function WebConsoleActor(aConnection, aP
+     this._window = Services.wm.getMostRecentWindow("navigator:browser");
+     this._isGlobalActor = true;
+   }
+ 
+   this._actorPool = new ActorPool(this.conn);
+   this.conn.addActorPool(this._actorPool);
+ 
+   this._prefs = {};
++
++  this.dbg = new Debugger();
+ }
+ 
+ WebConsoleActor.prototype =
+ {
+   /**
++   * Debugger instance.
++   *
++   * @see jsdebugger.jsm
++   */
++  dbg: null,
++
++  /**
+    * Tells if this Web Console actor is a global actor or not.
+    * @private
+    * @type boolean
+    */
+   _isGlobalActor: false,
+ 
+   /**
+    * Actor pool for all of the actors we send to the client.
+@@ -454,17 +463,17 @@ WebConsoleActor.prototype =
+     let input = aRequest.text;
+     let result, error = null;
+     let timestamp;
+ 
+     this.helperResult = null;
+     this.evalInput = input;
+     try {
+       timestamp = Date.now();
+-      result = this.evalInSandbox(input);
++      result = this.evalWithDebugger(input);
+     }
+     catch (ex) {
+       error = ex;
+     }
+ 
+     let helperResult = this.helperResult;
+     delete this.helperResult;
+     delete this.evalInput;
+@@ -541,16 +550,45 @@ WebConsoleActor.prototype =
+     });
+ 
+     this.sandbox.console = this.window.console;
+ 
+     JSTermHelpers(this);
+   },
+ 
+   /**
++   * Create the JavaScript sandbox where user input is evaluated.
++   * @private
++   */
++  _createDebugger: function WCA__createDebugger()
++  {
++    this._sandboxWindowId = WebConsoleUtils.getInnerWindowId(this.window);
++
++    try {
++      let global = this.dbg.addDebuggee(this.window);
++      let f = this.dbg.getNewestFrame();
++      if (f) {
++        return f.evalWithBindings(expr, {});
++      }
++      else {
++        globalWrapper.evalInGlobalWithBindings(expr, bindings);
++      }
++    } finally {
++      dbg.removeDebuggee(global);
++    }
++
++    debugger.removeDebuggee(DOwindow);
++    // Now debugger has no debuggees. But the D.O's are still usable.
++
++    // makeDebuggeeValue returns a D.O referring to random_object.
++    var DOrandom = DOwindow.makeDebuggeeValue(random_object); 
++    JSTermHelpers(this);
++  },
++
++  /**
+    * Evaluates a string in the sandbox.
+    *
+    * @param string aString
+    *        String to evaluate in the sandbox.
+    * @return mixed
+    *         The result of the evaluation.
+    */
+   evalInSandbox: function WCA_evalInSandbox(aString)
+@@ -588,16 +626,67 @@ WebConsoleActor.prototype =
+     }
+     if ($$) {
+       this.sandbox.$$ = $$;
+     }
+ 
+     return result;
+   },
+ 
++  /**
++   * Evaluates a string using the debugger API.
++   *
++   * @param string aString
++   *        String to evaluate.
++   * @return object
++   *         The result of the evaluation:
++   *         - result: the result of executing the expression (if any).
++   *         - exception: exception thrown during execution (if any).
++   */
++  evalWithDebugger: function WCA_evalWithDebugger(aString)
++  {
++    // If the user changed to a different location, we need to update the
++    // sandbox.
++    if (this._sandboxWindowId !== WebConsoleUtils.getInnerWindowId(this.window)) {
++      this._createDebugger();
++    }
++
++    // The help function needs to be easy to guess, so we make the () optional
++    if (aString.trim() == "help" || aString.trim() == "?") {
++      aString = "help()";
++    }
++
++    let window = WebConsoleUtils.unwrap(this.sandbox.window);
++    let $ = null, $$ = null;
++
++    // We prefer to execute the page-provided implementations for the $() and
++    // $$() functions.
++    if (typeof window.$ == "function") {
++      $ = this.sandbox.$;
++      delete this.sandbox.$;
++    }
++    if (typeof window.$$ == "function") {
++      $$ = this.sandbox.$$;
++      delete this.sandbox.$$;
++    }
++
++    let result;
++    let result = Cu.evalInSandbox(aString, this.sandbox, "1.8",
++                                  "Web Console", 1);
++
++    if ($) {
++      this.sandbox.$ = $;
++    }
++    if ($$) {
++      this.sandbox.$$ = $$;
++    }
++
++    return result;
++  },
++
+   //////////////////
+   // Event handlers for various listeners.
+   //////////////////
+ 
+   /**
+    * Handler for page errors received from the PageErrorListener. This method
+    * sends the nsIScriptError to the remote Web Console client.
+    *
