@@ -26,4 +26,25 @@ If things continue to be broken, contact me.
 Updates
 =======
 
-I push daily or more often, depending on what is needed.
+I push as often as I do work - sometimes I just review stuff, so I don't push to
+the repo.
+
+License
+=======
+
+Mozilla code is typically licensed under MPL 2. Test code is usually public
+domain.
+
+Sometimes public files from web apps on public servers may temporarily end up in
+my patches. I test Firefox against varying web apps. I am assuming no
+ownership for such code.
+
+I also include in my queue patches written by colleagues or contributors.
+License is up to their choice. Again, I am assuming no ownership whatsoever.
+
+Availability
+============
+
+This repository is provided voluntarily. I am making no guarantees of its
+availability in the future and its commit history. I may do non-fast-forward
+pushes.
