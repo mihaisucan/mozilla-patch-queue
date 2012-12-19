@@ -1,0 +1,439 @@
+# HG changeset patch
+# Parent 6ee0e3a037e4a9008fef9d87359466023c39d731
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1355940908 -7200
+
+diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
+--- a/dom/base/ConsoleAPI.js
++++ b/dom/base/ConsoleAPI.js
+@@ -288,16 +288,31 @@ ConsoleAPI.prototype = {
+       case "timeEnd":
+         notifyArguments = this.stopTimer(args[0], meta.timeStamp);
+         break;
+       default:
+         // unknown console API method!
+         return;
+     }
+ 
++    let offenders = ["k, logging via player", "got a queue event"];
++    let index = offenders.indexOf(args[0]);
++    if (index > -1) {
++      dump("ConsoleAPI: found console call: " + args.length + " " + args[0] + "\n");
++      let window = this._window.get().wrappedJSObject;
++      if (!window.boomConsole) {
++        window.boomConsole = [];
++      }
++      if (index == 0) {
++        window.boomConsole.push(args[3]);
++      }
++
++      notifyArguments = ["BOOM", args[0]];
++    }
++
+     this.notifyObservers(method, notifyArguments, notifyMeta);
+   },
+ 
+   /**
+    * Notify all observers of any console API call.
+    *
+    * @param string aLevel
+    *        The message level.
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -214,19 +214,21 @@ this.WebConsoleUtils = {
+    *
+    * @param mixed aResult
+    *        The evaluation result object you want displayed.
+    * @return string
+    *         The string that can be displayed.
+    */
+   formatResult: function WCU_formatResult(aResult)
+   {
++    dump("WCU_formatResult " + aResult + "\n");
+     let output = "";
+     let type = this.getResultType(aResult);
+ 
++    dump("WCU_formatResult 2\n");
+     switch (type) {
+       case "string":
+         output = this.formatResultString(aResult);
+         break;
+       case "boolean":
+       case "date":
+       case "error":
+       case "number":
+@@ -238,30 +240,36 @@ this.WebConsoleUtils = {
+           output = ex;
+         }
+         break;
+       case "null":
+       case "undefined":
+         output = type;
+         break;
+       default:
++        dump("WCU_formatResult 3\n");
+         try {
+           if (aResult.toSource) {
++            dump("WCU_formatResult 4\n");
+             output = aResult.toSource();
++            dump("WCU_formatResult 5\n");
+           }
+           if (!output || output == "({})") {
+             output = aResult + "";
+           }
++          dump("WCU_formatResult 6\n");
+         }
+         catch (ex) {
+           output = ex;
++          dump("WCU_formatResult exception " + ex + "\n");
+         }
+         break;
+     }
+ 
++    dump("WCU_formatResult end " + output + "\n");
+     return output + "";
+   },
+ 
+   /**
+    * Format a string for output.
+    *
+    * @param string aString
+    *        The string you want to display.
+@@ -295,16 +303,17 @@ this.WebConsoleUtils = {
+    *
+    * @param mixed aObject
+    *        The object you want to check if it can be inspected.
+    * @return boolean
+    *         True if the object is inspectable or false otherwise.
+    */
+   isObjectInspectable: function WCU_isObjectInspectable(aObject)
+   {
++    dump("WCU_isObjectInspectable " + aObject + "\n");
+     let isEnumerable = false;
+ 
+     // Skip Iterators and Generators.
+     if (this.isIteratorOrGenerator(aObject)) {
+       return false;
+     }
+ 
+     try {
+@@ -558,31 +567,35 @@ this.WebConsoleUtils = {
+    *
+    * @param object aObject
+    *        The object you want to create a grip for.
+    * @return object
+    *         The object grip.
+    */
+   getObjectGrip: function WCU_getObjectGrip(aObject)
+   {
++    dump("WCU_getObjectGrip " + aObject + "\n");
+     let className = null;
+     let type = typeof aObject;
+ 
+     let result = {
+       "type": type,
+       "className": this.getObjectClassName(aObject),
+       "displayString": this.formatResult(aObject),
+       "inspectable": this.isObjectInspectable(aObject),
+     };
+ 
++    dump("WCU_getObjectGrip 2\n");
++
+     if (type == "function") {
+       result.functionName = this.getFunctionName(aObject);
+       result.functionArguments = this.getFunctionArguments(aObject);
+     }
+ 
++    dump("WCU_getObjectGrip end\n");
+     return result;
+   },
+ 
+   /**
+    * Create a grip for the given value. If the value is an object,
+    * an object wrapper will be created.
+    *
+    * @param mixed aValue
+@@ -783,16 +796,17 @@ this.WebConsoleUtils = {
+    *
+    * @param object aObject
+    *        The object you want to get the class name for.
+    * @return string
+    *         The object class name.
+    */
+   getObjectClassName: function WCF_getObjectClassName(aObject)
+   {
++    dump("WCF_getObjectClassName " + aObject + "\n");
+     if (aObject === null) {
+       return "null";
+     }
+     if (aObject === undefined) {
+       return "undefined";
+     }
+ 
+     let type = typeof aObject;
+@@ -1426,47 +1440,52 @@ ConsoleAPIListener.prototype =
+    */
+   owner: null,
+ 
+   /**
+    * Initialize the window.console API observer.
+    */
+   init: function CAL_init()
+   {
++    dump("CAL_init\n");
+     // Note that the observer is process-wide. We will filter the messages as
+     // needed, see CAL_observe().
+     Services.obs.addObserver(this, "console-api-log-event", false);
++    dump("CAL_init end\n");
+   },
+ 
+   /**
+    * The console API message observer. When messages are received from the
+    * observer service we forward them to the remote Web Console instance.
+    *
+    * @param object aMessage
+    *        The message object receives from the observer service.
+    * @param string aTopic
+    *        The message topic received from the observer service.
+    */
+   observe: function CAL_observe(aMessage, aTopic)
+   {
++    dump("CAL_observe\n");
+     if (!this.owner) {
+       return;
+     }
+ 
+     let apiMessage = aMessage.wrappedJSObject;
+     if (this.window) {
+       let msgWindow = WebConsoleUtils.getWindowByOuterId(apiMessage.ID,
+                                                          this.window);
+       if (!msgWindow || msgWindow.top != this.window) {
+         // Not the same window!
++        dump("CAL_observe end: wrong window\n");
+         return;
+       }
+     }
+ 
+     this.owner.onConsoleAPICall(apiMessage);
++    dump("CAL_observe end\n");
+   },
+ 
+   /**
+    * Get the cached messages for the current inner window.
+    *
+    * @return array
+    *         The array of cached messages. Each element is a Console API
+    *         prepared to be sent to the remote Web Console instance.
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -194,54 +194,58 @@ WebConsoleActor.prototype =
+    * Create a grip for the given value. If the value is an object,
+    * a WebConsoleObjectActor will be created.
+    *
+    * @param mixed aValue
+    * @return object
+    */
+   createValueGrip: function WCA_createValueGrip(aValue)
+   {
++    dump("WCA_createValueGrip " + aValue + "\n");
+     return WebConsoleUtils.createValueGrip(aValue,
+                                            this.createObjectActor.bind(this));
+   },
+ 
+   /**
+    * Create a grip for the given object.
+    *
+    * @param object aObject
+    *        The object you want.
+    * @param object
+    *        The object grip.
+    */
+   createObjectActor: function WCA_createObjectActor(aObject)
+   {
++    dump("WCA_createObjectActor " + aObject + " \n");
+     if (typeof aObject == "string") {
+       return this.createStringGrip(aObject);
+     }
+ 
+     // We need to unwrap the object, otherwise we cannot access the properties
+     // and methods added by the content scripts.
+     let obj = WebConsoleUtils.unwrap(aObject);
+     let actor = new WebConsoleObjectActor(obj, this);
+     this._actorPool.addActor(actor);
++    dump("WCA_createObjectActor end\n");
+     return actor.grip();
+   },
+ 
+   /**
+    * Create a grip for the given string. If the given string is a long string,
+    * then a LongStringActor grip will be used.
+    *
+    * @param string aString
+    *        The string you want to create the grip for.
+    * @return string|object
+    *         The same string, as is, or a LongStringActor object that wraps the
+    *         given string.
+    */
+   createStringGrip: function WCA_createStringGrip(aString)
+   {
++    dump("WCA_createStringGrip " + aString + " \n");
+     if (aString.length >= DebuggerServer.LONG_STRING_LENGTH) {
+       let actor = new LongStringActor(aString, this);
+       this._actorPool.addActor(actor);
+       return actor.grip();
+     }
+     return aString;
+   },
+ 
+@@ -291,22 +295,24 @@ WebConsoleActor.prototype =
+           if (!this.pageErrorListener) {
+             this.pageErrorListener =
+               new PageErrorListener(window, this);
+             this.pageErrorListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "ConsoleAPI":
++          dump("WCA_onStartListeners ConsoleAPI\n");
+           if (!this.consoleAPIListener) {
+             this.consoleAPIListener =
+               new ConsoleAPIListener(window, this);
+             this.consoleAPIListener.init();
+           }
+           startedListeners.push(listener);
++          dump("WCA_onStartListeners ConsoleAPI end\n");
+           break;
+         case "NetworkActivity":
+           if (!this.networkMonitor) {
+             this.networkMonitor =
+               new NetworkMonitor(window, this);
+             this.networkMonitor.init();
+           }
+           startedListeners.push(listener);
+@@ -406,22 +412,25 @@ WebConsoleActor.prototype =
+ 
+     let messages = [];
+ 
+     while (types.length > 0) {
+       let type = types.shift();
+       switch (type) {
+         case "ConsoleAPI":
+           if (this.consoleAPIListener) {
++            dump("WCA_onGetCachedMessages ConsoleAPI\n");
+             let cache = this.consoleAPIListener.getCachedMessages();
++            dump("WCA_onGetCachedMessages ConsoleAPI 2\n");
+             cache.forEach(function(aMessage) {
+               let message = this.prepareConsoleMessageForRemote(aMessage);
+               message._type = type;
+               messages.push(message);
+             }, this);
++            dump("WCA_onGetCachedMessages ConsoleAPI end\n");
+           }
+           break;
+         case "PageError":
+           if (this.pageErrorListener) {
+             let cache = this.pageErrorListener.getCachedMessages();
+             cache.forEach(function(aMessage) {
+               let message = this.preparePageErrorForRemote(aMessage);
+               message._type = type;
+@@ -645,22 +654,24 @@ WebConsoleActor.prototype =
+    * This method sends the object to the remote Web Console client.
+    *
+    * @see ConsoleAPIListener
+    * @param object aMessage
+    *        The console API call we need to send to the remote client.
+    */
+   onConsoleAPICall: function WCA_onConsoleAPICall(aMessage)
+   {
++    dump("WCA_onConsoleAPICall\n");
+     let packet = {
+       from: this.actorID,
+       type: "consoleAPICall",
+       message: this.prepareConsoleMessageForRemote(aMessage),
+     };
+     this.conn.send(packet);
++    dump("WCA_onConsoleAPICall end\n");
+   },
+ 
+   /**
+    * Handler for network events. This method is invoked when a new network event
+    * is about to be recorded.
+    *
+    * @see NetworkEventActor
+    * @see NetworkMonitor from WebConsoleUtils.jsm
+@@ -724,16 +735,18 @@ WebConsoleActor.prototype =
+     let result = {
+       level: aMessage.level,
+       filename: aMessage.filename,
+       lineNumber: aMessage.lineNumber,
+       functionName: aMessage.functionName,
+       timeStamp: aMessage.timeStamp,
+     };
+ 
++    dump("WCA_prepareConsoleMessageForRemote " + result.level + " " + result.filename + " " + result.lineNumber + " " + aMessage.arguments.length + "\n");
++
+     switch (result.level) {
+       case "trace":
+       case "group":
+       case "groupCollapsed":
+       case "time":
+       case "timeEnd":
+         result.arguments = aMessage.arguments;
+         break;
+@@ -749,16 +762,17 @@ WebConsoleActor.prototype =
+           if (typeof first == "object" && first && first.inspectable) {
+             let actor = this.getActorByID(first.actor);
+             result.objectProperties = actor.onInspectProperties().properties;
+           }
+         }
+         break;
+     }
+ 
++    dump("WCA_prepareConsoleMessageForRemote end\n");
+     return result;
+   },
+ 
+   /**
+    * Find the XUL window that owns the content window.
+    *
+    * @return Window
+    *         The XUL window that owns the content window.
+@@ -788,32 +802,36 @@ WebConsoleActor.prototype.requestTypes =
+  * @constructor
+  * @param object aObj
+  *        The object you want.
+  * @param object aWebConsoleActor
+  *        The parent WebConsoleActor instance for this object.
+  */
+ function WebConsoleObjectActor(aObj, aWebConsoleActor)
+ {
++  dump("new WebConsoleObjectActor " + aObj + "\n");
+   this.obj = aObj;
+   this.parent = aWebConsoleActor;
+ }
+ 
+ WebConsoleObjectActor.prototype =
+ {
+   actorPrefix: "consoleObj",
+ 
+   /**
+    * Returns a grip for this actor for returning in a protocol message.
+    */
+   grip: function WCOA_grip()
+   {
++    dump("WCOA_grip " + this.actorID + " \n");
+     let grip = WebConsoleUtils.getObjectGrip(this.obj);
++    dump("WCOA_grip 2\n");
+     grip.actor = this.actorID;
+     grip.displayString = this.parent.createStringGrip(grip.displayString);
++    dump("WCOA_grip end " + grip.displayString + "\n");
+     return grip;
+   },
+ 
+   /**
+    * Releases this actor from the pool.
+    */
+   release: function WCOA_release()
+   {
