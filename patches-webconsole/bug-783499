@@ -1,10 +1,50 @@
 # HG changeset patch
-# Parent 6ee0e3a037e4a9008fef9d87359466023c39d731
+# Parent 73bb1c39936345ec43fff094f23c6930084c005a
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1355944284 -7200
+# Date 1356036809 -7200
 
 Bug 783499 - Web Console should use the debugger API
 
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -295,16 +295,17 @@ this.WebConsoleUtils = {
+    *
+    * @param mixed aObject
+    *        The object you want to check if it can be inspected.
+    * @return boolean
+    *         True if the object is inspectable or false otherwise.
+    */
+   isObjectInspectable: function WCU_isObjectInspectable(aObject)
+   {
++    return true;
+     let isEnumerable = false;
+ 
+     // Skip Iterators and Generators.
+     if (this.isIteratorOrGenerator(aObject)) {
+       return false;
+     }
+ 
+     try {
+@@ -472,17 +473,17 @@ this.WebConsoleUtils = {
+    *         An array of property descriptors.
+    */
+   inspectObject: function WCU_inspectObject(aObject, aObjectWrapper)
+   {
+     let properties = [];
+     let isDOMDocument = aObject instanceof Ci.nsIDOMDocument;
+     let deprecated = ["width", "height", "inputEncoding"];
+ 
+-    for (let name in aObject) {
++    for each (let name in aObject.getOwnPropertyNames()) {
+       // See bug 632275: skip deprecated properties.
+       if (isDOMDocument && deprecated.indexOf(name) > -1) {
+         continue;
+       }
+ 
+       properties.push(this.inspectObjectProperty(aObject, name, aObjectWrapper));
+     }
+ 
 diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 --- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
@@ -39,26 +79,71 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
  
    /**
     * Actor pool for all of the actors we send to the client.
-@@ -454,17 +463,17 @@ WebConsoleActor.prototype =
+@@ -447,40 +456,52 @@ WebConsoleActor.prototype =
+    * @param object aRequest
+    *        The JSON request object received from the Web Console client.
+    * @return object
+    *         The evaluation response packet.
+    */
+   onEvaluateJS: function WCA_onEvaluateJS(aRequest)
+   {
      let input = aRequest.text;
-     let result, error = null;
-     let timestamp;
+-    let result, error = null;
+-    let timestamp;
++    let timestamp = Date.now();
  
      this.helperResult = null;
      this.evalInput = input;
-     try {
-       timestamp = Date.now();
+-    try {
+-      timestamp = Date.now();
 -      result = this.evalInSandbox(input);
-+      result = this.evalWithDebugger(input);
-     }
-     catch (ex) {
-       error = ex;
-     }
+-    }
+-    catch (ex) {
+-      error = ex;
+-    }
++    let evalResult = this.evalWithDebugger(input);
  
      let helperResult = this.helperResult;
      delete this.helperResult;
      delete this.evalInput;
-@@ -541,16 +550,45 @@ WebConsoleActor.prototype =
+ 
++    let result, error, errorMessage;
++    if (evalResult) {
++      if ("return" in evalResult) {
++        result = evalResult.return;
++      }
++      else if ("yield" in evalResult) {
++        result = evalResult.yield;
++      }
++
++      if ("throw" in evalResult) {
++        error = evalResult.throw;
++        let errorToString = this._dbgWindow
++                            .evalInGlobalWithBindings("ex + ''", {ex: error});
++        if (errorToString && typeof errorToString.return == "string") {
++          errorMessage = errorToString.return;
++        }
++      }
++    }
++
+     return {
+       from: this.actorID,
+       input: input,
+       result: this.createValueGrip(result),
+       timestamp: timestamp,
+-      error: error,
+-      errorMessage: error ? String(error) : null,
++      error: this.createValueGrip(error),
++      errorMessage: errorMessage,
+       helperResult: helperResult,
+     };
+   },
+ 
+   /**
+    * The Autocomplete request handler.
+    *
+    * @param object aRequest
+@@ -541,16 +562,55 @@ WebConsoleActor.prototype =
      });
  
      this.sandbox.console = this.window.console;
@@ -67,13 +152,22 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    },
  
    /**
-+   * Create the JavaScript sandbox where user input is evaluated.
++   * Create the Debugger.Object for the current window.
 +   * @private
 +   */
-+  _createDebugger: function WCA__createDebugger()
++  _createGlobal: function WCA__createGlobal()
 +  {
-+    this._sandboxWindowId = WebConsoleUtils.getInnerWindowId(this.window);
++    let windowId = WebConsoleUtils.getInnerWindowId(this.window);
++    if (this._sandboxWindowId == windowId) {
++      return;
++    }
 +
++    this._sandboxWindowId = windowId;
++
++    this._dbgWindow = this.dbg.addDebuggee(this.window);
++    this.dbg.removeDebuggee(this.window);
++
++    /*
 +    try {
 +      let global = this.dbg.addDebuggee(this.window);
 +      let f = this.dbg.getNewestFrame();
@@ -91,8 +185,9 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +    // Now debugger has no debuggees. But the D.O's are still usable.
 +
 +    // makeDebuggeeValue returns a D.O referring to random_object.
-+    var DOrandom = DOwindow.makeDebuggeeValue(random_object); 
++    var DOrandom = DOwindow.makeDebuggeeValue(random_object);
 +    JSTermHelpers(this);
++    */
 +  },
 +
 +  /**
@@ -104,7 +199,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     *         The result of the evaluation.
     */
    evalInSandbox: function WCA_evalInSandbox(aString)
-@@ -588,16 +626,67 @@ WebConsoleActor.prototype =
+@@ -588,16 +648,44 @@ WebConsoleActor.prototype =
      }
      if ($$) {
        this.sandbox.$$ = $$;
@@ -119,46 +214,23 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +   * @param string aString
 +   *        String to evaluate.
 +   * @return object
-+   *         The result of the evaluation:
-+   *         - result: the result of executing the expression (if any).
-+   *         - exception: exception thrown during execution (if any).
++   *         The result of the evaluation.
 +   */
 +  evalWithDebugger: function WCA_evalWithDebugger(aString)
 +  {
-+    // If the user changed to a different location, we need to update the
-+    // sandbox.
-+    if (this._sandboxWindowId !== WebConsoleUtils.getInnerWindowId(this.window)) {
-+      this._createDebugger();
-+    }
++    this._createGlobal();
 +
 +    // The help function needs to be easy to guess, so we make the () optional
 +    if (aString.trim() == "help" || aString.trim() == "?") {
 +      aString = "help()";
 +    }
 +
-+    let window = WebConsoleUtils.unwrap(this.sandbox.window);
-+    let $ = null, $$ = null;
-+
-+    // We prefer to execute the page-provided implementations for the $() and
-+    // $$() functions.
-+    if (typeof window.$ == "function") {
-+      $ = this.sandbox.$;
-+      delete this.sandbox.$;
++    let result, frame = this.dbg.getNewestFrame();
++    if (frame) {
++      result = frame.evalWithBindings(aString, {});
 +    }
-+    if (typeof window.$$ == "function") {
-+      $$ = this.sandbox.$$;
-+      delete this.sandbox.$$;
-+    }
-+
-+    let result;
-+    let result = Cu.evalInSandbox(aString, this.sandbox, "1.8",
-+                                  "Web Console", 1);
-+
-+    if ($) {
-+      this.sandbox.$ = $;
-+    }
-+    if ($$) {
-+      this.sandbox.$$ = $$;
++    else {
++      result = this._dbgWindow.evalInGlobalWithBindings(aString, {});
 +    }
 +
 +    return result;

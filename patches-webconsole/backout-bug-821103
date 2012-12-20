@@ -1,0 +1,113 @@
+# HG changeset patch
+# Parent 73bb1c39936345ec43fff094f23c6930084c005a
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1356022322 -7200
+
+diff --git a/js/src/frontend/BytecodeEmitter.cpp b/js/src/frontend/BytecodeEmitter.cpp
+--- a/js/src/frontend/BytecodeEmitter.cpp
++++ b/js/src/frontend/BytecodeEmitter.cpp
+@@ -1713,17 +1713,18 @@ BytecodeEmitter::reportError(ParseNode *
+     return result;
+ }
+ 
+ bool
+ BytecodeEmitter::reportStrictWarning(ParseNode *pn, unsigned errorNumber, ...)
+ {
+     va_list args;
+     va_start(args, errorNumber);
+-    bool result = tokenStream()->reportStrictWarningErrorNumberVA(pn, sc->strict, errorNumber, args);
++    bool result = tokenStream()->reportCompileErrorNumberVA(pn, JSREPORT_STRICT | JSREPORT_WARNING,
++                                                            errorNumber, args);
+     va_end(args);
+     return result;
+ }
+ 
+ bool
+ BytecodeEmitter::reportStrictModeError(ParseNode *pn, unsigned errorNumber, ...)
+ {
+     va_list args;
+diff --git a/js/src/frontend/Parser.h b/js/src/frontend/Parser.h
+--- a/js/src/frontend/Parser.h
++++ b/js/src/frontend/Parser.h
+@@ -503,18 +503,18 @@ Parser::reportWarning(ParseNode *pn, uns
+     return result;
+ }
+ 
+ inline bool
+ Parser::reportStrictWarning(ParseNode *pn, unsigned errorNumber, ...)
+ {
+     va_list args;
+     va_start(args, errorNumber);
+-    bool result = tokenStream.reportStrictWarningErrorNumberVA(pn, pc->sc->strict,
+-                                                               errorNumber, args);
++    bool result = tokenStream.reportCompileErrorNumberVA(pn, JSREPORT_STRICT | JSREPORT_WARNING,
++                                                         errorNumber, args);
+     va_end(args);
+     return result;
+ }
+ 
+ inline bool
+ Parser::reportStrictModeError(ParseNode *pn, unsigned errorNumber, ...)
+ {
+     va_list args;
+diff --git a/js/src/frontend/TokenStream.cpp b/js/src/frontend/TokenStream.cpp
+--- a/js/src/frontend/TokenStream.cpp
++++ b/js/src/frontend/TokenStream.cpp
+@@ -606,26 +606,16 @@ TokenStream::reportWarning(unsigned erro
+ {
+     va_list args;
+     va_start(args, errorNumber);
+     bool result = reportCompileErrorNumberVA(NULL, JSREPORT_WARNING, errorNumber, args);
+     va_end(args);
+     return result;
+ }
+ 
+-bool
+-TokenStream::reportStrictWarningErrorNumberVA(ParseNode *pn, bool strictMode, unsigned errorNumber,
+-                                              va_list args)
+-{
+-    if (!strictMode && !cx->hasStrictOption())
+-        return true;
+-
+-    return reportCompileErrorNumberVA(NULL, JSREPORT_STRICT | JSREPORT_WARNING, errorNumber, args);
+-}
+-
+ #if JS_HAS_XML_SUPPORT
+ 
+ bool
+ TokenStream::getXMLEntity()
+ {
+     ptrdiff_t offset, length, i;
+     int c, d;
+     bool ispair;
+diff --git a/js/src/frontend/TokenStream.h b/js/src/frontend/TokenStream.h
+--- a/js/src/frontend/TokenStream.h
++++ b/js/src/frontend/TokenStream.h
+@@ -536,18 +536,16 @@ class TokenStream
+ 
+     // General-purpose error reporters.  You should avoid calling these
+     // directly, and instead use the more succinct alternatives (e.g.
+     // reportError()) in TokenStream, Parser, and BytecodeEmitter.
+     bool reportCompileErrorNumberVA(ParseNode *pn, unsigned flags, unsigned errorNumber,
+                                     va_list args);
+     bool reportStrictModeErrorNumberVA(ParseNode *pn, bool strictMode, unsigned errorNumber,
+                                        va_list args);
+-    bool reportStrictWarningErrorNumberVA(ParseNode *pn, bool strictMode, unsigned errorNumber,
+-                                          va_list args);
+ 
+   private:
+     // These are private because they should only be called by the tokenizer
+     // while tokenizing not by, for example, BytecodeEmitter.
+     bool reportStrictModeError(unsigned errorNumber, ...);
+     bool strictMode() const { return strictModeGetter && strictModeGetter->get(); }
+ 
+     void onError();
+diff --git a/js/src/jit-test/tests/basic/bug821103.js b/js/src/jit-test/tests/basic/bug821103.js
+deleted file mode 100644
+--- a/js/src/jit-test/tests/basic/bug821103.js
++++ /dev/null
+@@ -1,4 +0,0 @@
+-options("werror");
+-load(libdir + "asserts.js");
+-
+-eval("function x() { var x= 4; 'hi'; }");
