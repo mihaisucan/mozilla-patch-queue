@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent f93fae3feb1af1d6fbef1638510bef89b1a37a08
+# Parent d9582ecb95ee8bf834c50fe20d03fa9b1bed636f
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1357248654 -7200
+# Date 1357333065 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -38,16 +38,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+@@ -38,27 +38,35 @@ XPCOMUtils.defineLazyModuleGetter(this, 
                                    "resource:///modules/NetworkPanel.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "AutocompletePopup",
@@ -20,6 +20,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +XPCOMUtils.defineLazyModuleGetter(this, "VariablesView",
 +                                  "resource:///modules/devtools/VariablesView.jsm");
 +
++XPCOMUtils.defineLazyModuleGetter(this, "ToolSidebar",
++                                  "resource:///modules/devtools/Sidebar.jsm");
++
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
  let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
  
@@ -28,6 +31,100 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
  const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/en/Security/MixedContent";
+ 
+ const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
+ 
++const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/VariablesView.xul";
++
+ // The amount of time in milliseconds that must pass between messages to
+ // trigger the display of a new group.
+ const NEW_GROUP_DELAY = 5000;
+ 
+ // The amount of time in milliseconds that we wait before performing a live
+ // search.
+ const SEARCH_DELAY = 200;
+ 
+@@ -3031,16 +3039,80 @@ JSTerm.prototype = {
+       }, false);
+       aOptions.anchor._panelOpen = true;
+     }
+ 
+     return propPanel;
+   },
+ 
+   /**
++   * Opens a new variables view that allows the inspection of the given object.
++   *
++   * @param object aOptions
++   *        Property panel options:
++   *        - title:
++   *        Panel title.
++   *        - anchor:
++   *        The DOM element you want the panel to be anchored to.
++   *        - updateButtonCallback:
++   *        An optional function you want invoked when the user clicks the
++   *        Update button. If this function is not provided the Update button is
++   *        not shown.
++   *        - data:
++   *        An object that represents the object you want to inspect. Please see
++   *        the PropertyPanel documentation - this object is passed to the
++   *        PropertyPanel constructor
++   * @return object
++   *         The new instance of PropertyPanel.
++   */
++  openVariablesView: function JST_openVariablesView(aOptions)
++  {
++    let doc = this.hud.document;
++
++    if (!this.sidebar) {
++      let tabbox = doc.querySelector("#webconsole-sidebar");
++      this.sidebar = new ToolSidebar(tabbox, this);
++    }
++
++    let tab = this.sidebar.getTab("variablesview");
++    if (tab) {
++      this.sidebar.select("variablesview");
++      this._onVariablesViewTabReady(aOptions);
++    }
++    else {
++      let onTabReady = this._onVariablesViewTabReady.bind(this, aOptions);
++      this.sidebar.on("variablesview-ready", onTabReady);
++      this.sidebar.addTab("variablesview", VARIABLES_VIEW_URL);
++    }
++
++    this.sidebar.show();
++  },
++
++  _onVariablesViewTabReady: function JST__onVariablesViewTabReady(aOptions)
++  {
++    if (!this.variablesView) {
++      this.variablesView = this._createVariablesView();
++    }
++    this.variablesView.empty();
++  }
++
++  _createVariablesView: function JST__createVariablesView()
++  {
++    let tabDoc = this.sidebar.getWindowForTab("variablesview").document;
++    let container = tabDoc.querySelector("#variables");
++    let view = new VariablesView(container);
++    view.searchPlaceholder = "emptyVariablesFilterText";
++    view.emptyText ="emptyVariablesText";
++    view.onlyEnumVisible = true;
++    view.searchEnabled = true;
++    view.eval = DebuggerController.StackFrames.evaluate;
++    return view;
++  },
++
++  /**
+    * Writes a JS object to the JSTerm outputNode.
+    *
+    * @param string aOutputMessage
+    *        The message to display.
+    * @param function [aCallback]
+    *        Optional function to invoke when users click the message.
+    * @param nsIDOMNode [aNodeAfter]
+    *        Optional DOM node after which you want to insert the new message.
 diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webconsole/webconsole.xul
 --- a/browser/devtools/webconsole/webconsole.xul
 +++ b/browser/devtools/webconsole/webconsole.xul
