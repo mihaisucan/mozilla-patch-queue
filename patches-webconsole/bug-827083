@@ -1,14 +1,105 @@
 # HG changeset patch
-# Parent 8d06cad1daf3c516c69a448708599e9f38b8111b
+# Parent 3618915c083fc39162cfe307ab26542dcd34cf64
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1357681998 -7200
+# Date 1357746976 -7200
 
 Bug 827083 - Cannot attach remote web console to Firefox Android; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-o,mochitest-bc -t none
 
+diff --git a/browser/devtools/commandline/test/browser_cmd_calllog.js b/browser/devtools/commandline/test/browser_cmd_calllog.js
+--- a/browser/devtools/commandline/test/browser_cmd_calllog.js
++++ b/browser/devtools/commandline/test/browser_cmd_calllog.js
+@@ -41,17 +41,17 @@ function testCallLogStatus() {
+ function testCallLogExec() {
+   DeveloperToolbarTest.exec({
+     typed: "calllog stop",
+     args: { },
+     outputMatch: /No call logging/,
+   });
+ 
+   let hud = null;
+-  var onWebConsoleOpen = DeveloperToolbarTest.checkCalled(function(aSubject) {
++  function onWebConsoleOpen(aSubject) {
+     Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
+ 
+     aSubject.QueryInterface(Ci.nsISupportsString);
+     hud = imported.HUDService.getHudReferenceById(aSubject.data);
+     ok(hud.hudId in imported.HUDService.hudReferences, "console open");
+ 
+     DeveloperToolbarTest.exec({
+       typed: "calllog stop",
+@@ -63,23 +63,25 @@ function testCallLogExec() {
+       typed: "console clear",
+       args: {},
+       blankOutput: true,
+     });
+ 
+     let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
+     is(labels.length, 0, "no output in console");
+ 
+-    DeveloperToolbarTest.exec({
+-      typed: "console close",
+-      args: {},
+-      blankOutput: true,
+-      completed: false,
++    executeSoon(function() {
++      DeveloperToolbarTest.exec({
++        typed: "console close",
++        args: {},
++        blankOutput: true,
++        completed: false,
++      });
+     });
+-  });
++  };
+ 
+   Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
+ 
+   DeveloperToolbarTest.exec({
+     typed: "calllog start",
+     args: { },
+     outputMatch: /Call logging started/,
+   });
+diff --git a/browser/devtools/commandline/test/browser_cmd_calllog_chrome.js b/browser/devtools/commandline/test/browser_cmd_calllog_chrome.js
+--- a/browser/devtools/commandline/test/browser_cmd_calllog_chrome.js
++++ b/browser/devtools/commandline/test/browser_cmd_calllog_chrome.js
+@@ -89,24 +89,26 @@ function testCallLogExec() {
+       typed: "console clear",
+       args: {},
+       blankOutput: true,
+     });
+ 
+     let labels = hud.jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+     is(labels.length, 0, "no output in console");
+ 
+-    DeveloperToolbarTest.exec({
+-      typed: "console close",
+-      args: {},
+-      blankOutput: true,
+-      completed: false,
++    executeSoon(function() {
++      DeveloperToolbarTest.exec({
++        typed: "console close",
++        args: {},
++        blankOutput: true,
++        completed: false,
++      });
++
++      executeSoon(finish);
+     });
+-
+-    executeSoon(finish);
+   }
+   Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
+ 
+   DeveloperToolbarTest.exec({
+     typed: "calllog chromestart javascript \"({a1: function() {this.a2()},a2: function() {}});\"",
+     outputMatch: /Call logging started/,
+     completed: false,
+   });
 diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework/Toolbox.jsm
 --- a/browser/devtools/framework/Toolbox.jsm
 +++ b/browser/devtools/framework/Toolbox.jsm
-@@ -472,16 +472,18 @@ Toolbox.prototype = {
+@@ -483,16 +483,18 @@ Toolbox.prototype = {
     *
     * @return {Host} host
     *        The created host object
@@ -955,14 +1046,16 @@ diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_580001_closing_after_completion.js b/browser/devtools/webconsole/test/browser_webconsole_bug_580001_closing_after_completion.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_580001_closing_after_completion.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_580001_closing_after_completion.js
-@@ -25,17 +25,15 @@ function testClosingAfterCompletion(hud)
+@@ -23,19 +23,18 @@ function testClosingAfterCompletion(hud)
+   function errorListener(evt) {
+     errorWhileClosing = true;
    }
  
    browser.addEventListener("error", errorListener, false);
  
    // Focus the inputNode and perform the keycombo to close the WebConsole.
    inputNode.focus();
-   EventUtils.synthesizeKey("k", { accelKey: true, shiftKey: true });
+-  EventUtils.synthesizeKey("k", { accelKey: true, shiftKey: true });
  
 -  // We can't test for errors right away, because the error occurs after a
 -  // setTimeout(..., 0) in the WebConsole code.
@@ -972,6 +1065,8 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_580001_clos
      is(errorWhileClosing, false, "no error while closing the WebConsole");
      finishTest();
    });
++
++  EventUtils.synthesizeKey("k", { accelKey: true, shiftKey: true });
  }
  
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js b/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
@@ -1003,6 +1098,27 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_595350_mult
      successFn: closeConsoles,
      failureFn: closeConsoles,
    });
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_782653_CSS_links_in_Style_Editor.js b/browser/devtools/webconsole/test/browser_webconsole_bug_782653_CSS_links_in_Style_Editor.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_782653_CSS_links_in_Style_Editor.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_782653_CSS_links_in_Style_Editor.js
+@@ -62,16 +62,17 @@ function onStyleEditorReady(aEvent, aPan
+   {
+     let href = aNode.getAttribute("title");
+     let sheet, i = 0;
+     while((sheet = content.document.styleSheets[i++])) {
+       if (sheet.href == href) {
+         return sheet;
+       }
+     }
++    return null;
+   }
+ 
+   waitForFocus(function() {
+     info("style editor window focused");
+ 
+     let sheet = sheetForNode(nodes[0]);
+     ok(sheet, "sheet found");
+     let line = nodes[0].sourceLine;
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
@@ -1952,3 +2068,25 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    return gSequenceId.n++;
  }
  gSequenceId.n = 0;
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -178,17 +178,17 @@ WebConsoleActor.prototype =
+     if (this.networkMonitor) {
+       this.networkMonitor.destroy();
+       this.networkMonitor = null;
+     }
+     if (this.consoleProgressListener) {
+       this.consoleProgressListener.destroy();
+       this.consoleProgressListener = null;
+     }
+-    this.conn.removeActorPool(this.actorPool);
++    this.conn.removeActorPool(this._actorPool);
+     this._actorPool = null;
+     this.sandbox = null;
+     this._sandboxWindowId = 0;
+     this.conn = this._window = null;
+   },
+ 
+   /**
+    * Create a grip for the given value. If the value is an object,
