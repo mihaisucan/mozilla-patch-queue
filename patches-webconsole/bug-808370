@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent ee4e037181918e2586f58dfadd33b0474037c204
+# Parent 09a132d1950e2ce80e5f251893062988a19de0b0
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1357753216 -7200
+# Date 1357767935 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -30,30 +30,21 @@ diff --git a/browser/devtools/webconsole/VariablesView.xul b/browser/devtools/we
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/VariablesView.xul
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,15 @@
 +<?xml version="1.0"?>
 +<!-- This Source Code Form is subject to the terms of the Mozilla Public
 +   - License, v. 2.0. If a copy of the MPL was not distributed with this
 +   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 +<?xml-stylesheet href="chrome://global/skin/global.css"?>
-+<?xml-stylesheet href="chrome://browser/content/devtools/styleinspector.css" type="text/css"?>
-+<?xml-stylesheet href="chrome://browser/skin/devtools/csshtmltree.css" type="text/css"?>
++<?xml-stylesheet href="chrome://browser/content/debugger.css" type="text/css"?>
++<?xml-stylesheet href="chrome://browser/skin/devtools/common.css" type="text/css"?>
++<?xml-stylesheet href="chrome://browser/skin/devtools/debugger.css" type="text/css"?>
 +<!DOCTYPE window [
-+  <!ENTITY % inspectorDTD SYSTEM "chrome://browser/locale/devtools/styleinspector.dtd">
-+  %inspectorDTD;
++  <!ENTITY % viewDTD SYSTEM "chrome://browser/locale/devtools/VariablesView.dtd">
++  %viewDTD;
 +]>
-+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" title="&ruleViewTitle;">
-+  <script type="application/javascript;version=1.8">
-+    window.setPanel = function(panel, iframe) {
-+      Components.utils.import("resource:///modules/devtools/StyleInspector.jsm");
-+      this.ruleview = new RuleViewTool(panel, window, iframe);
-+    }
-+    window.onunload = function() {
-+      if (this.ruleview) {
-+        this.ruleview.destroy();
-+      }
-+    }
-+  </script>
++<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" title="&VariablesViewWindowTitle;">
++  <vbox id="variables" flex="1"/>
 +</window>
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
@@ -94,7 +85,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -2995,16 +3003,80 @@ JSTerm.prototype = {
+@@ -2995,16 +3003,82 @@ JSTerm.prototype = {
        }, false);
        aOptions.anchor._panelOpen = true;
      }
@@ -147,10 +138,12 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +  _onVariablesViewTabReady: function JST__onVariablesViewTabReady(aOptions)
 +  {
-+    if (!this.variablesView) {
-+      this.variablesView = this._createVariablesView();
++    let view = this.variablesView;
++    if (!view) {
++      view = this.variablesView = this._createVariablesView();
 +    }
-+    this.variablesView.empty();
++    view.empty();
++    view.addScope().addVar();
 +  }
 +
 +  _createVariablesView: function JST__createVariablesView()
@@ -175,6 +168,37 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        Optional function to invoke when users click the message.
     * @param nsIDOMNode [aNodeAfter]
     *        Optional DOM node after which you want to insert the new message.
+@@ -3696,23 +3770,30 @@ JSTerm.prototype = {
+       propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
+ 
+       if (!aLinkNode.parentNode && aLinkNode._objectActors) {
+         aLinkNode._objectActors.forEach(this.hud._releaseObject, this.hud);
+         aLinkNode._objectActors = null;
+       }
+     }.bind(this);
+ 
++    /*
+     this.hud.objectPropertiesProvider(aResponse.result.actor,
+       function _onObjectProperties(aProperties) {
+         options.data.objectProperties = aProperties;
+         propPanel = this.openPropertyPanel(options);
+         propPanel.panel.setAttribute("hudId", this.hudId);
+         propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
+       }.bind(this));
++    */
++
++    let options2 = {
++      object: aResponse.result,
++    };
++    this.openVariablesView(options2);
+   },
+ 
+   /**
+    * The callback used for updating the Property Panel when the user clicks the
+    * Update button.
+    *
+    * @private
+    * @param object aOptions
 diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webconsole/webconsole.xul
 --- a/browser/devtools/webconsole/webconsole.xul
 +++ b/browser/devtools/webconsole/webconsole.xul
@@ -208,3 +232,439 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
          </stack>
        </hbox>
      </vbox>
+diff --git a/browser/locales/jar.mn b/browser/locales/jar.mn
+--- a/browser/locales/jar.mn
++++ b/browser/locales/jar.mn
+@@ -28,16 +28,17 @@
+     locale/browser/devtools/tilt.properties           (%chrome/browser/devtools/tilt.properties)
+     locale/browser/devtools/scratchpad.properties     (%chrome/browser/devtools/scratchpad.properties)
+     locale/browser/devtools/scratchpad.dtd            (%chrome/browser/devtools/scratchpad.dtd)
+     locale/browser/devtools/styleeditor.properties    (%chrome/browser/devtools/styleeditor.properties)
+     locale/browser/devtools/styleeditor.dtd           (%chrome/browser/devtools/styleeditor.dtd)
+     locale/browser/devtools/styleinspector.properties (%chrome/browser/devtools/styleinspector.properties)
+     locale/browser/devtools/styleinspector.dtd        (%chrome/browser/devtools/styleinspector.dtd)
+     locale/browser/devtools/webConsole.dtd            (%chrome/browser/devtools/webConsole.dtd)
++    locale/browser/devtools/VariablesView.dtd         (%chrome/browser/devtools/VariablesView.dtd)
+     locale/browser/devtools/sourceeditor.properties   (%chrome/browser/devtools/sourceeditor.properties)
+     locale/browser/devtools/sourceeditor.dtd          (%chrome/browser/devtools/sourceeditor.dtd)
+     locale/browser/devtools/profiler.properties       (%chrome/browser/devtools/profiler.properties)
+     locale/browser/devtools/layoutview.dtd            (%chrome/browser/devtools/layoutview.dtd)
+     locale/browser/devtools/responsiveUI.properties   (%chrome/browser/devtools/responsiveUI.properties)
+     locale/browser/devtools/toolbox.dtd            (%chrome/browser/devtools/toolbox.dtd)
+     locale/browser/devtools/toolbox.properties     (%chrome/browser/devtools/toolbox.properties)
+     locale/browser/devtools/inspector.dtd          (%chrome/browser/devtools/inspector.dtd)
+diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-script-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
+@@ -954,17 +954,17 @@ ThreadActor.prototype = {
+     }
+ 
+     if (aPool.objectActors.has(aValue)) {
+       return aPool.objectActors.get(aValue).grip();
+     } else if (this.threadLifetimePool.objectActors.has(aValue)) {
+       return this.threadLifetimePool.objectActors.get(aValue).grip();
+     }
+ 
+-    let actor = new ObjectActor(aValue, this);
++    let actor = new PauseScopedObjectActor(aValue, this);
+     aPool.addActor(actor);
+     aPool.objectActors.set(aValue, actor);
+     return actor.grip();
+   },
+ 
+   /**
+    * Create a grip for the given debuggee object with a pause lifetime.
+    *
+@@ -1492,20 +1492,17 @@ SourceActor.prototype.requestTypes = {
+  *        The parent thread actor for this object.
+  */
+ function ObjectActor(aObj, aThreadActor)
+ {
+   this.obj = aObj;
+   this.threadActor = aThreadActor;
+ }
+ 
+-ObjectActor.prototype = Object.create(PauseScopedActor.prototype);
+-
+-update(ObjectActor.prototype, {
+-  constructor: ObjectActor,
++ObjectActor.prototype = = {
+   actorPrefix: "obj",
+ 
+   /**
+    * Returns a grip for this actor for returning in a protocol message.
+    */
+   grip: function OA_grip() {
+     let g = { "type": "object",
+               "class": this.obj.class,
+@@ -1529,87 +1526,87 @@ update(ObjectActor.prototype, {
+ 
+     return g;
+   },
+ 
+   /**
+    * Releases this actor from the pool.
+    */
+   release: function OA_release() {
+-    this.registeredPool.objectActors.delete(this.obj);
++    if (this.registeredPool.objectActors) {
++      this.registeredPool.objectActors.delete(this.obj);
++    }
+     this.registeredPool.removeActor(this);
+   },
+ 
+   /**
+    * Handle a protocol request to provide the names of the properties defined on
+    * the object and not its prototype.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+    */
+-  onOwnPropertyNames:
+-  PauseScopedActor.withPaused(function OA_onOwnPropertyNames(aRequest) {
++  onOwnPropertyNames: function OA_onOwnPropertyNames(aRequest) {
+     return { from: this.actorID,
+              ownPropertyNames: this.obj.getOwnPropertyNames() };
+-  }),
++  },
+ 
+   /**
+    * Handle a protocol request to provide the prototype and own properties of
+    * the object.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+    */
+-  onPrototypeAndProperties:
+-  PauseScopedActor.withPaused(function OA_onPrototypeAndProperties(aRequest) {
++  onPrototypeAndProperties: function OA_onPrototypeAndProperties(aRequest) {
+     let ownProperties = {};
+     for each (let name in this.obj.getOwnPropertyNames()) {
+       try {
+         let desc = this.obj.getOwnPropertyDescriptor(name);
+         ownProperties[name] = this._propertyDescriptor(desc);
+       } catch (e if e.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO") {
+         // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
+         // allowed.
+         dumpn("Error while getting the property descriptor for " + name +
+               ": " + e.name);
+       }
+     }
+     return { from: this.actorID,
+              prototype: this.threadActor.createValueGrip(this.obj.proto),
+              ownProperties: ownProperties };
+-  }),
++  },
+ 
+   /**
+    * Handle a protocol request to provide the prototype of the object.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+    */
+-  onPrototype: PauseScopedActor.withPaused(function OA_onPrototype(aRequest) {
++  onPrototype: function OA_onPrototype(aRequest) {
+     return { from: this.actorID,
+              prototype: this.threadActor.createValueGrip(this.obj.proto) };
+-  }),
++  },
+ 
+   /**
+    * Handle a protocol request to provide the property descriptor of the
+    * object's specified property.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+    */
+-  onProperty: PauseScopedActor.withPaused(function OA_onProperty(aRequest) {
++  onProperty: function OA_onProperty(aRequest) {
+     if (!aRequest.name) {
+       return { error: "missingParameter",
+                message: "no property name was specified" };
+     }
+ 
+     let desc = this.obj.getOwnPropertyDescriptor(aRequest.name);
+     return { from: this.actorID,
+              descriptor: this._propertyDescriptor(desc) };
+-  }),
++  },
+ 
+   /**
+    * A helper method that creates a property descriptor for the provided object,
+    * properly formatted for sending in a protocol response.
+    *
+    * @param aObject object
+    *        The object that the descriptor is generated for.
+    */
+@@ -1628,26 +1625,94 @@ update(ObjectActor.prototype, {
+   },
+ 
+   /**
+    * Handle a protocol request to provide the source code of a function.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+    */
+-  onDecompile: PauseScopedActor.withPaused(function OA_onDecompile(aRequest) {
++  onDecompile: function OA_onDecompile(aRequest) {
+     if (this.obj.class !== "Function") {
+       return { error: "objectNotFunction",
+                message: "decompile request is only valid for object grips " +
+                         "with a 'Function' class." };
+     }
+ 
+     return { from: this.actorID,
+              decompiledCode: this.obj.decompile(!!aRequest.pretty) };
+-  }),
++  },
++
++  /**
++   * Handle a protocol request to provide the parameters of a function.
++   *
++   * @param aRequest object
++   *        The protocol request object.
++   */
++  onParameterNames: function OA_onParameterNames(aRequest) {
++    if (this.obj.class !== "Function") {
++      return { error: "objectNotFunction",
++               message: "'parameterNames' request is only valid for object " +
++                        "grips with a 'Function' class." };
++    }
++
++    return { parameterNames: this.obj.parameterNames };
++  },
++
++  /**
++   * Handle a protocol request to release a thread-lifetime grip.
++   *
++   * @param aRequest object
++   *        The protocol request object.
++   */
++  onRelease: function OA_onRelease(aRequest) {
++    this.release();
++    return {};
++  },
++});
++
++ObjectActor.prototype.requestTypes = {
++  "parameterNames": ObjectActor.prototype.onParameterNames,
++  "prototypeAndProperties": ObjectActor.prototype.onPrototypeAndProperties,
++  "prototype": ObjectActor.prototype.onPrototype,
++  "property": ObjectActor.prototype.onProperty,
++  "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
++  "decompile": ObjectActor.prototype.onDecompile,
++  "release": ObjectActor.prototype.onRelease,
++};
++
++
++/**
++ * Creates a pause-scoped  actor for the specified object.
++ * @see ObjectActor
++ */
++function PauseScopedObjectActor()
++{
++  ObjectActor.apply(this, arguments);
++}
++
++PauseScopedObjectActor.prototype = Object.create(PauseScopedActor.prototype);
++
++update(PauseScopedObjectActor.prototype, ObjectActor.prototype);
++
++update(PauseScopedObjectActor.prototype, {
++  constructor: PauseScopedObjectActor,
++
++  onOwnPropertyNames:
++    PauseScopedActor.withPaused(ObjectActor.prototype.onOwnPropertyNames),
++
++  onPrototypeAndProperties:
++    PauseScopedActor.withPaused(ObjectActor.prototype.onPrototypeAndProperties),
++
++  onPrototype: PauseScopedActor.withPaused(ObjectActor.prototype.onPrototype),
++  onProperty: PauseScopedActor.withPaused(ObjectActor.prototype.onProperty),
++  onDecompile: PauseScopedActor.withPaused(ObjectActor.prototype.onDecompile),
++
++  onParameterNames:
++    PauseScopedActor.withPaused(ObjectActor.prototype.onParameterNames),
+ 
+   /**
+    * Handle a protocol request to provide the lexical scope of a function.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+    */
+   onScope: PauseScopedActor.withPaused(function OA_onScope(aRequest) {
+@@ -1668,32 +1733,16 @@ update(ObjectActor.prototype, {
+     // We can't get to the frame that defined this function's environment,
+     // neither here, nor during ObjectActor's construction. Luckily, we don't
+     // use the 'scope' request in the debugger frontend.
+     return { name: this.obj.name || null,
+              scope: envActor.form(this.obj) };
+   }),
+ 
+   /**
+-   * Handle a protocol request to provide the parameters of a function.
+-   *
+-   * @param aRequest object
+-   *        The protocol request object.
+-   */
+-  onParameterNames: PauseScopedActor.withPaused(function OA_onParameterNames(aRequest) {
+-    if (this.obj.class !== "Function") {
+-      return { error: "objectNotFunction",
+-               message: "'parameterNames' request is only valid for object " +
+-                        "grips with a 'Function' class." };
+-    }
+-
+-    return { parameterNames: this.obj.parameterNames };
+-  }),
+-
+-  /**
+    * Handle a protocol request to promote a pause-lifetime grip to a
+    * thread-lifetime grip.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+    */
+   onThreadGrip: PauseScopedActor.withPaused(function OA_onThreadGrip(aRequest) {
+     this.threadActor.threadObjectGrip(this);
+@@ -1712,27 +1761,20 @@ update(ObjectActor.prototype, {
+                message: "Only thread-lifetime actors can be released." };
+     }
+ 
+     this.release();
+     return {};
+   }),
+ });
+ 
+-ObjectActor.prototype.requestTypes = {
+-  "parameterNames": ObjectActor.prototype.onParameterNames,
+-  "prototypeAndProperties": ObjectActor.prototype.onPrototypeAndProperties,
+-  "prototype": ObjectActor.prototype.onPrototype,
+-  "property": ObjectActor.prototype.onProperty,
+-  "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
+-  "scope": ObjectActor.prototype.onScope,
+-  "decompile": ObjectActor.prototype.onDecompile,
+-  "threadGrip": ObjectActor.prototype.onThreadGrip,
+-  "release": ObjectActor.prototype.onRelease,
+-};
++update(PauseScopedObjectActor.prototype.requestTypes, {
++  "scope": PauseScopedObjectActor.prototype.onScope,
++  "threadGrip": PauseScopedObjectActor.prototype.onThreadGrip,
++});
+ 
+ 
+ /**
+  * Creates an actor for the specied "very long" string. "Very long" is specified
+  * at the server's discretion.
+  *
+  * @param aString String
+  *        The string.
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -195,68 +195,57 @@ WebConsoleActor.prototype =
+     this.conn.removeActorPool(this._actorPool);
+     this._actorPool = null;
+     this.sandbox = null;
+     this._sandboxWindowId = 0;
+     this.conn = this._window = null;
+   },
+ 
+   /**
+-   * Create a grip for the given value. If the value is an object,
+-   * a WebConsoleObjectActor will be created.
++   * Create a grip for the given value.
+    *
+    * @param mixed aValue
+    * @return object
+    */
+-  createValueGrip: function WCA_createValueGrip(aValue)
+-  {
+-    return WebConsoleUtils.createValueGrip(aValue,
+-                                           this.createObjectActor.bind(this));
+-  },
++  createValueGrip: ThreadActor.prototype.createValueGrip,
+ 
+   /**
+    * Create a grip for the given object.
+    *
+    * @param object aObject
+    *        The object you want.
++   * @param object aPool
++   *        An ActorPoo where the new LSA instance is added.
+    * @param object
+    *        The object grip.
+    */
+-  createObjectActor: function WCA_createObjectActor(aObject)
++  objectActor: function WCA_objectActor(aObject, aPool)
+   {
+-    if (typeof aObject == "string") {
+-      return this.createStringGrip(aObject);
+-    }
+-
+     // We need to unwrap the object, otherwise we cannot access the properties
+     // and methods added by the content scripts.
+-    let obj = WebConsoleUtils.unwrap(aObject);
+-    let actor = new WebConsoleObjectActor(obj, this);
+-    this._actorPool.addActor(actor);
++    let actor = new ObjectActor(aObject, this);
++    aPool.addActor(actor);
+     return actor.grip();
+   },
+ 
+   /**
+-   * Create a grip for the given string. If the given string is a long string,
+-   * then a LongStringActor grip will be used.
++   * Create a grip for the given string.
+    *
+    * @param string aString
+    *        The string you want to create the grip for.
+-   * @return string|object
+-   *         The same string, as is, or a LongStringActor object that wraps the
+-   *         given string.
++   * @param object aPool
++   *        An ActorPoo where the new LSA instance is added.
++   * @return object
++   *         A LongStringActor object that wraps the given string.
+    */
+-  createStringGrip: function WCA_createStringGrip(aString)
++  longStringGrip: function WCA_longStringGrip(aString, aPool)
+   {
+-    if (aString.length >= DebuggerServer.LONG_STRING_LENGTH) {
+-      let actor = new LongStringActor(aString, this);
+-      this._actorPool.addActor(actor);
+-      return actor.grip();
+-    }
+-    return aString;
++    let actor = new LongStringActor(aString, this);
++    aPool.addActor(actor);
++    return actor.grip();
+   },
+ 
+   /**
+    * Get an object actor by its ID.
+    *
+    * @param string aActorID
+    * @return object
+    */
+@@ -488,19 +477,19 @@ WebConsoleActor.prototype =
+           errorMessage = errorToString.return;
+         }
+       }
+     }
+ 
+     return {
+       from: this.actorID,
+       input: input,
+-      result: this.createValueGrip(result),
++      result: this.createValueGrip(result, this._actorPool),
+       timestamp: timestamp,
+-      error: this.createValueGrip(error),
++      error: this.createValueGrip(error, this._actorPool),
+       errorMessage: errorMessage,
+       helperResult: helperResult,
+     };
+   },
+ 
+   /**
+    * The Autocomplete request handler.
+    *
