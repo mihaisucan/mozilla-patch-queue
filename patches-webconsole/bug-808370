@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 09a132d1950e2ce80e5f251893062988a19de0b0
+# Parent d87f4c7827c319e2a195a2919c2392570d45ed7e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1357767935 -7200
+# Date 1357851280 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -43,13 +43,33 @@ new file mode 100644
 +  <!ENTITY % viewDTD SYSTEM "chrome://browser/locale/devtools/VariablesView.dtd">
 +  %viewDTD;
 +]>
-+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" title="&VariablesViewWindowTitle;">
++<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" title="&PropertiesViewWindowTitle;">
 +  <vbox id="variables" flex="1"/>
 +</window>
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -41,27 +41,35 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+@@ -19,16 +19,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+                                   "resource://gre/modules/devtools/dbg-server.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "DebuggerClient",
+                                   "resource://gre/modules/devtools/dbg-client.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "debuggerSocketConnect",
+                                   "resource://gre/modules/devtools/dbg-client.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "GripClient",
++                                  "resource://gre/modules/devtools/dbg-client.jsm");
++
+ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
+                                    "@mozilla.org/widget/clipboardhelper;1",
+                                    "nsIClipboardHelper");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "PropertyPanel",
+                                   "resource:///modules/PropertyPanel.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "PropertyTreeView",
+@@ -41,27 +44,35 @@ XPCOMUtils.defineLazyModuleGetter(this, 
                                    "resource:///modules/AutocompletePopup.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
@@ -85,7 +105,278 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -2995,16 +3003,82 @@ JSTerm.prototype = {
+@@ -1007,37 +1018,35 @@ WebConsoleFrame.prototype = {
+       case "warn":
+       case "error":
+       case "debug":
+       case "dir":
+       case "groupEnd": {
+         body = { arguments: args };
+         let clipboardArray = [];
+         args.forEach(function(aValue) {
+-          clipboardArray.push(WebConsoleUtils.objectActorGripToString(aValue));
++          clipboardArray.push(VariablesView.getString(aValue));
+           if (aValue && typeof aValue == "object" && aValue.actor) {
+             objectActors.push(aValue.actor);
++            return; // FIXME: fix long strings support
+             let displayStringIsLong = typeof aValue.displayString == "object" &&
+                                       aValue.displayString.type == "longString";
+             if (aValue.type == "longString" || displayStringIsLong) {
+               clipboardArray.push(l10n.getStr("longStringEllipsis"));
+             }
+             if (displayStringIsLong) {
+               objectActors.push(aValue.displayString.actor);
+             }
+           }
+         }, this);
+         clipboardText = clipboardArray.join(" ");
+         sourceURL = aMessage.filename;
+         sourceLine = aMessage.lineNumber;
+ 
+-        if (level == "dir") {
+-          body.objectProperties = aMessage.objectProperties;
+-        }
+-        else if (level == "groupEnd") {
++        if (level == "groupEnd") {
+           objectActors.forEach(this._releaseObject, this);
+ 
+           if (this.groupDepth > 0) {
+             this.groupDepth--;
+           }
+           return; // no need to continue
+         }
+ 
+@@ -1119,33 +1128,32 @@ WebConsoleFrame.prototype = {
+       node._stacktrace = args;
+ 
+       this.makeOutputMessageLink(node, function _traceNodeClickCallback() {
+         if (node._panelOpen) {
+           return;
+         }
+ 
+         let options = {
+-          anchor: node,
+-          data: { object: node._stacktrace },
++          rawObject: node._stacktrace,
+         };
+ 
+-        let propPanel = this.jsterm.openPropertyPanel(options);
+-        propPanel.panel.setAttribute("hudId", this.hudId);
++        // FIXME: check this
++        this.jsterm.openVariablesView(options);
+       }.bind(this));
+     }
+ 
+-    if (level == "dir") {
++    /* FIXME if (level == "dir") {
+       // Initialize the inspector message node, by setting the PropertyTreeView
+       // object on the tree view. This has to be done *after* the node is
+       // shown, because the tree binding must be attached first.
+       node._onOutput = function _onMessageOutput() {
+         node.querySelector("tree").view = node.propertyTreeView;
+       };
+-    }
++    }*/
+ 
+     return node;
+   },
+ 
+   /**
+    * Handle ConsoleAPICall objects received from the server. This method outputs
+    * the window.console API call.
+    *
+@@ -1172,44 +1180,33 @@ WebConsoleFrame.prototype = {
+    */
+   _consoleLogClick:
+   function WCF__consoleLogClick(aMessage, aAnchor, aObjectActor)
+   {
+     if (aAnchor._panelOpen) {
+       return;
+     }
+ 
+-    let options = {
+-      title: aAnchor.textContent,
+-      anchor: aAnchor,
+-
+-      // Data to inspect.
+-      data: {
+-        objectPropertiesProvider: this.objectPropertiesProvider.bind(this),
+-        releaseObject: this._releaseObject.bind(this),
+-      },
+-    };
+-
+-    let propPanel;
++    /*
+     let onPopupHide = function _onPopupHide() {
+       propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
+ 
+       if (!aMessage.parentNode && aMessage._objectActors) {
+         aMessage._objectActors.forEach(this._releaseObject, this);
+         aMessage._objectActors = null;
+       }
+     }.bind(this);
+-
+-    this.objectPropertiesProvider(aObjectActor.actor,
+-      function _onObjectProperties(aProperties) {
+-        options.data.objectProperties = aProperties;
+-        propPanel = this.jsterm.openPropertyPanel(options);
+-        propPanel.panel.setAttribute("hudId", this.hudId);
+-        propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
+-      }.bind(this));
++    */
++
++    // TODO: release object actor.
++
++    let options2 = {
++      object: aObjectActor,
++    };
++    this.jsterm.openVariablesView(options2);
+   },
+ 
+   /**
+    * Reports an error in the page source, either JavaScript or CSS.
+    *
+    * @param nsIScriptError aScriptError
+    *        The error message to report.
+    * @return nsIDOMElement|undefined
+@@ -2175,17 +2172,17 @@ WebConsoleFrame.prototype = {
+     let node = this.document.createElementNS(XUL_NS, "richlistitem");
+ 
+     if (aBody instanceof Ci.nsIDOMNode) {
+       bodyNode.appendChild(aBody);
+     }
+     else {
+       let str = undefined;
+       if (aLevel == "dir") {
+-        str = WebConsoleUtils.objectActorGripToString(aBody.arguments[0]);
++        str = VariablesView.getString(aBody.arguments[0]);
+       }
+       else if (["log", "info", "warn", "error", "debug"].indexOf(aLevel) > -1 &&
+                typeof aBody == "object") {
+         this._makeConsoleLogMessageBody(node, bodyNode, aBody);
+       }
+       else {
+         str = aBody;
+       }
+@@ -2221,17 +2218,17 @@ WebConsoleFrame.prototype = {
+     node.classList.add("hud-msg-node");
+ 
+     node.timestamp = timestamp;
+     this.setMessageType(node, aCategory, aSeverity);
+ 
+     node.appendChild(timestampNode);
+     node.appendChild(iconContainer);
+     // Display the object tree after the message node.
+-    if (aLevel == "dir") {
++    if (aLevel == "dir2") { // FIXME: use VariablesView
+       // Make the body container, which is a vertical box, for grouping the text
+       // and tree widgets.
+       let bodyContainer = this.document.createElement("vbox");
+       bodyContainer.flex = 1;
+       bodyContainer.appendChild(bodyNode);
+       // Create the tree.
+       let tree = this.document.createElement("tree");
+       tree.setAttribute("hidecolumnpicker", "true");
+@@ -2303,26 +2300,27 @@ WebConsoleFrame.prototype = {
+       configurable: false
+     });
+ 
+     aBody.arguments.forEach(function(aItem) {
+       if (aContainer.firstChild) {
+         aContainer.appendChild(this.document.createTextNode(" "));
+       }
+ 
+-      let text = WebConsoleUtils.objectActorGripToString(aItem);
+-
+-      if (aItem && typeof aItem != "object" || !aItem.inspectable) {
++      let text = VariablesView.getString(aItem);
++      let inspectable = !VariablesView.isPrimitive({ value: aItem });
++
++      if (aItem && typeof aItem != "object" || !inspectable) {
+         aContainer.appendChild(this.document.createTextNode(text));
+ 
+         let longString = null;
+         if (aItem.type == "longString") {
+           longString = aItem;
+         }
+-        else if (!aItem.inspectable &&
++        else if (!inspectable &&
+                  typeof aItem.displayString == "object" &&
+                  aItem.displayString.type == "longString") {
+           longString = aItem.displayString;
+         }
+ 
+         if (longString) {
+           let ellipsis = this.document.createElement("description");
+           ellipsis.classList.add("hud-clickable");
+@@ -2803,22 +2801,25 @@ JSTerm.prototype = {
+   function JST__executeResultCallback(aAfterNode, aCallback, aResponse)
+   {
+     if (!this.hud) {
+       return;
+     }
+ 
+     let errorMessage = aResponse.errorMessage;
+     let result = aResponse.result;
+-    let inspectable = result && typeof result == "object" && result.inspectable;
++    let inspectable = false;
++    if (result && !VariablesView.isPrimitive({ value: result })) {
++      inspectable = true;
++    }
+     let helperResult = aResponse.helperResult;
+     let helperHasRawOutput = !!(helperResult || {}).rawOutput;
+-    let resultString =
+-      WebConsoleUtils.objectActorGripToString(result,
+-                                              !helperHasRawOutput);
++    let resultString = VariablesView.getString(result);
++
++    // TODO: fix inspectObject
+ 
+     if (helperResult && helperResult.type) {
+       switch (helperResult.type) {
+         case "clearOutput":
+           this.clearOutput();
+           break;
+         case "inspectObject":
+           this.handleInspectObject(helperResult.input, helperResult.object);
+@@ -2865,16 +2866,17 @@ JSTerm.prototype = {
+                                 this._evalOutputClick.bind(this, aResponse),
+                                 aAfterNode, aResponse.timestamp);
+     }
+     else {
+       node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
+                               aAfterNode, aResponse.timestamp);
+     }
+ 
++    // TODO: check long string magic
+     if (result && typeof result == "object" && result.actor) {
+       node._objectActors = [result.actor];
+       if (typeof result.displayString == "object" &&
+           result.displayString.type == "longString") {
+         node._objectActors.push(result.displayString.actor);
+       }
+ 
+       // Add an ellipsis to expand the short string if the object is not
+@@ -2927,17 +2929,17 @@ JSTerm.prototype = {
+       this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
+                        SEVERITY_LOG);
+       return;
+     }
+ 
+     let node = this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
+     let onResult = this._executeResultCallback.bind(this, node, aCallback);
+ 
+-    this.webConsoleClient.evaluateJS(aExecuteString, onResult);
++    this.webConsoleClient.evaluateJS(aExecuteString, null, onResult);
+ 
+     this.history.push(aExecuteString);
+     this.historyIndex++;
+     this.historyPlaceHolder = this.history.length;
+     this.setInputValue("");
+     this.clearCompletion();
+   },
+ 
+@@ -2995,16 +2997,159 @@ JSTerm.prototype = {
        }, false);
        aOptions.anchor._panelOpen = true;
      }
@@ -143,20 +434,97 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      view = this.variablesView = this._createVariablesView();
 +    }
 +    view.empty();
-+    view.addScope().addVar();
-+  }
++
++    // Make sure eval works in the correct context.
++    view.eval = this._variablesViewEvaluate.bind(this, aOptions.object);
++
++    let container = view.addScope().addVar();
++    this._fetchVarProperties(container, aOptions.object);
++  },
 +
 +  _createVariablesView: function JST__createVariablesView()
 +  {
 +    let tabDoc = this.sidebar.getWindowForTab("variablesview").document;
 +    let container = tabDoc.querySelector("#variables");
 +    let view = new VariablesView(container);
-+    view.searchPlaceholder = "emptyVariablesFilterText";
-+    view.emptyText ="emptyVariablesText";
-+    view.onlyEnumVisible = true;
++    view.searchPlaceholder = l10n.getStr("propertiesFilterPlaceholder");
++    view.emptyText = l10n.getStr("emptyPropertiesList");
 +    view.searchEnabled = true;
-+    view.eval = DebuggerController.StackFrames.evaluate;
++    view.allowDeletion = true;
 +    return view;
++  },
++
++  _variablesViewEvaluate: function JST__variablesViewEvaluate(aGrip, aString)
++  {
++    this.webConsoleClient.evaluateJS("_self" + aString, aGrip.actor);
++  },
++
++  /**
++   * Adds properties to a variable in the view. Triggered when a variable is
++   * expanded or certain variables are hovered. It does not expand the variable.
++   *
++   * @param object aVar
++   *        The VariableView Variable instance where the properties get added.
++   * @param object aGrip
++   *        The object actor grip of the variable.
++   */
++  _fetchVarProperties: function JST__fetchVarProperties(aVar, aGrip)
++  {
++    // Retrieve the properties only once.
++    if (aVar.fetched) {
++      return;
++    }
++    aVar.fetched = true;
++
++    let client = new GripClient(this.hud.proxy.client, aGrip);
++    client.getPrototypeAndProperties(function(aResponse) {
++      let { ownProperties, prototype } = aResponse;
++
++      // Add all the variable properties.
++      if (ownProperties) {
++        aVar.addProperties(ownProperties);
++        // Expansion handlers must be set after the properties are added.
++        for (let name in ownProperties) {
++          this._addVarExpander(aVar.get(name), ownProperties[name].value);
++        }
++      }
++
++      // Add the variable's __proto__.
++      if (prototype && prototype.type != "null") {
++        aVar.addProperty("__proto__", { value: prototype });
++        // Expansion handlers must be set after the properties are added.
++        this._addVarExpander(aVar.get("__proto__"), prototype);
++      }
++
++      aVar._retrieved = true;
++
++      this.variablesView.commitHierarchy();
++    }.bind(this));
++  },
++
++  /**
++   * Adds an 'onexpand' callback for a variable, lazily handling
++   * the addition of new properties.
++   *
++   * @param Variable aVar
++   *        The variable where the properties will be placed into.
++   * @param any aGrip
++   *        The grip of the variable.
++   */
++  _addVarExpander: function JST__addVarExpander(aVar, aGrip) {
++    // No need for expansion for primitive values.
++    if (VariablesView.isPrimitive({ value: aGrip })) {
++      return;
++    }
++    let callback = this._fetchVarProperties.bind(this, aVar, aGrip);
++
++    // Some variables are likely to contain a very large number of properties.
++    // It's a good idea to be prepared in case of an expansion.
++    if (aVar.name == "window" || aVar.name == "this") {
++      aVar.onmouseover = callback;
++    }
++    // Make sure that properties are always available on expansion.
++    aVar.onexpand = callback;
 +  },
 +
 +  /**
@@ -168,7 +536,37 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        Optional function to invoke when users click the message.
     * @param nsIDOMNode [aNodeAfter]
     *        Optional DOM node after which you want to insert the new message.
-@@ -3696,23 +3770,30 @@ JSTerm.prototype = {
+@@ -3667,52 +3812,40 @@ JSTerm.prototype = {
+    *        The message node for which we are handling events.
+    */
+   _evalOutputClick: function JST__evalOutputClick(aResponse, aLinkNode)
+   {
+     if (aLinkNode._panelOpen) {
+       return;
+     }
+ 
+-    let options = {
+-      title: aResponse.input,
+-      anchor: aLinkNode,
+-
+-      // Data to inspect.
+-      data: {
+-        objectPropertiesProvider: this.hud.objectPropertiesProvider.bind(this.hud),
+-        releaseObject: this.hud._releaseObject.bind(this.hud),
+-      },
+-    };
+-
+-    let propPanel;
+-
++    /*
+     options.updateButtonCallback = function JST__evalUpdateButton() {
+       let onResult =
+         this._evalOutputUpdatePanelCallback.bind(this, options, propPanel,
+                                                  aResponse);
+       this.webConsoleClient.evaluateJS(aResponse.input, onResult);
+     }.bind(this);
+ 
+     let onPopupHide = function JST__evalInspectPopupHide() {
        propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
  
        if (!aLinkNode.parentNode && aLinkNode._objectActors) {
@@ -176,17 +574,18 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          aLinkNode._objectActors = null;
        }
      }.bind(this);
- 
-+    /*
-     this.hud.objectPropertiesProvider(aResponse.result.actor,
-       function _onObjectProperties(aProperties) {
-         options.data.objectProperties = aProperties;
-         propPanel = this.openPropertyPanel(options);
-         propPanel.panel.setAttribute("hudId", this.hudId);
-         propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
-       }.bind(this));
+-
+-    this.hud.objectPropertiesProvider(aResponse.result.actor,
+-      function _onObjectProperties(aProperties) {
+-        options.data.objectProperties = aProperties;
+-        propPanel = this.openPropertyPanel(options);
+-        propPanel.panel.setAttribute("hudId", this.hudId);
+-        propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
+-      }.bind(this));
 +    */
 +
++    // TODO: add a way to update the panel.
++    // TODO: release object actor.
 +    let options2 = {
 +      object: aResponse.result,
 +    };
@@ -232,6 +631,44 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
          </stack>
        </hbox>
      </vbox>
+diff --git a/browser/locales/en-US/chrome/browser/devtools/VariablesView.dtd b/browser/locales/en-US/chrome/browser/devtools/VariablesView.dtd
+new file mode 100644
+--- /dev/null
++++ b/browser/locales/en-US/chrome/browser/devtools/VariablesView.dtd
+@@ -0,0 +1,12 @@
++<!-- This Source Code Form is subject to the terms of the Mozilla Public
++   - License, v. 2.0. If a copy of the MPL was not distributed with this
++   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
++
++<!-- LOCALIZATION NOTE : FILE The correct localization of this file might be to
++  - keep it in English, or another language commonly spoken among web developers.
++  - You want to make that choice consistent across the developer tools.
++  - A good criteria is the language in which you'd find the best
++  - documentation on web development on the web. -->
++
++<!ENTITY PropertiesViewWindowTitle "Properties">
++
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -196,8 +196,17 @@ NetworkPanel.fetchRemainingResponseConte
+ # LOCALIZATION NOTE (NetworkPanel.fetchRemainingRequestContentLink): This is
+ # displayed in the network panel when the request body is only partially
+ # available.
+ NetworkPanel.fetchRemainingRequestContentLink=Fetch the request body (%1$S bytes)
+ 
+ # LOCALIZATION NOTE (connectionTimeout): Message displayed when the Remote Web
+ # Console fails to connect to the server due to a timeout.
+ connectionTimeout=Connection timeout. Check the Error Console on both ends for potential error messages. Reopen the Web Console to try again.
++
++# LOCALIZATION NOTE (propertiesFilterPlaceholder): This is the text that
++# appears in the filter text box for the properties view container.
++propertiesFilterPlaceholder=Filter
++
++# LOCALIZATION NOTE (emptyPropertiesList): The text that is displayed in the
++# properties pane when there are no properties to display.
++emptyPropertiesList=No properties to display
++
 diff --git a/browser/locales/jar.mn b/browser/locales/jar.mn
 --- a/browser/locales/jar.mn
 +++ b/browser/locales/jar.mn
@@ -253,418 +690,3 @@ diff --git a/browser/locales/jar.mn b/browser/locales/jar.mn
      locale/browser/devtools/toolbox.dtd            (%chrome/browser/devtools/toolbox.dtd)
      locale/browser/devtools/toolbox.properties     (%chrome/browser/devtools/toolbox.properties)
      locale/browser/devtools/inspector.dtd          (%chrome/browser/devtools/inspector.dtd)
-diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
---- a/toolkit/devtools/debugger/server/dbg-script-actors.js
-+++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
-@@ -954,17 +954,17 @@ ThreadActor.prototype = {
-     }
- 
-     if (aPool.objectActors.has(aValue)) {
-       return aPool.objectActors.get(aValue).grip();
-     } else if (this.threadLifetimePool.objectActors.has(aValue)) {
-       return this.threadLifetimePool.objectActors.get(aValue).grip();
-     }
- 
--    let actor = new ObjectActor(aValue, this);
-+    let actor = new PauseScopedObjectActor(aValue, this);
-     aPool.addActor(actor);
-     aPool.objectActors.set(aValue, actor);
-     return actor.grip();
-   },
- 
-   /**
-    * Create a grip for the given debuggee object with a pause lifetime.
-    *
-@@ -1492,20 +1492,17 @@ SourceActor.prototype.requestTypes = {
-  *        The parent thread actor for this object.
-  */
- function ObjectActor(aObj, aThreadActor)
- {
-   this.obj = aObj;
-   this.threadActor = aThreadActor;
- }
- 
--ObjectActor.prototype = Object.create(PauseScopedActor.prototype);
--
--update(ObjectActor.prototype, {
--  constructor: ObjectActor,
-+ObjectActor.prototype = = {
-   actorPrefix: "obj",
- 
-   /**
-    * Returns a grip for this actor for returning in a protocol message.
-    */
-   grip: function OA_grip() {
-     let g = { "type": "object",
-               "class": this.obj.class,
-@@ -1529,87 +1526,87 @@ update(ObjectActor.prototype, {
- 
-     return g;
-   },
- 
-   /**
-    * Releases this actor from the pool.
-    */
-   release: function OA_release() {
--    this.registeredPool.objectActors.delete(this.obj);
-+    if (this.registeredPool.objectActors) {
-+      this.registeredPool.objectActors.delete(this.obj);
-+    }
-     this.registeredPool.removeActor(this);
-   },
- 
-   /**
-    * Handle a protocol request to provide the names of the properties defined on
-    * the object and not its prototype.
-    *
-    * @param aRequest object
-    *        The protocol request object.
-    */
--  onOwnPropertyNames:
--  PauseScopedActor.withPaused(function OA_onOwnPropertyNames(aRequest) {
-+  onOwnPropertyNames: function OA_onOwnPropertyNames(aRequest) {
-     return { from: this.actorID,
-              ownPropertyNames: this.obj.getOwnPropertyNames() };
--  }),
-+  },
- 
-   /**
-    * Handle a protocol request to provide the prototype and own properties of
-    * the object.
-    *
-    * @param aRequest object
-    *        The protocol request object.
-    */
--  onPrototypeAndProperties:
--  PauseScopedActor.withPaused(function OA_onPrototypeAndProperties(aRequest) {
-+  onPrototypeAndProperties: function OA_onPrototypeAndProperties(aRequest) {
-     let ownProperties = {};
-     for each (let name in this.obj.getOwnPropertyNames()) {
-       try {
-         let desc = this.obj.getOwnPropertyDescriptor(name);
-         ownProperties[name] = this._propertyDescriptor(desc);
-       } catch (e if e.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO") {
-         // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
-         // allowed.
-         dumpn("Error while getting the property descriptor for " + name +
-               ": " + e.name);
-       }
-     }
-     return { from: this.actorID,
-              prototype: this.threadActor.createValueGrip(this.obj.proto),
-              ownProperties: ownProperties };
--  }),
-+  },
- 
-   /**
-    * Handle a protocol request to provide the prototype of the object.
-    *
-    * @param aRequest object
-    *        The protocol request object.
-    */
--  onPrototype: PauseScopedActor.withPaused(function OA_onPrototype(aRequest) {
-+  onPrototype: function OA_onPrototype(aRequest) {
-     return { from: this.actorID,
-              prototype: this.threadActor.createValueGrip(this.obj.proto) };
--  }),
-+  },
- 
-   /**
-    * Handle a protocol request to provide the property descriptor of the
-    * object's specified property.
-    *
-    * @param aRequest object
-    *        The protocol request object.
-    */
--  onProperty: PauseScopedActor.withPaused(function OA_onProperty(aRequest) {
-+  onProperty: function OA_onProperty(aRequest) {
-     if (!aRequest.name) {
-       return { error: "missingParameter",
-                message: "no property name was specified" };
-     }
- 
-     let desc = this.obj.getOwnPropertyDescriptor(aRequest.name);
-     return { from: this.actorID,
-              descriptor: this._propertyDescriptor(desc) };
--  }),
-+  },
- 
-   /**
-    * A helper method that creates a property descriptor for the provided object,
-    * properly formatted for sending in a protocol response.
-    *
-    * @param aObject object
-    *        The object that the descriptor is generated for.
-    */
-@@ -1628,26 +1625,94 @@ update(ObjectActor.prototype, {
-   },
- 
-   /**
-    * Handle a protocol request to provide the source code of a function.
-    *
-    * @param aRequest object
-    *        The protocol request object.
-    */
--  onDecompile: PauseScopedActor.withPaused(function OA_onDecompile(aRequest) {
-+  onDecompile: function OA_onDecompile(aRequest) {
-     if (this.obj.class !== "Function") {
-       return { error: "objectNotFunction",
-                message: "decompile request is only valid for object grips " +
-                         "with a 'Function' class." };
-     }
- 
-     return { from: this.actorID,
-              decompiledCode: this.obj.decompile(!!aRequest.pretty) };
--  }),
-+  },
-+
-+  /**
-+   * Handle a protocol request to provide the parameters of a function.
-+   *
-+   * @param aRequest object
-+   *        The protocol request object.
-+   */
-+  onParameterNames: function OA_onParameterNames(aRequest) {
-+    if (this.obj.class !== "Function") {
-+      return { error: "objectNotFunction",
-+               message: "'parameterNames' request is only valid for object " +
-+                        "grips with a 'Function' class." };
-+    }
-+
-+    return { parameterNames: this.obj.parameterNames };
-+  },
-+
-+  /**
-+   * Handle a protocol request to release a thread-lifetime grip.
-+   *
-+   * @param aRequest object
-+   *        The protocol request object.
-+   */
-+  onRelease: function OA_onRelease(aRequest) {
-+    this.release();
-+    return {};
-+  },
-+});
-+
-+ObjectActor.prototype.requestTypes = {
-+  "parameterNames": ObjectActor.prototype.onParameterNames,
-+  "prototypeAndProperties": ObjectActor.prototype.onPrototypeAndProperties,
-+  "prototype": ObjectActor.prototype.onPrototype,
-+  "property": ObjectActor.prototype.onProperty,
-+  "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
-+  "decompile": ObjectActor.prototype.onDecompile,
-+  "release": ObjectActor.prototype.onRelease,
-+};
-+
-+
-+/**
-+ * Creates a pause-scoped  actor for the specified object.
-+ * @see ObjectActor
-+ */
-+function PauseScopedObjectActor()
-+{
-+  ObjectActor.apply(this, arguments);
-+}
-+
-+PauseScopedObjectActor.prototype = Object.create(PauseScopedActor.prototype);
-+
-+update(PauseScopedObjectActor.prototype, ObjectActor.prototype);
-+
-+update(PauseScopedObjectActor.prototype, {
-+  constructor: PauseScopedObjectActor,
-+
-+  onOwnPropertyNames:
-+    PauseScopedActor.withPaused(ObjectActor.prototype.onOwnPropertyNames),
-+
-+  onPrototypeAndProperties:
-+    PauseScopedActor.withPaused(ObjectActor.prototype.onPrototypeAndProperties),
-+
-+  onPrototype: PauseScopedActor.withPaused(ObjectActor.prototype.onPrototype),
-+  onProperty: PauseScopedActor.withPaused(ObjectActor.prototype.onProperty),
-+  onDecompile: PauseScopedActor.withPaused(ObjectActor.prototype.onDecompile),
-+
-+  onParameterNames:
-+    PauseScopedActor.withPaused(ObjectActor.prototype.onParameterNames),
- 
-   /**
-    * Handle a protocol request to provide the lexical scope of a function.
-    *
-    * @param aRequest object
-    *        The protocol request object.
-    */
-   onScope: PauseScopedActor.withPaused(function OA_onScope(aRequest) {
-@@ -1668,32 +1733,16 @@ update(ObjectActor.prototype, {
-     // We can't get to the frame that defined this function's environment,
-     // neither here, nor during ObjectActor's construction. Luckily, we don't
-     // use the 'scope' request in the debugger frontend.
-     return { name: this.obj.name || null,
-              scope: envActor.form(this.obj) };
-   }),
- 
-   /**
--   * Handle a protocol request to provide the parameters of a function.
--   *
--   * @param aRequest object
--   *        The protocol request object.
--   */
--  onParameterNames: PauseScopedActor.withPaused(function OA_onParameterNames(aRequest) {
--    if (this.obj.class !== "Function") {
--      return { error: "objectNotFunction",
--               message: "'parameterNames' request is only valid for object " +
--                        "grips with a 'Function' class." };
--    }
--
--    return { parameterNames: this.obj.parameterNames };
--  }),
--
--  /**
-    * Handle a protocol request to promote a pause-lifetime grip to a
-    * thread-lifetime grip.
-    *
-    * @param aRequest object
-    *        The protocol request object.
-    */
-   onThreadGrip: PauseScopedActor.withPaused(function OA_onThreadGrip(aRequest) {
-     this.threadActor.threadObjectGrip(this);
-@@ -1712,27 +1761,20 @@ update(ObjectActor.prototype, {
-                message: "Only thread-lifetime actors can be released." };
-     }
- 
-     this.release();
-     return {};
-   }),
- });
- 
--ObjectActor.prototype.requestTypes = {
--  "parameterNames": ObjectActor.prototype.onParameterNames,
--  "prototypeAndProperties": ObjectActor.prototype.onPrototypeAndProperties,
--  "prototype": ObjectActor.prototype.onPrototype,
--  "property": ObjectActor.prototype.onProperty,
--  "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
--  "scope": ObjectActor.prototype.onScope,
--  "decompile": ObjectActor.prototype.onDecompile,
--  "threadGrip": ObjectActor.prototype.onThreadGrip,
--  "release": ObjectActor.prototype.onRelease,
--};
-+update(PauseScopedObjectActor.prototype.requestTypes, {
-+  "scope": PauseScopedObjectActor.prototype.onScope,
-+  "threadGrip": PauseScopedObjectActor.prototype.onThreadGrip,
-+});
- 
- 
- /**
-  * Creates an actor for the specied "very long" string. "Very long" is specified
-  * at the server's discretion.
-  *
-  * @param aString String
-  *        The string.
-diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
---- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-+++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -195,68 +195,57 @@ WebConsoleActor.prototype =
-     this.conn.removeActorPool(this._actorPool);
-     this._actorPool = null;
-     this.sandbox = null;
-     this._sandboxWindowId = 0;
-     this.conn = this._window = null;
-   },
- 
-   /**
--   * Create a grip for the given value. If the value is an object,
--   * a WebConsoleObjectActor will be created.
-+   * Create a grip for the given value.
-    *
-    * @param mixed aValue
-    * @return object
-    */
--  createValueGrip: function WCA_createValueGrip(aValue)
--  {
--    return WebConsoleUtils.createValueGrip(aValue,
--                                           this.createObjectActor.bind(this));
--  },
-+  createValueGrip: ThreadActor.prototype.createValueGrip,
- 
-   /**
-    * Create a grip for the given object.
-    *
-    * @param object aObject
-    *        The object you want.
-+   * @param object aPool
-+   *        An ActorPoo where the new LSA instance is added.
-    * @param object
-    *        The object grip.
-    */
--  createObjectActor: function WCA_createObjectActor(aObject)
-+  objectActor: function WCA_objectActor(aObject, aPool)
-   {
--    if (typeof aObject == "string") {
--      return this.createStringGrip(aObject);
--    }
--
-     // We need to unwrap the object, otherwise we cannot access the properties
-     // and methods added by the content scripts.
--    let obj = WebConsoleUtils.unwrap(aObject);
--    let actor = new WebConsoleObjectActor(obj, this);
--    this._actorPool.addActor(actor);
-+    let actor = new ObjectActor(aObject, this);
-+    aPool.addActor(actor);
-     return actor.grip();
-   },
- 
-   /**
--   * Create a grip for the given string. If the given string is a long string,
--   * then a LongStringActor grip will be used.
-+   * Create a grip for the given string.
-    *
-    * @param string aString
-    *        The string you want to create the grip for.
--   * @return string|object
--   *         The same string, as is, or a LongStringActor object that wraps the
--   *         given string.
-+   * @param object aPool
-+   *        An ActorPoo where the new LSA instance is added.
-+   * @return object
-+   *         A LongStringActor object that wraps the given string.
-    */
--  createStringGrip: function WCA_createStringGrip(aString)
-+  longStringGrip: function WCA_longStringGrip(aString, aPool)
-   {
--    if (aString.length >= DebuggerServer.LONG_STRING_LENGTH) {
--      let actor = new LongStringActor(aString, this);
--      this._actorPool.addActor(actor);
--      return actor.grip();
--    }
--    return aString;
-+    let actor = new LongStringActor(aString, this);
-+    aPool.addActor(actor);
-+    return actor.grip();
-   },
- 
-   /**
-    * Get an object actor by its ID.
-    *
-    * @param string aActorID
-    * @return object
-    */
-@@ -488,19 +477,19 @@ WebConsoleActor.prototype =
-           errorMessage = errorToString.return;
-         }
-       }
-     }
- 
-     return {
-       from: this.actorID,
-       input: input,
--      result: this.createValueGrip(result),
-+      result: this.createValueGrip(result, this._actorPool),
-       timestamp: timestamp,
--      error: this.createValueGrip(error),
-+      error: this.createValueGrip(error, this._actorPool),
-       errorMessage: errorMessage,
-       helperResult: helperResult,
-     };
-   },
- 
-   /**
-    * The Autocomplete request handler.
-    *
