@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent d87f4c7827c319e2a195a2919c2392570d45ed7e
+# Parent d5e1244962950d294817fcb1b975b0a90c52b50c
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1357851280 -7200
 
@@ -105,7 +105,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -1007,37 +1018,35 @@ WebConsoleFrame.prototype = {
+@@ -1005,69 +1016,57 @@ WebConsoleFrame.prototype = {
        case "warn":
        case "error":
        case "debug":
@@ -146,7 +146,48 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            return; // no need to continue
          }
  
-@@ -1119,33 +1128,32 @@ WebConsoleFrame.prototype = {
+         break;
+       }
+ 
+       case "trace": {
+-        let filename = WebConsoleUtils.abbreviateSourceURL(args[0].filename);
+-        let functionName = args[0].functionName ||
++        sourceURL = aMessage.filename;
++        sourceLine = aMessage.lineNumber;
++
++        let filename = WebConsoleUtils.abbreviateSourceURL(aMessage.filename);
++        let functionName = aMessage.functionName ||
+                            l10n.getStr("stacktrace.anonymousFunction");
+-        let lineNumber = args[0].lineNumber;
+-
+-        body = l10n.getFormatStr("stacktrace.outputMessage",
+-                                 [filename, functionName, lineNumber]);
+-
+-        sourceURL = args[0].filename;
+-        sourceLine = args[0].lineNumber;
+-
+-        clipboardText = "";
+-
+-        args.forEach(function(aFrame) {
+-          clipboardText += aFrame.filename + " :: " +
+-                           aFrame.functionName + " :: " +
+-                           aFrame.lineNumber + "\n";
+-        });
+-
+-        clipboardText = clipboardText.trimRight();
++        let lineNumber = aMessage.lineNumber;
++        clipboardText = body =
++          l10n.getFormatStr("stacktrace.outputMessage",
++                            [filename, functionName, lineNumber]);
+         break;
+       }
+ 
+       case "group":
+       case "groupCollapsed":
+         clipboardText = body = args;
+         sourceURL = aMessage.filename;
+         sourceLine = aMessage.lineNumber;
+@@ -1117,33 +1116,32 @@ WebConsoleFrame.prototype = {
        node._stacktrace = args;
  
        this.makeOutputMessageLink(node, function _traceNodeClickCallback() {
@@ -185,7 +226,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Handle ConsoleAPICall objects received from the server. This method outputs
     * the window.console API call.
     *
-@@ -1172,44 +1180,33 @@ WebConsoleFrame.prototype = {
+@@ -1170,44 +1168,33 @@ WebConsoleFrame.prototype = {
     */
    _consoleLogClick:
    function WCF__consoleLogClick(aMessage, aAnchor, aObjectActor)
@@ -239,7 +280,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -2175,17 +2172,17 @@ WebConsoleFrame.prototype = {
+@@ -2173,17 +2160,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -258,7 +299,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2221,17 +2218,17 @@ WebConsoleFrame.prototype = {
+@@ -2219,17 +2206,17 @@ WebConsoleFrame.prototype = {
      node.classList.add("hud-msg-node");
  
      node.timestamp = timestamp;
@@ -277,7 +318,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        // Create the tree.
        let tree = this.document.createElement("tree");
        tree.setAttribute("hidecolumnpicker", "true");
-@@ -2303,26 +2300,27 @@ WebConsoleFrame.prototype = {
+@@ -2301,26 +2288,27 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -309,7 +350,25 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          if (longString) {
            let ellipsis = this.document.createElement("description");
            ellipsis.classList.add("hud-clickable");
-@@ -2803,22 +2801,25 @@ JSTerm.prototype = {
+@@ -2718,16 +2706,17 @@ function JSTerm(aWebConsoleFrame)
+   this.hudId = this.hud.hudId;
+ 
+   this.lastCompletion = { value: null };
+   this.history = [];
+   this.historyIndex = 0;
+   this.historyPlaceHolder = 0;  // this.history.length;
+   this._keyPress = this.keyPress.bind(this);
+   this._inputEventHandler = this.inputEventHandler.bind(this);
++  this._fetchVarProperties = this._fetchVarProperties.bind(this);
+ }
+ 
+ JSTerm.prototype = {
+   /**
+    * Stores the data for the last completion.
+    * @type object
+    */
+   lastCompletion: null,
+@@ -2801,22 +2790,25 @@ JSTerm.prototype = {
    function JST__executeResultCallback(aAfterNode, aCallback, aResponse)
    {
      if (!this.hud) {
@@ -339,7 +398,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            break;
          case "inspectObject":
            this.handleInspectObject(helperResult.input, helperResult.object);
-@@ -2865,16 +2866,17 @@ JSTerm.prototype = {
+@@ -2863,16 +2855,17 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -357,7 +416,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        }
  
        // Add an ellipsis to expand the short string if the object is not
-@@ -2927,17 +2929,17 @@ JSTerm.prototype = {
+@@ -2925,17 +2918,17 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -376,7 +435,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.clearCompletion();
    },
  
-@@ -2995,16 +2997,159 @@ JSTerm.prototype = {
+@@ -2993,16 +2986,159 @@ JSTerm.prototype = {
        }, false);
        aOptions.anchor._panelOpen = true;
      }
@@ -439,6 +498,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    view.eval = this._variablesViewEvaluate.bind(this, aOptions.object);
 +
 +    let container = view.addScope().addVar();
++    container.allowDeletion = true;
 +    this._fetchVarProperties(container, aOptions.object);
 +  },
 +
@@ -450,7 +510,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    view.searchPlaceholder = l10n.getStr("propertiesFilterPlaceholder");
 +    view.emptyText = l10n.getStr("emptyPropertiesList");
 +    view.searchEnabled = true;
-+    view.allowDeletion = true;
 +    return view;
 +  },
 +
@@ -465,10 +524,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   *
 +   * @param object aVar
 +   *        The VariableView Variable instance where the properties get added.
-+   * @param object aGrip
-+   *        The object actor grip of the variable.
++   * @param object [aGrip=null]
++   *        Optional, the object actor grip of the variable. If the grip is not
++   *        provided, then the aVar.descriptor is used as the object actor grip.
 +   */
-+  _fetchVarProperties: function JST__fetchVarProperties(aVar, aGrip)
++  _fetchVarProperties: function JST__fetchVarProperties(aVar, aGrip = null)
 +  {
 +    // Retrieve the properties only once.
 +    if (aVar.fetched) {
@@ -476,7 +536,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    }
 +    aVar.fetched = true;
 +
-+    let client = new GripClient(this.hud.proxy.client, aGrip);
++    let grip = aGrip || aVar.value;
++    if (!grip) {
++      throw new Error("No object actor grip was given for the variable.");
++    }
++    let client = new GripClient(this.hud.proxy.client, grip);
 +    client.getPrototypeAndProperties(function(aResponse) {
 +      let { ownProperties, prototype } = aResponse;
 +
@@ -503,28 +567,23 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  },
 +
 +  /**
-+   * Adds an 'onexpand' callback for a variable, lazily handling
-+   * the addition of new properties.
++   * Adds an 'onexpand' callback for a variable, lazily handling the addition of
++   * new properties.
 +   *
 +   * @param Variable aVar
 +   *        The variable where the properties will be placed into.
 +   * @param any aGrip
 +   *        The grip of the variable.
 +   */
-+  _addVarExpander: function JST__addVarExpander(aVar, aGrip) {
++  _addVarExpander: function JST__addVarExpander(aVar, aGrip)
++  {
++    aVar.allowDeletion = true;
++
 +    // No need for expansion for primitive values.
 +    if (VariablesView.isPrimitive({ value: aGrip })) {
 +      return;
 +    }
-+    let callback = this._fetchVarProperties.bind(this, aVar, aGrip);
-+
-+    // Some variables are likely to contain a very large number of properties.
-+    // It's a good idea to be prepared in case of an expansion.
-+    if (aVar.name == "window" || aVar.name == "this") {
-+      aVar.onmouseover = callback;
-+    }
-+    // Make sure that properties are always available on expansion.
-+    aVar.onexpand = callback;
++    aVar.onexpand = this._fetchVarProperties;
 +  },
 +
 +  /**
@@ -536,7 +595,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        Optional function to invoke when users click the message.
     * @param nsIDOMNode [aNodeAfter]
     *        Optional DOM node after which you want to insert the new message.
-@@ -3667,52 +3812,40 @@ JSTerm.prototype = {
+@@ -3665,52 +3801,40 @@ JSTerm.prototype = {
     *        The message node for which we are handling events.
     */
    _evalOutputClick: function JST__evalOutputClick(aResponse, aLinkNode)
@@ -672,7 +731,7 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 diff --git a/browser/locales/jar.mn b/browser/locales/jar.mn
 --- a/browser/locales/jar.mn
 +++ b/browser/locales/jar.mn
-@@ -28,16 +28,17 @@
+@@ -31,16 +31,17 @@
      locale/browser/devtools/tilt.properties           (%chrome/browser/devtools/tilt.properties)
      locale/browser/devtools/scratchpad.properties     (%chrome/browser/devtools/scratchpad.properties)
      locale/browser/devtools/scratchpad.dtd            (%chrome/browser/devtools/scratchpad.dtd)
@@ -690,3 +749,24 @@ diff --git a/browser/locales/jar.mn b/browser/locales/jar.mn
      locale/browser/devtools/toolbox.dtd            (%chrome/browser/devtools/toolbox.dtd)
      locale/browser/devtools/toolbox.properties     (%chrome/browser/devtools/toolbox.properties)
      locale/browser/devtools/inspector.dtd          (%chrome/browser/devtools/inspector.dtd)
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -829,17 +829,16 @@ WebConsoleActor.prototype =
+       level: aMessage.level,
+       filename: aMessage.filename,
+       lineNumber: aMessage.lineNumber,
+       functionName: aMessage.functionName,
+       timeStamp: aMessage.timeStamp,
+     };
+ 
+     switch (result.level) {
+-      case "trace":
+       case "group":
+       case "groupCollapsed":
+       case "time":
+       case "timeEnd":
+         result.arguments = aMessage.arguments;
+         break;
+       default:
+         result.arguments = Array.map(aMessage.arguments || [],
