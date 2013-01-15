@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent c71aca3e8d9a17ff6a37c67388ecf7d5b1155c18
+# Parent 0364f6849cab907574024a0b6a14281354a476fe
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1358199455 -7200
+# Date 1358257698 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -372,7 +372,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.clearCompletion();
    },
  
-@@ -3004,16 +3009,168 @@ JSTerm.prototype = {
+@@ -3004,16 +3009,180 @@ JSTerm.prototype = {
        }, false);
        aOptions.anchor._panelOpen = true;
      }
@@ -429,18 +429,27 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    if (!view) {
 +      view = this.variablesView = this._createVariablesView();
 +    }
++    view.createHierarchy();
 +    view.empty();
++
++    if (aOptions.object) {
++      // Make sure eval works in the correct context.
++      view.eval = this._variablesViewEvaluate.bind(this, aOptions);
++    }
++    else {
++      view.eval = null;
++    }
 +
 +    let container = view.addScope().addVar();
 +    container.allowDeletion = true;
 +    if (aOptions.object) {
-+      // Make sure eval works in the correct context.
-+      view.eval = this._variablesViewEvaluate.bind(this, aOptions.object);
++      container.allowValueInput = true;
 +      this._fetchVarProperties(container, aOptions.object);
 +    }
 +    else if (aOptions.rawObject) {
-+      // TODO: provide an eval
++      container.allowValueInput = false;
 +      container.populate(aOptions.rawObject);
++      view.commitHierarchy();
 +    }
 +    else {
 +      throw new Error("Variables View cannot open without giving it an object " +
@@ -456,12 +465,15 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    view.searchPlaceholder = l10n.getStr("propertiesFilterPlaceholder");
 +    view.emptyText = l10n.getStr("emptyPropertiesList");
 +    view.searchEnabled = true;
++    view.lazyEmpty = true;
 +    return view;
 +  },
 +
-+  _variablesViewEvaluate: function JST__variablesViewEvaluate(aGrip, aString)
++  _variablesViewEvaluate: function JST__variablesViewEvaluate(aOptions, aString)
 +  {
-+    this.webConsoleClient.evaluateJS("_self" + aString, aGrip.actor);
++    let grip = aOptions.object;
++    this.webConsoleClient.evaluateJS("_self" + aString, grip.actor,
++        this._onVariablesViewTabReady.bind(this, aOptions));
 +  },
 +
 +  /**
@@ -541,7 +553,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        Optional function to invoke when users click the message.
     * @param nsIDOMNode [aNodeAfter]
     *        Optional DOM node after which you want to insert the new message.
-@@ -3676,52 +3833,40 @@ JSTerm.prototype = {
+@@ -3676,52 +3845,40 @@ JSTerm.prototype = {
     *        The message node for which we are handling events.
     */
    _evalOutputClick: function JST__evalOutputClick(aResponse, aLinkNode)
