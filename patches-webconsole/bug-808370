@@ -1,10 +1,59 @@
 # HG changeset patch
-# Parent cb77580990f84fa59cf7376f4d0fac3aa5f45bf5
+# Parent bc9b5f1fd5e8d8e57d605da981d7b8f94318f79b
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1358275104 -7200
+# Date 1358373584 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
+diff --git a/browser/devtools/framework/Sidebar.jsm b/browser/devtools/framework/Sidebar.jsm
+--- a/browser/devtools/framework/Sidebar.jsm
++++ b/browser/devtools/framework/Sidebar.jsm
+@@ -55,24 +55,24 @@ ToolSidebar.prototype = {
+     iframe.setAttribute("flex", "1");
+     iframe.setAttribute("src", url);
+ 
+     let tab = this._tabbox.tabs.appendItem();
+     tab.setAttribute("label", ""); // Avoid showing "undefined" while the tab is loading
+ 
+     let onIFrameLoaded = function() {
+       tab.setAttribute("label", iframe.contentDocument.title);
+-      iframe.removeEventListener("DOMContentLoaded", onIFrameLoaded, true);
++      iframe.removeEventListener("load", onIFrameLoaded, true);
+       if ("setPanel" in iframe.contentWindow) {
+         iframe.contentWindow.setPanel(this._toolPanel, iframe);
+       }
+       this.emit(id + "-ready");
+     }.bind(this);
+ 
+-    iframe.addEventListener("DOMContentLoaded", onIFrameLoaded, true);
++    iframe.addEventListener("load", onIFrameLoaded, true);
+ 
+     let tabpanel = this._panelDoc.createElementNS(XULNS, "tabpanel");
+     tabpanel.setAttribute("id", "sidebar-panel-" + id);
+     tabpanel.appendChild(iframe);
+     this._tabbox.tabpanels.appendChild(tabpanel);
+ 
+     tab.linkedPanel = "sidebar-panel-" + id;
+ 
+@@ -80,17 +80,17 @@ ToolSidebar.prototype = {
+     this._tabs.set(id, tab);
+ 
+     if (selected) {
+       // For some reason I don't understand, if we call this.select in this
+       // event loop (after inserting the tab), the tab will never get the
+       // the "selected" attribute set to true.
+       this._panelDoc.defaultView.setTimeout(function() {
+         this.select(id);
+-      }.bind(this), 0);
++      }.bind(this), 10);
+     }
+ 
+     this.emit("new-tab-registered", id);
+   },
+ 
+   /**
+    * Select a specific tab.
+    */
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 --- a/browser/devtools/jar.mn
 +++ b/browser/devtools/jar.mn
@@ -187,7 +236,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                                        level, aMessage.timeStamp);
  
      if (objectActors.length) {
-@@ -1128,33 +1138,31 @@ WebConsoleFrame.prototype = {
+@@ -1128,34 +1138,23 @@ WebConsoleFrame.prototype = {
        node._stacktrace = aMessage.stacktrace;
  
        this.makeOutputMessageLink(node, function _traceNodeClickCallback() {
@@ -208,16 +257,14 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
  
 -    if (level == "dir") {
-+    /* FIXME if (level == "dir") {
-       // Initialize the inspector message node, by setting the PropertyTreeView
-       // object on the tree view. This has to be done *after* the node is
-       // shown, because the tree binding must be attached first.
-       node._onOutput = function _onMessageOutput() {
-         node.querySelector("tree").view = node.propertyTreeView;
-       };
+-      // Initialize the inspector message node, by setting the PropertyTreeView
+-      // object on the tree view. This has to be done *after* the node is
+-      // shown, because the tree binding must be attached first.
+-      node._onOutput = function _onMessageOutput() {
+-        node.querySelector("tree").view = node.propertyTreeView;
+-      };
 -    }
-+    }*/
- 
+-
      return node;
    },
  
@@ -225,7 +272,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Handle ConsoleAPICall objects received from the server. This method outputs
     * the window.console API call.
     *
-@@ -1181,44 +1189,33 @@ WebConsoleFrame.prototype = {
+    * @param object aMessage
+@@ -1181,44 +1180,33 @@ WebConsoleFrame.prototype = {
     */
    _consoleLogClick:
    function WCF__consoleLogClick(aMessage, aAnchor, aObjectActor)
@@ -268,7 +316,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    // TODO: release object actor.
 +
 +    let options2 = {
-+      object: aObjectActor,
++      objectActor: aObjectActor,
 +    };
 +    this.jsterm.openVariablesView(options2);
    },
@@ -279,7 +327,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1984,16 +1981,17 @@ WebConsoleFrame.prototype = {
+@@ -1984,16 +1972,17 @@ WebConsoleFrame.prototype = {
               methodOrNode == this.logConsoleAPIMessage) {
        let level = args[0].level;
        let releaseObject = function _releaseObject(aValue) {
@@ -297,7 +345,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          case "dir":
          case "groupEnd": {
            args[0].arguments.forEach(releaseObject);
-@@ -2184,17 +2182,17 @@ WebConsoleFrame.prototype = {
+@@ -2184,17 +2173,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -316,7 +364,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2230,51 +2228,37 @@ WebConsoleFrame.prototype = {
+@@ -2229,52 +2218,39 @@ WebConsoleFrame.prototype = {
+     node.clipboardText = aClipboardText;
      node.classList.add("hud-msg-node");
  
      node.timestamp = timestamp;
@@ -324,14 +373,15 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      node.appendChild(timestampNode);
      node.appendChild(iconContainer);
-     // Display the object tree after the message node.
--    if (aLevel == "dir") {
-+    if (aLevel == "dir") { // FIXME: use VariablesView
+-    // Display the object tree after the message node.
++
++    // Display the variables view after the message node.
+     if (aLevel == "dir") {
 +      let viewContainer = this.document.createElement("hbox");
 +      viewContainer.flex = 1;
 +
 +      let options = {
-+        object: body.arguments[0],
++        objectActor: body.arguments[0],
 +        targetElement: viewContainer,
 +        hideFilterInput: true,
 +      };
@@ -382,7 +432,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2312,26 +2296,27 @@ WebConsoleFrame.prototype = {
+@@ -2312,26 +2288,27 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -414,7 +464,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          if (longString) {
            let ellipsis = this.document.createElement("description");
            ellipsis.classList.add("hud-clickable");
-@@ -2729,16 +2714,17 @@ function JSTerm(aWebConsoleFrame)
+@@ -2729,16 +2706,17 @@ function JSTerm(aWebConsoleFrame)
    this.hudId = this.hud.hudId;
  
    this.lastCompletion = { value: null };
@@ -432,7 +482,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @type object
     */
    lastCompletion: null,
-@@ -2812,22 +2798,25 @@ JSTerm.prototype = {
+@@ -2812,30 +2790,31 @@ JSTerm.prototype = {
    function JST__executeResultCallback(aAfterNode, aCallback, aResponse)
    {
      if (!this.hud) {
@@ -452,8 +502,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      WebConsoleUtils.objectActorGripToString(result,
 -                                              !helperHasRawOutput);
 +    let resultString = VariablesView.getString(result);
-+
-+    // TODO: fix inspectObject
  
      if (helperResult && helperResult.type) {
        switch (helperResult.type) {
@@ -461,8 +509,17 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            this.clearOutput();
            break;
          case "inspectObject":
-           this.handleInspectObject(helperResult.input, helperResult.object);
-@@ -2874,16 +2863,17 @@ JSTerm.prototype = {
+-          this.handleInspectObject(helperResult.input, helperResult.object);
++          this.handleInspectObject(helperResult.object);
+           break;
+         case "error":
+           try {
+             errorMessage = l10n.getStr(helperResult.message);
+           }
+           catch (ex) {
+             errorMessage = helperResult.message;
+           }
+@@ -2874,16 +2853,17 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -480,7 +537,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        }
  
        // Add an ellipsis to expand the short string if the object is not
-@@ -2936,17 +2926,17 @@ JSTerm.prototype = {
+@@ -2936,17 +2916,17 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -499,7 +556,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.clearCompletion();
    },
  
-@@ -3004,16 +2994,233 @@ JSTerm.prototype = {
+@@ -3004,16 +2984,234 @@ JSTerm.prototype = {
        }, false);
        aOptions.anchor._panelOpen = true;
      }
@@ -602,7 +659,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    }
 +    else {
 +      this.sidebar.once("variablesview-ready", onTabReady);
-+      this.sidebar.addTab("variablesview", VARIABLES_VIEW_URL);
++      this.sidebar.addTab("variablesview", VARIABLES_VIEW_URL, true);
 +    }
 +
 +    return deferred.promise;
@@ -614,7 +671,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    view.createHierarchy();
 +    view.empty();
 +
-+    if (aOptions.object) {
++    if (aOptions.objectActor) {
 +      // Make sure eval works in the correct context.
 +      view.eval = this._variablesViewEvaluate.bind(this, aOptions);
 +    }
@@ -622,11 +679,12 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      view.eval = null;
 +    }
 +
++    // TODO: add scope label
 +    let container = view.addScope().addVar();
 +    container.allowDeletion = true;
-+    if (aOptions.object) {
++    if (aOptions.objectActor) {
 +      container.allowValueInput = true;
-+      this._fetchVarProperties(container, aOptions.object);
++      this._fetchVarProperties(container, aOptions.objectActor);
 +    }
 +    else if (aOptions.rawObject) {
 +      container.allowValueInput = false;
@@ -651,7 +709,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +  _variablesViewEvaluate: function JST__variablesViewEvaluate(aOptions, aString)
 +  {
-+    let grip = aOptions.object;
++    let grip = aOptions.objectActor;
 +    this.webConsoleClient.evaluateJS("_self" + aString, grip.actor,
 +        this._updateVariablesView.bind(this, aOptions));
 +  },
@@ -733,15 +791,66 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        Optional function to invoke when users click the message.
     * @param nsIDOMNode [aNodeAfter]
     *        Optional DOM node after which you want to insert the new message.
-@@ -3676,52 +3883,40 @@ JSTerm.prototype = {
+@@ -3629,99 +3827,51 @@ JSTerm.prototype = {
+     let prefix = aSuffix ? this.inputNode.value.replace(/[\S]/g, " ") : "";
+     this.completeNode.value = prefix + aSuffix;
+   },
+ 
+   /**
+    * The JSTerm InspectObject remote message handler. This allows the remote
+    * process to open the Property Panel for a given object.
+    *
+-   * @param object aRequest
+-   *        The request message from the content process. This message includes
+-   *        the user input string that was evaluated to inspect an object and
+-   *        the result object which is to be inspected.
++   * @param string aActor
++   *        The ObjectActor ID to inspect.
+    */
+-  handleInspectObject: function JST_handleInspectObject(aInput, aActor)
++  handleInspectObject: function JST_handleInspectObject(aActor)
+   {
+-    let options = {
+-      title: aInput,
+-
+-      data: {
+-        objectPropertiesProvider: this.hud.objectPropertiesProvider.bind(this.hud),
+-        releaseObject: this.hud._releaseObject.bind(this.hud),
+-      },
+-    };
+-
+-    let propPanel;
+-
+-    let onPopupHide = function JST__onPopupHide() {
+-      propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
+-      this.hud._releaseObject(aActor.actor);
+-    }.bind(this);
+-
+-    this.hud.objectPropertiesProvider(aActor.actor,
+-      function _onObjectProperties(aProperties) {
+-        options.data.objectProperties = aProperties;
+-        propPanel = this.openPropertyPanel(options);
+-        propPanel.panel.setAttribute("hudId", this.hudId);
+-        propPanel.panel.addEventListener("popuphiding", onPopupHide, false);
+-      }.bind(this));
++    this.openVariablesView({objectActor: aActor});
+   },
+ 
+   /**
+    * The click event handler for evaluation results in the output.
+    *
+    * @private
+    * @param object aResponse
+    *        The JavaScript evaluation response received from the server.
+    * @param nsIDOMNode aLink
     *        The message node for which we are handling events.
     */
    _evalOutputClick: function JST__evalOutputClick(aResponse, aLinkNode)
    {
-     if (aLinkNode._panelOpen) {
-       return;
-     }
- 
+-    if (aLinkNode._panelOpen) {
+-      return;
+-    }
+-
 -    let options = {
 -      title: aResponse.input,
 -      anchor: aLinkNode,
@@ -755,14 +864,14 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -
 -    let propPanel;
 -
+-    options.updateButtonCallback = function JST__evalUpdateButton() {
+-      let onResult =
+-        this._evalOutputUpdatePanelCallback.bind(this, options, propPanel,
+-                                                 aResponse);
+-      this.webConsoleClient.evaluateJS(aResponse.input, onResult);
+-    }.bind(this);
+-
 +    /*
-     options.updateButtonCallback = function JST__evalUpdateButton() {
-       let onResult =
-         this._evalOutputUpdatePanelCallback.bind(this, options, propPanel,
-                                                  aResponse);
-       this.webConsoleClient.evaluateJS(aResponse.input, onResult);
-     }.bind(this);
- 
      let onPopupHide = function JST__evalInspectPopupHide() {
        propPanel.panel.removeEventListener("popuphiding", onPopupHide, false);
  
@@ -781,10 +890,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      }.bind(this));
 +    */
 +
-+    // TODO: add a way to update the panel.
 +    // TODO: release object actor.
 +    let options2 = {
-+      object: aResponse.result,
++      objectActor: aResponse.result,
 +    };
 +    this.openVariablesView(options2);
    },
@@ -795,6 +903,24 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param object aOptions
+@@ -3781,16 +3931,17 @@ JSTerm.prototype = {
+       }.bind(this));
+   },
+ 
+   /**
+    * Destroy the JSTerm object. Call this method to avoid memory leaks.
+    */
+   destroy: function JST_destroy()
+   {
++    // TODO: destroy sidebar. cleanup
+     this.clearCompletion();
+     this.clearOutput();
+ 
+     this.autocompletePopup.destroy();
+     this.autocompletePopup = null;
+ 
+     let popup = this.hud.owner.chromeDocument
+                 .getElementById("webConsole_autocompletePopup");
 diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webconsole/webconsole.xul
 --- a/browser/devtools/webconsole/webconsole.xul
 +++ b/browser/devtools/webconsole/webconsole.xul
@@ -935,3 +1061,541 @@ diff --git a/browser/themes/winstripe/devtools/webconsole.css b/browser/themes/w
 +.webconsole-msg-inspector iframe {
 +  height: 7em;
 +}
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -29,16 +29,20 @@ XPCOMUtils.defineLazyServiceGetter(this,
+                                    "nsIHttpActivityDistributor");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
+                                   "resource:///modules/devtools/gDevTools.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "TargetFactory",
+                                   "resource:///modules/devtools/Target.jsm");
+ 
++// FIXME: toolkit imports from browser.
++XPCOMUtils.defineLazyModuleGetter(this, "VariablesView",
++                                  "resource:///modules/devtools/VariablesView.jsm");
++
+ this.EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider", "JSTermHelpers",
+                          "PageErrorListener", "ConsoleAPIListener",
+                          "NetworkResponseListener", "NetworkMonitor",
+                          "ConsoleProgressListener"];
+ 
+ // Match the function name from the result of toString() or toSource().
+ //
+ // Examples:
+@@ -781,17 +785,17 @@ this.WebConsoleUtils = {
+    * Get the object class name. For example, the |window| object has the Window
+    * class name (based on [object Window]).
+    *
+    * @param object aObject
+    *        The object you want to get the class name for.
+    * @return string
+    *         The object class name.
+    */
+-  getObjectClassName: function WCF_getObjectClassName(aObject)
++  getObjectClassName: function WCU_getObjectClassName(aObject)
+   {
+     if (aObject === null) {
+       return "null";
+     }
+     if (aObject === undefined) {
+       return "undefined";
+     }
+ 
+@@ -1540,60 +1544,55 @@ this.JSTermHelpers = function JSTermHelp
+    * @return array of nsIDOMNode
+    */
+   aOwner.sandbox.$x = function JSTH_$x(aXPath, aContext)
+   {
+     let nodes = [];
+     let doc = aOwner.window.document;
+     let aContext = aContext || doc;
+ 
+-    try {
+-      let results = doc.evaluate(aXPath, aContext, null,
+-                                 Ci.nsIDOMXPathResult.ANY_TYPE, null);
+-      let node;
+-      while (node = results.iterateNext()) {
+-        nodes.push(node);
+-      }
+-    }
+-    catch (ex) {
+-      aOwner.window.console.error(ex.message);
++    let results = doc.evaluate(aXPath, aContext, null,
++                               Ci.nsIDOMXPathResult.ANY_TYPE, null);
++    let node;
++    while (node = results.iterateNext()) {
++      nodes.push(node);
+     }
+ 
+     return nodes;
+   };
+ 
+   /**
+    * Returns the currently selected object in the highlighter.
+    *
+    * TODO: this implementation crosses the client/server boundaries! This is not
+    * usable within a remote browser. To implement this feature correctly we need
+    * support for remote inspection capabilities within the Inspector as well.
+    * See bug 787975.
+    *
+    * @return nsIDOMElement|null
+    *         The DOM element currently selected in the highlighter.
+    */
+-  Object.defineProperty(aOwner.sandbox, "$0", {
++  /* FIXME Object.defineProperty(aOwner.sandbox, "$0", {
+     get: function() {
+       try {
+         let window = aOwner.chromeWindow();
+         let target = TargetFactory.forTab(window.gBrowser.selectedTab);
+         let toolbox = gDevTools.getToolbox(target);
+ 
+         return toolbox == null ?
+             undefined :
+             toolbox.getPanel("inspector").selection.node;
+       }
+       catch (ex) {
+         aOwner.window.console.error(ex.message);
+       }
+     },
+     enumerable: true,
+     configurable: false
+-  });
++  }); */
+ 
+   /**
+    * Clears the output of the JSTerm.
+    */
+   aOwner.sandbox.clear = function JSTH_clear()
+   {
+     aOwner.helperResult = {
+       type: "clearOutput",
+@@ -1604,40 +1603,37 @@ this.JSTermHelpers = function JSTermHelp
+    * Returns the result of Object.keys(aObject).
+    *
+    * @param object aObject
+    *        Object to return the property names from.
+    * @return array of strings
+    */
+   aOwner.sandbox.keys = function JSTH_keys(aObject)
+   {
++    // FIXME: this return [object Proxy] for the array. ouch :(
+     return Object.keys(WebConsoleUtils.unwrap(aObject));
+   };
+ 
+   /**
+    * Returns the values of all properties on aObject.
+    *
+    * @param object aObject
+    *        Object to display the values from.
+    * @return array of string
+    */
+   aOwner.sandbox.values = function JSTH_values(aObject)
+   {
+     let arrValues = [];
+     let obj = WebConsoleUtils.unwrap(aObject);
+ 
+-    try {
+-      for (let prop in obj) {
+-        arrValues.push(obj[prop]);
+-      }
+-    }
+-    catch (ex) {
+-      aOwner.window.console.error(ex.message);
++    for (let prop in obj) {
++      arrValues.push(obj[prop]);
+     }
+ 
++    // FIXME: this return [object Proxy] for the array. ouch :(
+     return arrValues;
+   };
+ 
+   /**
+    * Opens a help window in MDN.
+    */
+   aOwner.sandbox.help = function JSTH_help()
+   {
+@@ -1647,25 +1643,22 @@ this.JSTermHelpers = function JSTermHelp
+   /**
+    * Inspects the passed aObject. This is done by opening the PropertyPanel.
+    *
+    * @param object aObject
+    *        Object to inspect.
+    */
+   aOwner.sandbox.inspect = function JSTH_inspect(aObject)
+   {
+-    let obj = WebConsoleUtils.unwrap(aObject);
+-    if (!WebConsoleUtils.isObjectInspectable(obj)) {
+-      return aObject;
+-    }
+-
++    let dbgObj = aOwner.makeDebuggeeValue(aObject);
++    let grip = aOwner.createValueGrip(dbgObj);
+     aOwner.helperResult = {
+       type: "inspectObject",
+       input: aOwner.evalInput,
+-      object: aOwner.createValueGrip(obj),
++      object: grip,
+     };
+   };
+ 
+   /**
+    * Prints aObject to the output.
+    *
+    * @param object aObject
+    *        Object to print to the output.
+@@ -1684,23 +1677,36 @@ this.JSTermHelpers = function JSTermHelp
+ 
+     aOwner.helperResult = { rawOutput: true };
+ 
+     if (typeof aObject == "function") {
+       return aObject + "\n";
+     }
+ 
+     let output = [];
+-    let getObjectGrip = WebConsoleUtils.getObjectGrip.bind(WebConsoleUtils);
++
+     let obj = WebConsoleUtils.unwrap(aObject);
+-    let props = WebConsoleUtils.inspectObject(obj, getObjectGrip);
+-    props.forEach(function(aProp) {
+-      output.push(aProp.name + ": " +
+-                  WebConsoleUtils.getPropertyPanelValue(aProp));
+-    });
++    for (let name in obj) {
++      let desc = WebConsoleUtils.getPropertyDescriptor(obj, name);
++      if (!desc) {
++        continue;
++      }
++      if (desc.get || desc.set) {
++        let getGrip = VariablesView.getGrip(desc.get);
++        let setGrip = VariablesView.getGrip(desc.set);
++        let getString = VariablesView.getString(getGrip);
++        let setString = VariablesView.getString(setGrip);
++        output.push(name + ":", "  get: " + getString, "  set: " + setString);
++      }
++      else {
++        let valueGrip = VariablesView.getGrip(obj[name]);
++        let valueString = VariablesView.getString(valueGrip);
++        output.push(name + ": " + valueString);
++      }
++    }
+ 
+     return "  " + output.join("\n  ");
+   };
+ 
+   /**
+    * Print a string to the output, as-is.
+    *
+    * @param string aString
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -190,18 +190,17 @@ WebConsoleActor.prototype =
+       this.networkMonitor = null;
+     }
+     if (this.consoleProgressListener) {
+       this.consoleProgressListener.destroy();
+       this.consoleProgressListener = null;
+     }
+     this.conn.removeActorPool(this._actorPool);
+     this._actorPool = null;
+-    this.sandbox = null;
+-    this._sandboxWindowId = 0;
++    // TODO: cleanup dbg stuff
+     this.conn = this._window = null;
+   },
+ 
+   _createValueGrip: ThreadActor.prototype.createValueGrip,
+ 
+   /**
+    * Create a grip for the given value.
+    *
+@@ -463,23 +462,23 @@ WebConsoleActor.prototype =
+    *         The evaluation response packet.
+    */
+   onEvaluateJS: function WCA_onEvaluateJS(aRequest)
+   {
+     let input = aRequest.text;
+     let timestamp = Date.now();
+     let context = aRequest.context;
+ 
+-    this.helperResult = null;
+-    this.evalInput = input;
+-    let evalResult = this.evalWithDebugger(input, context);
++    this._jstermHelpers.helperResult = null;
++    this._jstermHelpers.evalInput = input;
++    let evalResult = this.evalWithDebugger(input, { objectActorID: context });
+ 
+-    let helperResult = this.helperResult;
+-    delete this.helperResult;
+-    delete this.evalInput;
++    let helperResult = this._jstermHelpers.helperResult;
++    delete this._jstermHelpers.helperResult;
++    delete this._jstermHelpers.evalInput;
+ 
+     let result, error, errorMessage;
+     if (evalResult) {
+       if ("return" in evalResult) {
+         result = evalResult.return;
+       }
+       else if ("yield" in evalResult) {
+         result = evalResult.yield;
+@@ -551,146 +550,74 @@ WebConsoleActor.prototype =
+     return { updated: Object.keys(aRequest.preferences) };
+   },
+ 
+   //////////////////
+   // End of request handlers.
+   //////////////////
+ 
+   /**
+-   * Create the JavaScript sandbox where user input is evaluated.
+-   * @private
+-   */
+-  _createSandbox: function WCA__createSandbox()
+-  {
+-    this._sandboxWindowId = WebConsoleUtils.getInnerWindowId(this.window);
+-    this.sandbox = new Cu.Sandbox(this.window, {
+-      sandboxPrototype: this.window,
+-      wantXrays: false,
+-    });
+-
+-    this.sandbox.console = this.window.console;
+-
+-    JSTermHelpers(this);
+-  },
+-
+-  /**
+    * Create the Debugger.Object for the current window.
+    * @private
+    */
+   _createGlobal: function WCA__createGlobal()
+   {
+     let windowId = WebConsoleUtils.getInnerWindowId(this.window);
+     if (this._sandboxWindowId == windowId) {
+       return;
+     }
+ 
+     this._sandboxWindowId = windowId;
+ 
+     this._dbgWindow = this.dbg.addDebuggee(this.window);
+     this.dbg.removeDebuggee(this.window);
+ 
+-    /*
+-    try {
+-      let global = this.dbg.addDebuggee(this.window);
+-      let f = this.dbg.getNewestFrame();
+-      if (f) {
+-        return f.evalWithBindings(expr, {});
+-      }
+-      else {
+-        globalWrapper.evalInGlobalWithBindings(expr, bindings);
+-      }
+-    } finally {
+-      dbg.removeDebuggee(global);
++    // Update the JSTerm helpers.
++    let helpers = Object.create(this);
++    helpers.sandbox = Object.create(null);
++    JSTermHelpers(helpers);
++    for (let name in helpers.sandbox) {
++      helpers.sandbox[name] = this.makeDebuggeeValue(helpers.sandbox[name]);
+     }
+-
+-    debugger.removeDebuggee(DOwindow);
+-    // Now debugger has no debuggees. But the D.O's are still usable.
+-
+-    // makeDebuggeeValue returns a D.O referring to random_object.
+-    var DOrandom = DOwindow.makeDebuggeeValue(random_object);
+-    JSTermHelpers(this);
+-    */
+-  },
+-
+-  /**
+-   * Evaluates a string in the sandbox.
+-   *
+-   * @param string aString
+-   *        String to evaluate in the sandbox.
+-   * @return mixed
+-   *         The result of the evaluation.
+-   */
+-  evalInSandbox: function WCA_evalInSandbox(aString)
+-  {
+-    // If the user changed to a different location, we need to update the
+-    // sandbox.
+-    if (this._sandboxWindowId !== WebConsoleUtils.getInnerWindowId(this.window)) {
+-      this._createSandbox();
+-    }
+-
+-    // The help function needs to be easy to guess, so we make the () optional
+-    if (aString.trim() == "help" || aString.trim() == "?") {
+-      aString = "help()";
+-    }
+-
+-    let window = WebConsoleUtils.unwrap(this.sandbox.window);
+-    let $ = null, $$ = null;
+-
+-    // We prefer to execute the page-provided implementations for the $() and
+-    // $$() functions.
+-    if (typeof window.$ == "function") {
+-      $ = this.sandbox.$;
+-      delete this.sandbox.$;
+-    }
+-    if (typeof window.$$ == "function") {
+-      $$ = this.sandbox.$$;
+-      delete this.sandbox.$$;
+-    }
+-
+-    let result = Cu.evalInSandbox(aString, this.sandbox, "1.8",
+-                                  "Web Console", 1);
+-
+-    if ($) {
+-      this.sandbox.$ = $;
+-    }
+-    if ($$) {
+-      this.sandbox.$$ = $$;
+-    }
+-
+-    return result;
++    this._jstermHelpers = helpers;
+   },
+ 
+   /**
+    * Evaluates a string using the debugger API.
+    *
+    * @param string aString
+    *        String to evaluate.
++   * @param object [aOptions]
++   *        Options for evaluation:
++   *        - objectActorID: the ObjectActor ID to use for evaluation.
++   *          evalWithBindings() will be called with one additional binding:
++   *          |_self| which will point to the Debugger.Object of the given
++   *          ObjectActor.
+    * @return object
+    *         The result of the evaluation.
+    */
+-  evalWithDebugger: function WCA_evalWithDebugger(aString, aContext)
++  // TODO: update comment.
++  evalWithDebugger: function WCA_evalWithDebugger(aString, aOptions = {})
+   {
+     this._createGlobal();
+ 
+     // The help function needs to be easy to guess, so we make the () optional
+     if (aString.trim() == "help" || aString.trim() == "?") {
+       aString = "help()";
+     }
+ 
+-    // TODO: add jsterm helpers.
+-
+-    let result, bindings = {};
+-    if (aContext) {
+-      let objActor = this.getActorByID(aContext);
++    let result, bindings = this._jstermHelpers.sandbox;
++    if (aOptions.objectActorID) {
++      let objActor = this.getActorByID(aOptions.objectActorID);
+       if (objActor) {
+-        bindings = { "_self": objActor.obj };
++        bindings._self = objActor.obj;
+       }
+     }
+ 
++    // TODO: eval in client-selected frame
+     let frame = this.dbg.getNewestFrame();
+     if (frame) {
+       result = frame.evalWithBindings(aString, bindings);
+     }
+     else {
+       result = this._dbgWindow.evalInGlobalWithBindings(aString, bindings);
+     }
+ 
+@@ -858,89 +785,16 @@ WebConsoleActor.prototype.requestTypes =
+   getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
+   evaluateJS: WebConsoleActor.prototype.onEvaluateJS,
+   autocomplete: WebConsoleActor.prototype.onAutocomplete,
+   clearMessagesCache: WebConsoleActor.prototype.onClearMessagesCache,
+   setPreferences: WebConsoleActor.prototype.onSetPreferences,
+ };
+ 
+ /**
+- * Creates an actor for the specified object.
+- *
+- * @constructor
+- * @param object aObj
+- *        The object you want.
+- * @param object aWebConsoleActor
+- *        The parent WebConsoleActor instance for this object.
+- */
+-function WebConsoleObjectActor(aObj, aWebConsoleActor)
+-{
+-  this.obj = aObj;
+-  this.parent = aWebConsoleActor;
+-}
+-
+-WebConsoleObjectActor.prototype =
+-{
+-  actorPrefix: "consoleObj",
+-
+-  /**
+-   * Returns a grip for this actor for returning in a protocol message.
+-   */
+-  grip: function WCOA_grip()
+-  {
+-    let grip = WebConsoleUtils.getObjectGrip(this.obj);
+-    grip.actor = this.actorID;
+-    grip.displayString = this.parent.createStringGrip(grip.displayString);
+-    return grip;
+-  },
+-
+-  /**
+-   * Releases this actor from the pool.
+-   */
+-  release: function WCOA_release()
+-  {
+-    this.parent.releaseActor(this);
+-    this.parent = this.obj = null;
+-  },
+-
+-  /**
+-   * Handle a protocol request to inspect the properties of the object.
+-   *
+-   * @return object
+-   *         Message to send to the client. This holds the 'properties' property
+-   *         - an array with a descriptor for each property in the object.
+-   */
+-  onInspectProperties: function WCOA_onInspectProperties()
+-  {
+-    let createObjectActor = this.parent.createObjectActor.bind(this.parent);
+-    let props = WebConsoleUtils.inspectObject(this.obj, createObjectActor);
+-    return {
+-      from: this.actorID,
+-      properties: props,
+-    };
+-  },
+-
+-  /**
+-   * Handle a protocol request to release a grip.
+-   */
+-  onRelease: function WCOA_onRelease()
+-  {
+-    this.release();
+-    return {};
+-  },
+-};
+-
+-WebConsoleObjectActor.prototype.requestTypes =
+-{
+-  "inspectProperties": WebConsoleObjectActor.prototype.onInspectProperties,
+-  "release": WebConsoleObjectActor.prototype.onRelease,
+-};
+-
+-
+-/**
+  * Creates an actor for a network event.
+  *
+  * @constructor
+  * @param object aNetworkEvent
+  *        The network event you want to use the actor for.
+  * @param object aWebConsoleActor
+  *        The parent WebConsoleActor instance for this object.
+  */
