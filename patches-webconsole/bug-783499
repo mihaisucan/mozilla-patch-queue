@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent efd6dc4cd8251586d4549e266319839a660bd6c9
+# Parent 4a1b771880d830a75f83593b31493c0874166b13
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1358353926 -7200
 
@@ -361,6 +361,241 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools
     * Autocomplete a JavaScript expression.
     *
     * @param string aString
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -23,22 +23,26 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
+                                   "resource://gre/modules/devtools/NetworkHelper.jsm");
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "gActivityDistributor",
+                                    "@mozilla.org/network/http-activity-distributor;1",
+                                    "nsIHttpActivityDistributor");
+ 
++// FIXME: toolkit imports from browser.
+ XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
+                                   "resource:///modules/devtools/gDevTools.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "TargetFactory",
+                                   "resource:///modules/devtools/Target.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "VariablesView",
++                                  "resource:///modules/devtools/VariablesView.jsm");
++
+ this.EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider", "JSTermHelpers",
+                          "PageErrorListener", "ConsoleAPIListener",
+                          "NetworkResponseListener", "NetworkMonitor",
+                          "ConsoleProgressListener"];
+ 
+ // Match the function name from the result of toString() or toSource().
+ //
+ // Examples:
+@@ -781,17 +785,17 @@ this.WebConsoleUtils = {
+    * Get the object class name. For example, the |window| object has the Window
+    * class name (based on [object Window]).
+    *
+    * @param object aObject
+    *        The object you want to get the class name for.
+    * @return string
+    *         The object class name.
+    */
+-  getObjectClassName: function WCF_getObjectClassName(aObject)
++  getObjectClassName: function WCU_getObjectClassName(aObject)
+   {
+     if (aObject === null) {
+       return "null";
+     }
+     if (aObject === undefined) {
+       return "undefined";
+     }
+ 
+@@ -1540,56 +1544,46 @@ this.JSTermHelpers = function JSTermHelp
+    * @return array of nsIDOMNode
+    */
+   aOwner.sandbox.$x = function JSTH_$x(aXPath, aContext)
+   {
+     let nodes = [];
+     let doc = aOwner.window.document;
+     let aContext = aContext || doc;
+ 
+-    try {
+-      let results = doc.evaluate(aXPath, aContext, null,
+-                                 Ci.nsIDOMXPathResult.ANY_TYPE, null);
+-      let node;
+-      while (node = results.iterateNext()) {
+-        nodes.push(node);
+-      }
+-    }
+-    catch (ex) {
+-      aOwner.window.console.error(ex.message);
++    let results = doc.evaluate(aXPath, aContext, null,
++                               Ci.nsIDOMXPathResult.ANY_TYPE, null);
++    let node;
++    while (node = results.iterateNext()) {
++      nodes.push(node);
+     }
+ 
+     return nodes;
+   };
+ 
+   /**
+    * Returns the currently selected object in the highlighter.
+    *
+    * TODO: this implementation crosses the client/server boundaries! This is not
+    * usable within a remote browser. To implement this feature correctly we need
+    * support for remote inspection capabilities within the Inspector as well.
+    * See bug 787975.
+    *
+    * @return nsIDOMElement|null
+    *         The DOM element currently selected in the highlighter.
+    */
+-  Object.defineProperty(aOwner.sandbox, "$0", {
++   Object.defineProperty(aOwner.sandbox, "$0", {
+     get: function() {
+-      try {
+-        let window = aOwner.chromeWindow();
+-        let target = TargetFactory.forTab(window.gBrowser.selectedTab);
+-        let toolbox = gDevTools.getToolbox(target);
++      let window = aOwner.chromeWindow();
++      let target = TargetFactory.forTab(window.gBrowser.selectedTab);
++      let toolbox = gDevTools.getToolbox(target);
++      let panel = toolbox ? toolbox.getPanel("inspector") : null;
++      let node = panel ? panel.selection.node : null;
+ 
+-        return toolbox == null ?
+-            undefined :
+-            toolbox.getPanel("inspector").selection.node;
+-      }
+-      catch (ex) {
+-        aOwner.window.console.error(ex.message);
+-      }
++      return node ? aOwner.makeDebuggeeValue(node) : null;
+     },
+     enumerable: true,
+     configurable: false
+   });
+ 
+   /**
+    * Clears the output of the JSTerm.
+    */
+@@ -1604,40 +1598,37 @@ this.JSTermHelpers = function JSTermHelp
+    * Returns the result of Object.keys(aObject).
+    *
+    * @param object aObject
+    *        Object to return the property names from.
+    * @return array of strings
+    */
+   aOwner.sandbox.keys = function JSTH_keys(aObject)
+   {
++    // FIXME: this return [object Proxy] for the array. ouch :(
+     return Object.keys(WebConsoleUtils.unwrap(aObject));
+   };
+ 
+   /**
+    * Returns the values of all properties on aObject.
+    *
+    * @param object aObject
+    *        Object to display the values from.
+    * @return array of string
+    */
+   aOwner.sandbox.values = function JSTH_values(aObject)
+   {
+     let arrValues = [];
+     let obj = WebConsoleUtils.unwrap(aObject);
+ 
+-    try {
+-      for (let prop in obj) {
+-        arrValues.push(obj[prop]);
+-      }
+-    }
+-    catch (ex) {
+-      aOwner.window.console.error(ex.message);
++    for (let prop in obj) {
++      arrValues.push(obj[prop]);
+     }
+ 
++    // FIXME: this return [object Proxy] for the array. ouch :(
+     return arrValues;
+   };
+ 
+   /**
+    * Opens a help window in MDN.
+    */
+   aOwner.sandbox.help = function JSTH_help()
+   {
+@@ -1647,25 +1638,22 @@ this.JSTermHelpers = function JSTermHelp
+   /**
+    * Inspects the passed aObject. This is done by opening the PropertyPanel.
+    *
+    * @param object aObject
+    *        Object to inspect.
+    */
+   aOwner.sandbox.inspect = function JSTH_inspect(aObject)
+   {
+-    let obj = WebConsoleUtils.unwrap(aObject);
+-    if (!WebConsoleUtils.isObjectInspectable(obj)) {
+-      return aObject;
+-    }
+-
++    let dbgObj = aOwner.makeDebuggeeValue(aObject);
++    let grip = aOwner.createValueGrip(dbgObj);
+     aOwner.helperResult = {
+       type: "inspectObject",
+       input: aOwner.evalInput,
+-      object: aOwner.createValueGrip(obj),
++      object: grip,
+     };
+   };
+ 
+   /**
+    * Prints aObject to the output.
+    *
+    * @param object aObject
+    *        Object to print to the output.
+@@ -1684,23 +1672,36 @@ this.JSTermHelpers = function JSTermHelp
+ 
+     aOwner.helperResult = { rawOutput: true };
+ 
+     if (typeof aObject == "function") {
+       return aObject + "\n";
+     }
+ 
+     let output = [];
+-    let getObjectGrip = WebConsoleUtils.getObjectGrip.bind(WebConsoleUtils);
++
+     let obj = WebConsoleUtils.unwrap(aObject);
+-    let props = WebConsoleUtils.inspectObject(obj, getObjectGrip);
+-    props.forEach(function(aProp) {
+-      output.push(aProp.name + ": " +
+-                  WebConsoleUtils.getPropertyPanelValue(aProp));
+-    });
++    for (let name in obj) {
++      let desc = WebConsoleUtils.getPropertyDescriptor(obj, name);
++      if (!desc) {
++        continue;
++      }
++      if (desc.get || desc.set) {
++        let getGrip = VariablesView.getGrip(desc.get);
++        let setGrip = VariablesView.getGrip(desc.set);
++        let getString = VariablesView.getString(getGrip);
++        let setString = VariablesView.getString(setGrip);
++        output.push(name + ":", "  get: " + getString, "  set: " + setString);
++      }
++      else {
++        let valueGrip = VariablesView.getGrip(obj[name]);
++        let valueString = VariablesView.getString(valueGrip);
++        output.push(name + ": " + valueString);
++      }
++    }
+ 
+     return "  " + output.join("\n  ");
+   };
+ 
+   /**
+    * Print a string to the output, as-is.
+    *
+    * @param string aString
 diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 --- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
@@ -396,12 +631,18 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
  
    /**
     * Actor pool for all of the actors we send to the client.
-@@ -185,71 +195,74 @@ WebConsoleActor.prototype =
+@@ -180,76 +190,78 @@ WebConsoleActor.prototype =
+       this.networkMonitor = null;
+     }
+     if (this.consoleProgressListener) {
+       this.consoleProgressListener.destroy();
+       this.consoleProgressListener = null;
      }
      this.conn.removeActorPool(this._actorPool);
      this._actorPool = null;
-     this.sandbox = null;
-     this._sandboxWindowId = 0;
+-    this.sandbox = null;
+-    this._sandboxWindowId = 0;
++    // TODO: cleanup dbg stuff
      this.conn = this._window = null;
    },
  
@@ -495,7 +736,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     */
    getActorByID: function WCA_getActorByID(aActorID)
    {
-@@ -447,40 +460,54 @@ WebConsoleActor.prototype =
+@@ -447,40 +459,54 @@ WebConsoleActor.prototype =
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
     * @return object
@@ -509,21 +750,19 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +    let timestamp = Date.now();
 +    let context = aRequest.context;
  
-     this.helperResult = null;
-     this.evalInput = input;
+-    this.helperResult = null;
+-    this.evalInput = input;
 -    try {
 -      timestamp = Date.now();
 -      result = this.evalInSandbox(input);
--    }
--    catch (ex) {
--      error = ex;
--    }
-+    let evalResult = this.evalWithDebugger(input, context);
- 
-     let helperResult = this.helperResult;
-     delete this.helperResult;
-     delete this.evalInput;
- 
++    this._jstermHelpers.helperResult = null;
++    this._jstermHelpers.evalInput = input;
++    let evalResult = this.evalWithDebugger(input, { objectActorID: context });
++
++    let helperResult = this._jstermHelpers.helperResult;
++    delete this._jstermHelpers.helperResult;
++    delete this._jstermHelpers.evalInput;
++
 +    let result, error, errorMessage;
 +    if (evalResult) {
 +      if ("return" in evalResult) {
@@ -541,8 +780,15 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +          errorMessage = errorToString.return;
 +        }
 +      }
-+    }
-+
+     }
+-    catch (ex) {
+-      error = ex;
+-    }
+-
+-    let helperResult = this.helperResult;
+-    delete this.helperResult;
+-    delete this.evalInput;
+ 
      return {
        from: this.actorID,
        input: input,
@@ -561,118 +807,132 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     * The Autocomplete request handler.
     *
     * @param object aRequest
-@@ -541,16 +568,55 @@ WebConsoleActor.prototype =
-     });
- 
-     this.sandbox.console = this.window.console;
- 
-     JSTermHelpers(this);
+@@ -524,75 +550,87 @@ WebConsoleActor.prototype =
+     return { updated: Object.keys(aRequest.preferences) };
    },
  
+   //////////////////
+   // End of request handlers.
+   //////////////////
+ 
    /**
+-   * Create the JavaScript sandbox where user input is evaluated.
 +   * Create the Debugger.Object for the current window.
-+   * @private
-+   */
+    * @private
+    */
+-  _createSandbox: function WCA__createSandbox()
 +  _createGlobal: function WCA__createGlobal()
-+  {
+   {
+-    this._sandboxWindowId = WebConsoleUtils.getInnerWindowId(this.window);
+-    this.sandbox = new Cu.Sandbox(this.window, {
+-      sandboxPrototype: this.window,
+-      wantXrays: false,
+-    });
 +    let windowId = WebConsoleUtils.getInnerWindowId(this.window);
 +    if (this._sandboxWindowId == windowId) {
 +      return;
 +    }
-+
+ 
+-    this.sandbox.console = this.window.console;
 +    this._sandboxWindowId = windowId;
-+
+ 
+-    JSTermHelpers(this);
 +    this._dbgWindow = this.dbg.addDebuggee(this.window);
 +    this.dbg.removeDebuggee(this.window);
 +
-+    /*
-+    try {
-+      let global = this.dbg.addDebuggee(this.window);
-+      let f = this.dbg.getNewestFrame();
-+      if (f) {
-+        return f.evalWithBindings(expr, {});
++    // Update the JSTerm helpers.
++    let helpers = Object.create(this);
++    helpers.sandbox = Object.create(null);
++    JSTermHelpers(helpers);
++
++    // Make sure the helpers can be used during eval.
++    for (let name in helpers.sandbox) {
++      let desc = Object.getOwnPropertyDescriptor(helpers.sandbox, name);
++      if (desc.get || desc.set) {
++        continue;
 +      }
-+      else {
-+        globalWrapper.evalInGlobalWithBindings(expr, bindings);
-+      }
-+    } finally {
-+      dbg.removeDebuggee(global);
++      helpers.sandbox[name] = this.makeDebuggeeValue(desc.value);
 +    }
 +
-+    debugger.removeDebuggee(DOwindow);
-+    // Now debugger has no debuggees. But the D.O's are still usable.
-+
-+    // makeDebuggeeValue returns a D.O referring to random_object.
-+    var DOrandom = DOwindow.makeDebuggeeValue(random_object);
-+    JSTermHelpers(this);
-+    */
-+  },
-+
-+  /**
-    * Evaluates a string in the sandbox.
++    this._jstermHelpers = helpers;
+   },
+ 
+   /**
+-   * Evaluates a string in the sandbox.
++   * Evaluates a string using the debugger API.
     *
     * @param string aString
-    *        String to evaluate in the sandbox.
-    * @return mixed
+-   *        String to evaluate in the sandbox.
+-   * @return mixed
++   *        String to evaluate.
++   * @param object [aOptions]
++   *        Options for evaluation:
++   *        - objectActorID: the ObjectActor ID to use for evaluation.
++   *          evalWithBindings() will be called with one additional binding:
++   *          |_self| which will point to the Debugger.Object of the given
++   *          ObjectActor.
++   * @return object
     *         The result of the evaluation.
     */
-   evalInSandbox: function WCA_evalInSandbox(aString)
-@@ -588,16 +654,54 @@ WebConsoleActor.prototype =
+-  evalInSandbox: function WCA_evalInSandbox(aString)
++  // TODO: update comment.
++  evalWithDebugger: function WCA_evalWithDebugger(aString, aOptions = {})
+   {
+-    // If the user changed to a different location, we need to update the
+-    // sandbox.
+-    if (this._sandboxWindowId !== WebConsoleUtils.getInnerWindowId(this.window)) {
+-      this._createSandbox();
+-    }
++    this._createGlobal();
+ 
+     // The help function needs to be easy to guess, so we make the () optional
+     if (aString.trim() == "help" || aString.trim() == "?") {
+       aString = "help()";
      }
-     if ($$) {
-       this.sandbox.$$ = $$;
+ 
+-    let window = WebConsoleUtils.unwrap(this.sandbox.window);
+-    let $ = null, $$ = null;
+-
+-    // We prefer to execute the page-provided implementations for the $() and
+-    // $$() functions.
+-    if (typeof window.$ == "function") {
+-      $ = this.sandbox.$;
+-      delete this.sandbox.$;
+-    }
+-    if (typeof window.$$ == "function") {
+-      $$ = this.sandbox.$$;
+-      delete this.sandbox.$$;
++    let result, bindings = this._jstermHelpers.sandbox;
++    if (aOptions.objectActorID) {
++      let objActor = this.getActorByID(aOptions.objectActorID);
++      if (objActor) {
++        bindings._self = objActor.obj;
++      }
+     }
+ 
+-    let result = Cu.evalInSandbox(aString, this.sandbox, "1.8",
+-                                  "Web Console", 1);
+-
+-    if ($) {
+-      this.sandbox.$ = $;
++    // TODO: eval in client-selected frame
++    let frame = this.dbg.getNewestFrame();
++    if (frame) {
++      result = frame.evalWithBindings(aString, bindings);
+     }
+-    if ($$) {
+-      this.sandbox.$$ = $$;
++    else {
++      result = this._dbgWindow.evalInGlobalWithBindings(aString, bindings);
      }
  
      return result;
    },
  
-+  /**
-+   * Evaluates a string using the debugger API.
-+   *
-+   * @param string aString
-+   *        String to evaluate.
-+   * @return object
-+   *         The result of the evaluation.
-+   */
-+  evalWithDebugger: function WCA_evalWithDebugger(aString, aContext)
-+  {
-+    this._createGlobal();
-+
-+    // The help function needs to be easy to guess, so we make the () optional
-+    if (aString.trim() == "help" || aString.trim() == "?") {
-+      aString = "help()";
-+    }
-+
-+    // TODO: add jsterm helpers.
-+
-+    let result, bindings = {};
-+    if (aContext) {
-+      let objActor = this.getActorByID(aContext);
-+      if (objActor) {
-+        bindings = { "_self": objActor.obj };
-+      }
-+    }
-+
-+    let frame = this.dbg.getNewestFrame();
-+    if (frame) {
-+      result = frame.evalWithBindings(aString, bindings);
-+    }
-+    else {
-+      result = this._dbgWindow.evalInGlobalWithBindings(aString, bindings);
-+    }
-+
-+    return result;
-+  },
-+
    //////////////////
    // Event handlers for various listeners.
    //////////////////
- 
-   /**
-    * Handler for page errors received from the PageErrorListener. This method
-    * sends the nsIScriptError to the remote Web Console client.
-    *
-@@ -721,28 +825,20 @@ WebConsoleActor.prototype =
+@@ -721,28 +759,20 @@ WebConsoleActor.prototype =
    prepareConsoleMessageForRemote:
    function WCA_prepareConsoleMessageForRemote(aMessage)
    {
@@ -703,3 +963,93 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     *
     * @return Window
     *         The XUL window that owns the content window.
+@@ -762,89 +792,16 @@ WebConsoleActor.prototype.requestTypes =
+   getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
+   evaluateJS: WebConsoleActor.prototype.onEvaluateJS,
+   autocomplete: WebConsoleActor.prototype.onAutocomplete,
+   clearMessagesCache: WebConsoleActor.prototype.onClearMessagesCache,
+   setPreferences: WebConsoleActor.prototype.onSetPreferences,
+ };
+ 
+ /**
+- * Creates an actor for the specified object.
+- *
+- * @constructor
+- * @param object aObj
+- *        The object you want.
+- * @param object aWebConsoleActor
+- *        The parent WebConsoleActor instance for this object.
+- */
+-function WebConsoleObjectActor(aObj, aWebConsoleActor)
+-{
+-  this.obj = aObj;
+-  this.parent = aWebConsoleActor;
+-}
+-
+-WebConsoleObjectActor.prototype =
+-{
+-  actorPrefix: "consoleObj",
+-
+-  /**
+-   * Returns a grip for this actor for returning in a protocol message.
+-   */
+-  grip: function WCOA_grip()
+-  {
+-    let grip = WebConsoleUtils.getObjectGrip(this.obj);
+-    grip.actor = this.actorID;
+-    grip.displayString = this.parent.createStringGrip(grip.displayString);
+-    return grip;
+-  },
+-
+-  /**
+-   * Releases this actor from the pool.
+-   */
+-  release: function WCOA_release()
+-  {
+-    this.parent.releaseActor(this);
+-    this.parent = this.obj = null;
+-  },
+-
+-  /**
+-   * Handle a protocol request to inspect the properties of the object.
+-   *
+-   * @return object
+-   *         Message to send to the client. This holds the 'properties' property
+-   *         - an array with a descriptor for each property in the object.
+-   */
+-  onInspectProperties: function WCOA_onInspectProperties()
+-  {
+-    let createObjectActor = this.parent.createObjectActor.bind(this.parent);
+-    let props = WebConsoleUtils.inspectObject(this.obj, createObjectActor);
+-    return {
+-      from: this.actorID,
+-      properties: props,
+-    };
+-  },
+-
+-  /**
+-   * Handle a protocol request to release a grip.
+-   */
+-  onRelease: function WCOA_onRelease()
+-  {
+-    this.release();
+-    return {};
+-  },
+-};
+-
+-WebConsoleObjectActor.prototype.requestTypes =
+-{
+-  "inspectProperties": WebConsoleObjectActor.prototype.onInspectProperties,
+-  "release": WebConsoleObjectActor.prototype.onRelease,
+-};
+-
+-
+-/**
+  * Creates an actor for a network event.
+  *
+  * @constructor
+  * @param object aNetworkEvent
+  *        The network event you want to use the actor for.
+  * @param object aWebConsoleActor
+  *        The parent WebConsoleActor instance for this object.
+  */
