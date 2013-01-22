@@ -1,0 +1,477 @@
+# HG changeset patch
+# Date 1358870102 -7200
+# Parent 1bc9ef10c2613b04763583d361f6ee902b5fd43a
+# User Tyrone Chong <tyronekc@gmail.com>
+
+Bug 788445 - Add a tooltip for webconsole count on Developer Tool bar; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-o,mochitest-bc -t none
+
+diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/shared/DeveloperToolbar.jsm
+--- a/browser/devtools/shared/DeveloperToolbar.jsm
++++ b/browser/devtools/shared/DeveloperToolbar.jsm
+@@ -29,16 +29,20 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ 
+ XPCOMUtils.defineLazyGetter(this, "prefBranch", function() {
+   let prefService = Components.classes["@mozilla.org/preferences-service;1"]
+           .getService(Components.interfaces.nsIPrefService);
+   return prefService.getBranch(null)
+           .QueryInterface(Components.interfaces.nsIPrefBranch2);
+ });
+ 
++XPCOMUtils.defineLazyGetter(this, "toolboxStrings", function () {
++  return Services.strings.createBundle("chrome://browser/locale/devtools/toolbox.properties");
++});
++
+ /**
+  * A collection of utilities to help working with commands
+  */
+ this.CommandUtils = {
+   /**
+    * Read a toolbarSpec from preferences
+    * @param aPref The name of the preference to read
+    */
+@@ -158,19 +162,22 @@ this.DeveloperToolbar = function Develop
+   this._element = aToolbarElement;
+   this._element.hidden = true;
+   this._doc = this._element.ownerDocument;
+ 
+   this._lastState = NOTIFICATIONS.HIDE;
+   this._pendingShowCallback = undefined;
+   this._pendingHide = false;
+   this._errorsCount = {};
++  this._warningsCount = {};
+   this._errorListeners = {};
+   this._errorCounterButton = this._doc
+                              .getElementById("developer-toolbar-toolbox-button");
++  this._errorCounterButton._defaultTooltipText =
++    this._errorCounterButton.getAttribute("tooltiptext");
+ 
+   try {
+     CmdCommands.refreshAutoCommands(aChromeWindow);
+   }
+   catch (ex) {
+     console.error(ex);
+   }
+ }
+@@ -392,16 +399,17 @@ DeveloperToolbar.prototype._initErrorsCo
+   let window = aTab.linkedBrowser.contentWindow;
+   let listener = new PageErrorListener(window, {
+     onPageError: this._onPageError.bind(this, tabId),
+   });
+   listener.init();
+ 
+   this._errorListeners[tabId] = listener;
+   this._errorsCount[tabId] = 0;
++  this._warningsCount[tabId] = 0;
+ 
+   let messages = listener.getCachedMessages();
+   messages.forEach(this._onPageError.bind(this, tabId));
+ 
+   this._updateErrorsCount();
+ };
+ 
+ /**
+@@ -410,24 +418,25 @@ DeveloperToolbar.prototype._initErrorsCo
+  *
+  * @private
+  * @param nsIDOMNode aTab the xul:tab for which you want to stop tracking the
+  * number of errors.
+  */
+ DeveloperToolbar.prototype._stopErrorsCount = function DT__stopErrorsCount(aTab)
+ {
+   let tabId = aTab.linkedPanel;
+-  if (!(tabId in this._errorsCount)) {
++  if (!(tabId in this._errorsCount) || !(tabId in this._warningsCount)) {
+     this._updateErrorsCount();
+     return;
+   }
+ 
+   this._errorListeners[tabId].destroy();
+   delete this._errorListeners[tabId];
+   delete this._errorsCount[tabId];
++  delete this._warningsCount[tabId];
+ 
+   this._updateErrorsCount();
+ };
+ 
+ /**
+  * Hide the developer toolbar.
+  */
+ DeveloperToolbar.prototype.hide = function DT_hide()
+@@ -545,23 +554,25 @@ DeveloperToolbar.prototype.handleEvent =
+  * @param string aTabId the ID of the tab from where the page error comes.
+  * @param object aPageError the page error object received from the
+  * PageErrorListener.
+  */
+ DeveloperToolbar.prototype._onPageError =
+ function DT__onPageError(aTabId, aPageError)
+ {
+   if (aPageError.category == "CSS Parser" ||
+-      aPageError.category == "CSS Loader" ||
+-      (aPageError.flags & aPageError.warningFlag) ||
++      aPageError.category == "CSS Loader") {
++    return;
++  }
++  if ((aPageError.flags & aPageError.warningFlag) ||
+       (aPageError.flags & aPageError.strictFlag)) {
+-    return; // just a CSS or JS warning
++    this._warningsCount[aTabId]++;
++  } else {
++    this._errorsCount[aTabId]++;
+   }
+-
+-  this._errorsCount[aTabId]++;
+   this._updateErrorsCount(aTabId);
+ };
+ 
+ /**
+  * The |beforeunload| event handler. This function resets the errors count when
+  * a different page starts loading.
+  *
+  * @private
+@@ -574,18 +585,19 @@ function DT__onPageBeforeUnload(aEvent)
+   if (window.top !== window) {
+     return;
+   }
+ 
+   let tabs = this._chromeWindow.getBrowser().tabs;
+   Array.prototype.some.call(tabs, function(aTab) {
+     if (aTab.linkedBrowser.contentWindow === window) {
+       let tabId = aTab.linkedPanel;
+-      if (tabId in this._errorsCount) {
++      if (tabId in this._errorsCount || tabId in this._warningsCount) {
+         this._errorsCount[tabId] = 0;
++        this._warningsCount[tabId] = 0;
+         this._updateErrorsCount(tabId);
+       }
+       return true;
+     }
+     return false;
+   }, this);
+ };
+ 
+@@ -602,36 +614,41 @@ DeveloperToolbar.prototype._updateErrors
+ function DT__updateErrorsCount(aChangedTabId)
+ {
+   let tabId = this._chromeWindow.getBrowser().selectedTab.linkedPanel;
+   if (aChangedTabId && tabId != aChangedTabId) {
+     return;
+   }
+ 
+   let errors = this._errorsCount[tabId];
+-
++  let warnings = this._warningsCount[tabId];
++  let btn = this._errorCounterButton;
+   if (errors) {
+-    this._errorCounterButton.setAttribute("error-count", errors);
++    let tooltiptext = toolboxStrings.formatStringFromName("toolboxDockButtons.errorsCount.tooltip", [errors, warnings], 2);
++    btn.setAttribute("error-count", errors);
++    btn.setAttribute("tooltiptext", tooltiptext);
+   } else {
+-    this._errorCounterButton.removeAttribute("error-count");
++    btn.removeAttribute("error-count");
++    btn.setAttribute("tooltiptext", btn._defaultTooltipText);
+   }
+ };
+ 
+ /**
+  * Reset the errors counter for the given tab.
+  *
+  * @param nsIDOMElement aTab The xul:tab for which you want to reset the page
+  * errors counters.
+  */
+ DeveloperToolbar.prototype.resetErrorsCount =
+ function DT_resetErrorsCount(aTab)
+ {
+   let tabId = aTab.linkedPanel;
+-  if (tabId in this._errorsCount) {
++  if (tabId in this._errorsCount || tabId in this._warningsCount) {
+     this._errorsCount[tabId] = 0;
++    this._warningsCount[tabId] = 0;
+     this._updateErrorsCount(tabId);
+   }
+ };
+ 
+ /**
+  * Panel to handle command line output.
+  *
+  * There is a tooltip bug on Windows and OSX that prevents tooltips from being
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.html b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.html
+--- a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.html
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.html
+@@ -15,15 +15,18 @@
+   <script type="text/javascript">
+     window.foobarBug762996b();
+   </script>
+ </head>
+ <body>
+   <p>Hello world! Test for errors count in the Web Console button (developer
+   toolbar).</p>
+   <p style="color: foobarBug762996css"><button>click me</button></p>
+-  <script type="text/javascript">
++  <script type="text/javascript;version=1.8">
++    "use strict";
++    let testObj = {};
+     document.querySelector("button").onclick = function() {
++      let test = testObj.fooBug788445 + "warning";
+       window.foobarBug762996click();
+     };
+   </script>
+ </body>
+ </html>
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+--- a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+@@ -16,16 +16,18 @@ function test() {
+ 
+   Components.utils.import("resource:///modules/devtools/Target.jsm", imported);
+   let TargetFactory = imported.TargetFactory;
+ 
+   let webconsole = document.getElementById("developer-toolbar-toolbox-button");
+   let toolbar = document.getElementById("Tools:DevToolbar");
+   let tab1, tab2;
+ 
++  Services.prefs.setBoolPref("javascript.options.strict", true);
++
+   function openToolbar(browser, tab) {
+     tab1 = tab;
+     ignoreAllUncaughtExceptions(false);
+ 
+     ok(!DeveloperToolbar.visible, "DeveloperToolbar is not visible");
+ 
+     expectUncaughtException();
+     oneTimeObserve(DeveloperToolbar.NOTIFICATIONS.SHOW, onOpenToolbar);
+@@ -35,69 +37,104 @@ function test() {
+   ignoreAllUncaughtExceptions();
+   addTab(TEST_URI, openToolbar);
+ 
+   function getErrorsCount() {
+     let count = webconsole.getAttribute("error-count");
+     return count ? count : "0";
+   }
+ 
++  function getTooltipValues() {
++    let matches = webconsole.getAttribute("tooltiptext")
++                  .match(/(\d+) errors, (\d+) warnings/);
++    return matches ? [matches[1], matches[2]] : [0, 0];
++  }
++
++  function waitForButtonUpdate(aOptions)
++  {
++    aOptions.validator = function() {
++      let errors = getErrorsCount();
++      let tooltip = getTooltipValues();
++      let result = errors == aOptions.errors &&
++                   tooltip[1] == aOptions.warnings;
++      if (result) {
++        is(errors, tooltip[0], "button error-count is the same as in the tooltip");
++      }
++      return result;
++    };
++
++    let originalFailure = aOptions.failure;
++    aOptions.failure = function() {
++      let tooltip = getTooltipValues();
++
++      info("expected " + aOptions.errors + " errors, " +
++           aOptions.warnings + " warnings");
++      info("got " + tooltip[0] + " errors, " + tooltip[1] + " warnings");
++
++      originalFailure();
++    };
++
++    waitForValue(aOptions);
++  }
++
+   function onOpenToolbar() {
+     ok(DeveloperToolbar.visible, "DeveloperToolbar is visible");
+ 
+-    waitForValue({
++    waitForButtonUpdate({
+       name: "web console button shows page errors",
+-      validator: getErrorsCount,
+-      value: 3,
++      errors: 3,
++      warnings: 0,
+       success: addErrors,
+       failure: finish,
+     });
+   }
+ 
+   function addErrors() {
+     expectUncaughtException();
+ 
+     waitForFocus(function() {
+       let button = content.document.querySelector("button");
+-      EventUtils.synthesizeMouse(button, 2, 2, {}, content);
++      executeSoon(function() {
++        EventUtils.synthesizeMouse(button, 3, 2, {}, content);
++      });
+     }, content);
+ 
+-    waitForValue({
++    waitForButtonUpdate({
+       name: "button shows one more error after click in page",
+-      validator: getErrorsCount,
+-      value: 4,
++      errors: 4,
++      warnings: 1,
+       success: function() {
+         ignoreAllUncaughtExceptions();
+         addTab(TEST_URI, onOpenSecondTab);
+       },
+       failure: finish,
+     });
+   }
+ 
+   function onOpenSecondTab(browser, tab) {
+     tab2 = tab;
+ 
+     ignoreAllUncaughtExceptions(false);
+     expectUncaughtException();
+ 
+-    waitForValue({
++    waitForButtonUpdate({
+       name: "button shows correct number of errors after new tab is open",
+-      validator: getErrorsCount,
+-      value: 3,
++      errors: 3,
++      warnings: 0,
+       success: switchToTab1,
+       failure: finish,
+     });
+   }
+ 
+   function switchToTab1() {
+     gBrowser.selectedTab = tab1;
+-    waitForValue({
++    waitForButtonUpdate({
+       name: "button shows the page errors from tab 1",
+-      validator: getErrorsCount,
+-      value: 4,
++      errors: 4,
++      warnings: 1,
+       success: function() {
+         openWebConsole(tab1, onWebConsoleOpen);
+       },
+       failure: finish,
+     });
+   }
+ 
+   function openWebConsole(tab, callback)
+@@ -123,37 +160,37 @@ function test() {
+       },
+       value: 4,
+       success: checkConsoleOutput.bind(null, hud),
+       failure: finish,
+     });
+   }
+ 
+   function checkConsoleOutput(hud) {
+-    let errors = ["foobarBug762996a", "foobarBug762996b", "foobarBug762996load",
+-                  "foobarBug762996click", "foobarBug762996consoleLog",
+-                  "foobarBug762996css"];
+-    errors.forEach(function(error) {
+-      isnot(hud.outputNode.textContent.indexOf(error), -1,
+-            error + " found in the Web Console output");
++    let msgs = ["foobarBug762996a", "foobarBug762996b", "foobarBug762996load",
++                "foobarBug762996click", "foobarBug762996consoleLog",
++                "foobarBug762996css", "fooBug788445"];
++    msgs.forEach(function(msg) {
++      isnot(hud.outputNode.textContent.indexOf(msg), -1,
++            msg + " found in the Web Console output");
+     });
+ 
+     hud.jsterm.clearOutput();
+ 
+     is(hud.outputNode.textContent.indexOf("foobarBug762996color"), -1,
+        "clearOutput() worked");
+ 
+     expectUncaughtException();
+     let button = content.document.querySelector("button");
+     EventUtils.synthesizeMouse(button, 2, 2, {}, content);
+ 
+-    waitForValue({
++    waitForButtonUpdate({
+       name: "button shows one more error after another click in page",
+-      validator: getErrorsCount,
+-      value: 5,
++      errors: 5,
++      warnings: 1, // warnings are not repeated by the js engine
+       success: function() {
+         waitForValue(waitForNewError);
+       },
+       failure: finish,
+     });
+ 
+     let waitForNewError = {
+       name: "the Web Console displays the new error",
+@@ -168,34 +205,36 @@ function test() {
+   function doClearConsoleButton(hud) {
+     let clearButton = hud.ui.rootElement
+                       .querySelector(".webconsole-clear-console-button");
+     EventUtils.synthesizeMouse(clearButton, 2, 2, {}, hud.iframeWindow);
+ 
+     is(hud.outputNode.textContent.indexOf("foobarBug762996click"), -1,
+        "clear console button worked");
+     is(getErrorsCount(), 0, "page errors counter has been reset");
++    let tooltip = getTooltipValues();
++    is(tooltip[1], 0, "page warnings counter has been reset");
+ 
+     doPageReload(hud);
+   }
+ 
+   function doPageReload(hud) {
+     tab1.linkedBrowser.addEventListener("load", function _onReload() {
+       tab1.linkedBrowser.removeEventListener("load", _onReload, true);
+       ignoreAllUncaughtExceptions(false);
+       expectUncaughtException();
+     }, true);
+ 
+     ignoreAllUncaughtExceptions();
+     content.location.reload();
+ 
+-    waitForValue({
++    waitForButtonUpdate({
+       name: "the Web Console button count has been reset after page reload",
+-      validator: getErrorsCount,
+-      value: 3,
++      errors: 3,
++      warnings: 0,
+       success: function() {
+         waitForValue(waitForConsoleOutputAfterReload);
+       },
+       failure: finish,
+     });
+ 
+     let waitForConsoleOutputAfterReload = {
+       name: "the Web Console displays the correct number of errors after reload",
+@@ -213,16 +252,17 @@ function test() {
+   }
+ 
+   function testEnd() {
+     document.getElementById("developer-toolbar-closebutton").doCommand();
+     let target1 = TargetFactory.forTab(tab1);
+     gDevTools.closeToolbox(target1);
+     gBrowser.removeTab(tab1);
+     gBrowser.removeTab(tab2);
++    Services.prefs.clearUserPref("javascript.options.strict");
+     finish();
+   }
+ 
+   function oneTimeObserve(name, callback) {
+     function _onObserve(aSubject, aTopic, aData) {
+       Services.obs.removeObserver(_onObserve, name);
+       callback(aSubject, aTopic, aData);
+     };
+diff --git a/browser/locales/en-US/chrome/browser/devtools/toolbox.properties b/browser/locales/en-US/chrome/browser/devtools/toolbox.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/toolbox.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/toolbox.properties
+@@ -1,3 +1,4 @@
+-toolboxDockButtons.bottom.tooltip=Dock to bottom of browser window
+-toolboxDockButtons.side.tooltip=Dock to side of browser window
+-toolboxDockButtons.window.tooltip=Show in separate window
++toolboxDockButtons.bottom.tooltip=Dock to bottom of browser window
++toolboxDockButtons.side.tooltip=Dock to side of browser window
++toolboxDockButtons.window.tooltip=Show in separate window
++toolboxDockButtons.errorsCount.tooltip=%S errors, %S warnings.\nClick to toggle developer tools.
+\ No newline at end of file
