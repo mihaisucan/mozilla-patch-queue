@@ -1,0 +1,164 @@
+# HG changeset patch
+# Parent c83db4c0d65a7f59095b38a13fc511d46e0536aa
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1358976949 -7200
+
+Bug 833963 - Variables View: better handling for long strings
+
+diff --git a/browser/devtools/debugger/debugger.css b/browser/devtools/debugger/debugger.css
+--- a/browser/devtools/debugger/debugger.css
++++ b/browser/devtools/debugger/debugger.css
+@@ -39,18 +39,17 @@
+   overflow: hidden;
+ }
+ 
+ /**
+  * Variables view
+  */
+ 
+ #variables {
+-  overflow-x: hidden;
+-  overflow-y: auto;
++  overflow: auto;
+ }
+ 
+ /**
+  * Scope, variable and property elements
+  */
+ 
+ #variables .details:not([open]) {
+   display: none;
+diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared/VariablesView.jsm
+--- a/browser/devtools/shared/VariablesView.jsm
++++ b/browser/devtools/shared/VariablesView.jsm
+@@ -1226,17 +1226,17 @@ function Variable(aScope, aName, aDescri
+   this._activateNameInput = this._activateNameInput.bind(this);
+   this._activateValueInput = this._activateValueInput.bind(this);
+   this._deactivateNameInput = this._deactivateNameInput.bind(this);
+   this._deactivateValueInput = this._deactivateValueInput.bind(this);
+   this._onNameInputKeyPress = this._onNameInputKeyPress.bind(this);
+   this._onValueInputKeyPress = this._onValueInputKeyPress.bind(this);
+ 
+   Scope.call(this, aScope, aName, this._initialDescriptor = aDescriptor);
+-  this._setGrip(aDescriptor.value);
++  this.setGrip(aDescriptor.value);
+   this._symbolicName = aName;
+   this._absoluteName = aScope.name + "[\"" + aName + "\"]";
+ }
+ 
+ create({ constructor: Variable, proto: Scope.prototype }, {
+   /**
+    * Adds a property for this variable.
+    *
+@@ -1409,17 +1409,17 @@ create({ constructor: Variable, proto: S
+    *        Specifies the value and/or type & class of the variable.
+    *        e.g. - 42
+    *             - true
+    *             - "nasu"
+    *             - { type: "undefined" }
+    *             - { type: "null" }
+    *             - { type: "object", class: "Object" }
+    */
+-  _setGrip: function V__setGrip(aGrip) {
++  setGrip: function V_setGrip(aGrip) {
+     // Don't allow displaying grip information if there's no name available.
+     if (!this._nameString) {
+       return;
+     }
+ 
+     if (aGrip === undefined) {
+       aGrip = { type: "undefined" };
+     }
+@@ -2086,17 +2086,17 @@ VariablesView.getGrip = function VV_getG
+   }
+   return aValue;
+ };
+ 
+ /**
+  * Returns a custom formatted property string for a grip.
+  *
+  * @param any aGrip
+- *        @see Variable._setGrip
++ *        @see Variable.setGrip
+  * @param boolean aConciseFlag
+  *        Return a concisely formatted property string.
+  * @return string
+  *         The formatted property string.
+  */
+ VariablesView.getString = function VV_getString(aGrip, aConciseFlag) {
+   if (aGrip && typeof aGrip == "object") {
+     switch (aGrip.type) {
+@@ -2123,27 +2123,29 @@ VariablesView.getString = function VV_ge
+   }
+   return aGrip + "";
+ };
+ 
+ /**
+  * Returns a custom class style for a grip.
+  *
+  * @param any aGrip
+- *        @see Variable._setGrip
++ *        @see Variable.setGrip
+  * @return string
+  *         The custom class style.
+  */
+ VariablesView.getClass = function VV_getClass(aGrip) {
+   if (aGrip && typeof aGrip == "object") {
+     switch (aGrip.type) {
+       case "undefined":
+         return "token-undefined";
+       case "null":
+         return "token-null";
++      case "longString":
++        return "token-string";
+     }
+   } else {
+     switch (typeof aGrip) {
+       case "string":
+         return "token-string";
+       case "boolean":
+         return "token-boolean";
+       case "number":
+diff --git a/browser/themes/gnomestripe/devtools/debugger.css b/browser/themes/gnomestripe/devtools/debugger.css
+--- a/browser/themes/gnomestripe/devtools/debugger.css
++++ b/browser/themes/gnomestripe/devtools/debugger.css
+@@ -436,16 +436,19 @@
+ }
+ 
+ /**
+  * Variables and properties editing
+  */
+ 
+ #variables .element-value-input {
+   -moz-margin-start: 5px !important;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  max-width: 30em;
+ }
+ 
+ #variables .element-name-input {
+   -moz-margin-start: -1px !important;
+   color: #048;
+   font-weight: 600;
+ }
+ 
+@@ -480,16 +483,19 @@
+ }
+ 
+ .token-number {
+   color: #c40a16;
+ }
+ 
+ .token-string {
+   color: #1c00cf;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  max-width: 30em;
+ }
+ 
+ .token-other {
+   color: #333;
+ }
+ 
+ /**
+  * Expand/collapse arrow
