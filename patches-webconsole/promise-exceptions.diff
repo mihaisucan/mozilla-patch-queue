@@ -1,0 +1,57 @@
+# HG changeset patch
+# Parent 65494544bdeb1ad9241fcd65fafa00f79d1ebf6e
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1358960229 -7200
+
+diff --git a/toolkit/addon-sdk/promise/core.js b/toolkit/addon-sdk/promise/core.js
+--- a/toolkit/addon-sdk/promise/core.js
++++ b/toolkit/addon-sdk/promise/core.js
+@@ -3,17 +3,27 @@
+          forin: true latedef: false */
+ /*global define: true, Cu: true, __URI__: true */
+ ;(function(id, factory) { // Module boilerplate :(
+   if (typeof(define) === 'function') { // RequireJS
+     define(factory);
+   } else if (typeof(require) === 'function') { // CommonJS
+     factory.call(this, require, exports, module);
+   } else if (String(this).indexOf('BackstagePass') >= 0) { // JSM
+-    this[factory.name] = {};
++    var factory_export = this[factory.name] = {};
++    var Cu = this.Components.utils;
++    if (Cu && Cu.reportError) {
++      factory_export._errorReporter = function _errorReporter(error) {
++        Cu.reportError("Promise exception: " + error + "\n" + error.stack);
++      };
++    } else {
++      factory_export._errorReporter = function _errorReporter(error) {
++        dump("Promise exception: " + error + "\n" + error.stack);
++      };
++    }
+     factory(function require(uri) {
+       var imports = {};
+       this['Components'].utils.import(uri, imports);
+       return imports;
+     }, this[factory.name], { uri: __URI__, id: id });
+     this.EXPORTED_SYMBOLS = [factory.name];
+   } else {  // Browser or alike
+     var globals = this;
+@@ -48,16 +58,19 @@ function rejected(reason) {
+  * rejected with thrown error is returned.
+  */
+ function attempt(f) {
+   return function effort(input) {
+     try {
+       return f(input);
+     }
+     catch(error) {
++      if (exports._reportErrors && exports._errorReporter) {
++        exports._errorReporter(error);
++      }
+       return rejected(error);
+     }
+   };
+ }
+ 
+ /**
+  * Internal utility: Returns `true` if given `value` is a promise. Value is
+  * assumed to be a promise if it implements method `then`.
