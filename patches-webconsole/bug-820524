@@ -1,14 +1,67 @@
 # HG changeset patch
 # User Panos Astithas <past@mozilla.com>
-# Date 1358454347 -7200
-# Node ID dcba4e60917b725f9806babf023e37adb031a7cc
-# Parent 4a1b771880d830a75f83593b31493c0874166b13
+# Date 1358886249 -7200
+# Node ID c5558b4909ba0df62b5ca6f604e0352b6d2ec46c
+# Parent  8d85fac98a8cab0c5b59a8c7fb520905a37843cc
 Bug 820524 - Debugger and Web Console should share the debugger client even for local sessions
 
+diff --git a/browser/devtools/commandline/test/browser_dbg_cmd.js b/browser/devtools/commandline/test/browser_dbg_cmd.js
+--- a/browser/devtools/commandline/test/browser_dbg_cmd.js
++++ b/browser/devtools/commandline/test/browser_dbg_cmd.js
+@@ -37,23 +37,31 @@ function testCommands(dbg, cmd) {
+                   is(output.value, "step over", "debugger stepped over");
+                   cmd("dbg step out", function() {
+                     is(output.value, "step out", "debugger stepped out");
+                     cmd("dbg continue", function() {
+                       cmd("dbg continue", function() {
+                         is(output.value, "dbg continue", "debugger continued");
+                         DeveloperToolbarTest.exec({
+                           typed: "dbg close",
++                          completed: false,
+                           blankOutput: true
+                         });
+ 
+                         let target = TargetFactory.forTab(gBrowser.selectedTab);
+-                        ok(!gDevTools.getToolbox(target),
+-                          "Debugger was closed.");
+-                        finish();
++                        let toolbox = gDevTools.getToolbox(target);
++                        if (!toolbox) {
++                          ok(true, "Debugger was closed.");
++                          finish();
++                        } else {
++                          toolbox.on("destroyed", function () {
++                            ok(true, "Debugger was closed.");
++                            finish();
++                          });
++                        }
+                       });
+                     });
+                   });
+                 });
+               });
+             });
+           });
+         });
 diff --git a/browser/devtools/debugger/DebuggerPanel.jsm b/browser/devtools/debugger/DebuggerPanel.jsm
 --- a/browser/devtools/debugger/DebuggerPanel.jsm
 +++ b/browser/devtools/debugger/DebuggerPanel.jsm
-@@ -32,23 +32,16 @@ DebuggerPanel.prototype = {
+@@ -17,38 +17,30 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+   "resource://gre/modules/devtools/dbg-server.jsm");
+ 
+ function DebuggerPanel(iframeWindow, toolbox) {
+   this.panelWin = iframeWindow;
+   this._toolbox = toolbox;
+ 
+   this._controller = this.panelWin.DebuggerController;
+   this._view = this.panelWin.DebuggerView;
+-  this._controller._target = this.target;
+   this._bkp = this._controller.Breakpoints;
+ 
+   EventEmitter.decorate(this);
+ }
+ 
+ DebuggerPanel.prototype = {
    /**
     * open is effectively an asynchronous constructor
     */
@@ -32,39 +85,41 @@ diff --git a/browser/devtools/debugger/DebuggerPanel.jsm b/browser/devtools/debu
        deferred.resolve(this);
      }.bind(this);
  
+@@ -57,17 +49,29 @@ DebuggerPanel.prototype = {
+                                         onDebuggerConnected, true);
+       this.emit("connected");
+     }.bind(this);
+ 
+     this.panelWin.addEventListener("Debugger:Loaded", onDebuggerLoaded, true);
+     this.panelWin.addEventListener("Debugger:Connected",
+                                    onDebuggerConnected, true);
+ 
+-    return deferred.promise;
++    // Remote debugging gets the debuggee from a RemoteTarget object.
++    if (this.target.isRemote) {
++      this.panelWin._isRemoteDebugger = true;
++      this._controller._target = this.target;
++      return deferred.promise;
++    }
++
++    // Local debugging needs to convert the TabTarget to a RemoteTarget.
++    return this.target.remote().then(function success(aRemoteTarget) {
++        this._controller._target = aRemoteTarget;
++      }.bind(this)).then(function() {
++        return deferred.promise;
++      });
+   },
+ 
+   // DevToolPanel API
+   get target() this._toolbox.target,
+ 
+   get isReady() this._isReady,
+ 
+   destroy: function() {
 diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools/debugger/debugger-controller.js
 --- a/browser/devtools/debugger/debugger-controller.js
 +++ b/browser/devtools/debugger/debugger-controller.js
-@@ -52,17 +52,27 @@ let DebuggerController = {
-     this._isInitialized = true;
- 
-     window.removeEventListener("load", this._startupDebugger, true);
- 
-     DebuggerView.initialize(function() {
-       DebuggerView._isInitialized = true;
- 
-       window.dispatchEvent("Debugger:Loaded");
--      this._connect();
-+      // Remote debugging gets the debuggee from a RemoteTarget object.
-+      if (this._target.isRemote) {
-+        window._isRemoteDebugger = true;
-+        this._connect();
-+      } else {
-+        // Local debugging needs to convert the TabTarget to a RemoteTarget.
-+        this._target.remote().then(function success(aRemoteTarget) {
-+          this._target = aRemoteTarget;
-+          this._connect();
-+        }.bind(this));
-+      }
-     }.bind(this));
-   },
- 
-   /**
-    * Destroys the view and disconnects the debugger client from the server.
-    */
-   _shutdownDebugger: function DC__shutdownDebugger() {
-     if (this._isDestroyed || !DebuggerView._isInitialized) {
-@@ -81,17 +91,17 @@ let DebuggerController = {
+@@ -91,17 +91,17 @@ let DebuggerController = {
        window.dispatchEvent("Debugger:Unloaded");
        window._isChromeDebugger && this._quitApp();
      }.bind(this));
@@ -74,7 +129,7 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
     * Prepares the hostname and port number for a remote debugger connection
     * and handles connection retries and timeouts.
 -   *
-+   * XXX: remove all that
++   * XXX: remove all this (bug 823577)
     * @return boolean
     *         True if connection should proceed normally, false otherwise.
     */
@@ -83,7 +138,7 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
      if (this._remoteConnectionTry === Prefs.remoteConnectionRetries) {
        Services.prompt.alert(null,
          L10N.getStr("remoteDebuggerPromptTitle"),
-@@ -147,56 +157,27 @@ let DebuggerController = {
+@@ -157,71 +157,59 @@ let DebuggerController = {
     * Initializes a debugger client and connects it to the debugger server,
     * wiring event handlers as necessary.
     */
@@ -93,45 +148,42 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
      }
  
 -    let client;
-+    let client = this.client = this._target.client;
-+    this._target.on("close", this._onTabDetached);
-+    this._target.on("navigate", this._onTabNavigated);
-+    this._target.on("will-navigate", this._onTabNavigated);
- 
+-
 -    // Remote debugging gets the debuggee from a RemoteTarget object.
 -    if (this._target && this._target.isRemote) {
 -      window._isRemoteDebugger = true;
 -
 -      client = this.client = this._target.client;
--      this._target.on("close", this._onTabDetached);
--      this._target.on("navigate", this._onTabNavigated);
--
--      if (this._target.chrome) {
--        let dbg = this._target.form.chromeDebugger;
--        this._startChromeDebugging(client, dbg, callback);
--      } else {
--        this._startDebuggingTab(client, this._target.form, callback);
--      }
--      return;
-+    if (this._target.chrome) {
-+      let dbg = this._target.form.chromeDebugger;
-+      this._startChromeDebugging(client, dbg, callback);
-+    } else {
-+      this._startDebuggingTab(client, this._target.form, callback);
++    if (!window._isChromeDebugger) {
++      let client = this.client = this._target.client;
+       this._target.on("close", this._onTabDetached);
+       this._target.on("navigate", this._onTabNavigated);
++      this._target.on("will-navigate", this._onTabNavigated);
+ 
+       if (this._target.chrome) {
+         let dbg = this._target.form.chromeDebugger;
+         this._startChromeDebugging(client, dbg, callback);
+       } else {
+         this._startDebuggingTab(client, this._target.form, callback);
+       }
+       return;
      }
--
+ 
 -    // Content or chrome debugging can connect directly to the debuggee.
 -    // TODO: convert this to use a TabTarget.
 -    let transport = window._isChromeDebugger
 -      ? debuggerSocketConnect(Prefs.remoteHost, Prefs.remotePort)
 -      : DebuggerServer.connectPipe();
--
++    // Chrome debugging needs to make the connection to the debuggee.
++    let transport = debuggerSocketConnect(Prefs.remoteHost, Prefs.remotePort);
+ 
 -    client = this.client = new DebuggerClient(transport);
--    client.addListener("tabNavigated", this._onTabNavigated);
--    client.addListener("tabDetached", this._onTabDetached);
--
--    client.connect(function(aType, aTraits) {
--      client.listTabs(function(aResponse) {
++    let client = this.client = new DebuggerClient(transport);
+     client.addListener("tabNavigated", this._onTabNavigated);
+     client.addListener("tabDetached", this._onTabDetached);
+ 
+     client.connect(function(aType, aTraits) {
+       client.listTabs(function(aResponse) {
 -        if (window._isChromeDebugger) {
 -          let dbg = aResponse.chromeDebugger;
 -          this._startChromeDebugging(client, dbg, callback);
@@ -139,8 +191,9 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
 -          let tab = aResponse.tabs[aResponse.selected];
 -          this._startDebuggingTab(client, tab, callback);
 -        }
--      }.bind(this));
--    }.bind(this));
++        this._startChromeDebugging(client, aResponse.chromeDebugger, callback);
+       }.bind(this));
+     }.bind(this));
    },
  
    /**
@@ -149,7 +202,25 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
    _disconnect: function DC__disconnect() {
      // Return early if the client didn't even have a chance to instantiate.
      if (!this.client) {
-@@ -393,19 +374,24 @@ ThreadState.prototype = {
+       return;
+     }
+     this.client.removeListener("tabNavigated", this._onTabNavigated);
+     this.client.removeListener("tabDetached", this._onTabDetached);
+ 
+-    // When remote debugging, the connection is closed by the RemoteTarget.
+-    if (!window._isRemoteDebugger) {
++    // When debugging content or a remote instance, the connection is closed by
++    // the RemoteTarget.
++    if (window._isChromeDebugger) {
+       this.client.close();
+     }
+ 
+     this.client = null;
+     this.tabClient = null;
+     this.activeThread = null;
+   },
+ 
+@@ -404,19 +392,24 @@ ThreadState.prototype = {
    },
  
    /**
@@ -161,7 +232,7 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
 -    if (DebuggerController._target &&
 -        (aEvent == "paused" || aEvent == "resumed")) {
 -      DebuggerController._target.emit("thread-" + aEvent);
-+    // Notify the RemoteTarget and any parent TabTarget of his.
++    // Notify the RemoteTarget and any parent TabTarget.
 +    let target = DebuggerController._target;
 +    if (target && (aEvent == "paused" || aEvent == "resumed")) {
 +      let event = "thread-" + aEvent;
@@ -302,81 +373,199 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
        this.tab.removeEventListener("TabClose", this);
        this.tab.parentNode.removeEventListener("TabSelect", this);
        this.off("thread-resumed", this._handleThreadState);
-@@ -495,16 +536,21 @@ RemoteTarget.prototype = {
+@@ -490,17 +531,22 @@ RemoteTarget.prototype = {
+     }
+ 
+     this._destroyer = Promise.defer();
+ 
+     this.client.removeListener("tabNavigated", this._onTabNavigated);
      this.client.removeListener("tabDetached", this.destroy);
  
      this._client.close(function onClosed() {
++      targets.delete(this._form);
        this._client = null;
++      // Clear the reference in any parent TabTarget.
++      if (this._originTabTarget) {
++        this._originTabTarget._remote = null;
++      }
        this.off("thread-resumed", this._handleThreadState);
        this.off("thread-paused", this._handleThreadState);
        this.emit("close");
  
-+      // If this was created from a TabTarget, destroy it as well.
-+      if (this._originTabTarget) {
-+        this._originTabTarget.destroy();
-+      }
-+
        this._destroyer.resolve(null);
      }.bind(this));
  
      return this._destroyer.promise;
+diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework/Toolbox.jsm
+--- a/browser/devtools/framework/Toolbox.jsm
++++ b/browser/devtools/framework/Toolbox.jsm
+@@ -641,39 +641,46 @@ Toolbox.prototype = {
+ 
+   /**
+    * Remove all UI elements, detach from target and clear up
+    */
+   destroy: function TBOX_destroy() {
+     // If several things call destroy then we give them all the same
+     // destruction promise so we're sure to destroy only once
+     if (this._destroyer) {
+-      return this._destroyer;
++      return this._destroyer.promise;
+     }
+ 
+     let outstanding = [];
+ 
+     // Remote targets need to be notified that the toolbox is being torn down.
+-    if (this._target && this._target.isRemote) {
+-      outstanding.push(this._target.destroy());
++    if (this._target) {
++      if (this._target.isRemote) {
++        outstanding.push(this._target.destroy());
++      } else if (this._target._remote) {
++        this._target.remote().then(function(aRemoteTarget) {
++          outstanding.push(aRemoteTarget.destroy());
++        });
++      }
+     }
+     this._target = null;
+ 
+     for (let [id, panel] of this._toolPanels) {
+       outstanding.push(panel.destroy());
+     }
+ 
+     outstanding.push(this._host.destroy());
+ 
+     gDevTools.off("tool-registered", this._toolRegistered);
+     gDevTools.off("tool-unregistered", this._toolUnregistered);
+ 
+     this._destroyer = Promise.all(outstanding);
+     this._destroyer.then(function() {
+       this.emit("destroyed");
++      this._destroyer.resolve(null);
+     }.bind(this));
+ 
+     return this._destroyer.then(function() {
+       // Ensure that the promise resolves to nothing, rather than an array of
+       // several nothings, which is what we get from Promise.all
+       return undefined;
+     });
+   }
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -241,22 +241,21 @@ WebConsole.prototype = {
+     let onFailure = function(aReason) {
+       deferred.reject(aReason);
+     };
+ 
+     let win, doc;
+     if ((win = this.iframe.contentWindow) &&
+         (doc = win.document) &&
+         doc.readyState == "complete") {
++      initUI();
++    }
++    else {
+       this.iframe.addEventListener("load", onIframeLoad, true);
+     }
+-    else {
+-      initUI();
+-    }
+-
+     return deferred.promise;
    },
  
-   toString: function() {
-     return 'RemoteTarget:' + this.form.actor;
-diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
---- a/browser/devtools/webconsole/test/head.js
-+++ b/browser/devtools/webconsole/test/head.js
-@@ -155,32 +155,36 @@ function openConsole(aTab, aCallback = f
-  *        default tab is taken from the global variable |tab|.
-  * @param function [aCallback]
-  *        Optional function to invoke after the Web Console completes
-  *        closing (web-console-destroyed).
-  */
- function closeConsole(aTab, aCallback = function() { })
- {
-   let target = TargetFactory.forTab(aTab || tab);
--  let toolbox = gDevTools.getToolbox(target);
--  if (toolbox) {
--    let panel = toolbox.getPanel("webconsole");
--    if (panel) {
--      let hudId = panel.hud.hudId;
--      toolbox.destroy().then(function() {
--        executeSoon(aCallback.bind(null, hudId));
--      }).then(null, console.error);
-+  // Get the corresponding RemoteTarget from the already-resolved promise.
-+  target._remote.promise.then(function (aRemoteTarget) {
-+    target = aRemoteTarget;
-+    let toolbox = gDevTools.getToolbox(target);
-+    if (toolbox) {
-+      let panel = toolbox.getPanel("webconsole");
-+      if (panel) {
-+        let hudId = panel.hud.hudId;
-+        toolbox.destroy().then(function() {
-+          executeSoon(aCallback.bind(null, hudId));
-+        }).then(null, console.error);
-+      }
-+      else {
-+        toolbox.destroy().then(aCallback.bind(null));
-+      }
-     }
-     else {
--      toolbox.destroy().then(aCallback.bind(null));
-+      aCallback();
-     }
--  }
--  else {
--    aCallback();
--  }
-+  });
- }
+   /**
+    * Retrieve the Web Console panel title.
+    *
+    * @return string
+    *         The Web Console panel title.
+diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/webconsole/WebConsolePanel.jsm
+--- a/browser/devtools/webconsole/WebConsolePanel.jsm
++++ b/browser/devtools/webconsole/WebConsolePanel.jsm
+@@ -4,16 +4,17 @@
+ 
+ "use strict";
+ 
+ this.EXPORTED_SYMBOLS = [ "WebConsolePanel" ];
+ 
+ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++Cu.import("resource://gre/modules/commonjs/promise/core.js");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "HUDService",
+     "resource:///modules/HUDService.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
+     "resource:///modules/devtools/EventEmitter.jsm");
  
  /**
-  * Polls a given function waiting for opening context menu.
-  *
-  * @Param {nsIDOMElement} aContextMenu
-  * @param object aOptions
-  *        Options object with the following properties:
+@@ -33,40 +34,54 @@ WebConsolePanel.prototype = {
+    *
+    * @return object
+    *         A Promise that is resolved when the Web Console completes opening.
+    */
+   open: function WCP_open()
+   {
+     let parentDoc = this._toolbox.doc;
+     let iframe = parentDoc.getElementById("toolbox-panel-iframe-webconsole");
+-    let promise = HUDService.openWebConsole(this.target, iframe);
++    let promise;
+ 
+-    return promise.then(function onSuccess(aWebConsole) {
+-      this.hud = aWebConsole;
+-      this._isReady = true;
+-      this.emit("ready");
+-      return this;
+-    }.bind(this), function onError(aReason) {
+-      Cu.reportError("WebConsolePanel open failed. " +
+-                     aReason.error + ": " + aReason.message);
+-    });
++    // Local debugging needs to convert the TabTarget to a RemoteTarget.
++    if (!this.target.isRemote) {
++      promise = this.target.remote();
++    } else {
++      promise = Promise.resolve(this.target);
++    }
++
++    return promise
++      .then(function(aTarget) {
++        this._frameWindow._remoteTarget = aTarget;
++        return HUDService.openWebConsole(this.target, iframe);
++      }.bind(this))
++      .then(function onSuccess(aWebConsole) {
++        this.hud = aWebConsole;
++        this._isReady = true;
++        this.emit("ready");
++        return this;
++      }.bind(this), function onError(aReason) {
++        let msg = "WebConsolePanel open failed. " +
++                  aReason.error + ": " + aReason.message;
++        dump(msg + "\n");
++        Cu.reportError(msg);
++      });
+   },
+ 
+   get target() this._toolbox.target,
+ 
+   _isReady: false,
+   get isReady() this._isReady,
+ 
+   destroy: function WCP_destroy()
+   {
+     if (this._destroyer) {
+-      return this._destroyer;
++      return this._destroyer.promise;
+     }
+ 
+     this._destroyer = this.hud.destroy();
+     this._destroyer.then(function() {
+       this.emit("destroyed");
+     }.bind(this));
+ 
+-    return this._destroyer;
++    return this._destroyer.promise;
+   },
+ };
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -406,7 +595,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                                    "resource:///modules/PropertyPanel.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "PropertyTreeView",
-@@ -371,18 +362,16 @@ WebConsoleFrame.prototype = {
+@@ -371,17 +362,17 @@ WebConsoleFrame.prototype = {
     * @return object
     *         A Promise object that is resolved/reject based on the connection
     *         result.
@@ -416,7 +605,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      let deferred = Promise.defer();
  
 -    this.proxy = new WebConsoleConnectionProxy(this, this.owner.target);
--
++    this.proxy = new WebConsoleConnectionProxy(this, this.window._remoteTarget);
+ 
      let onSuccess = function() {
        this.saveRequestAndResponseBodies = this._saveRequestAndResponseBodies;
        deferred.resolve(this);
@@ -424,38 +614,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      let onFailure = function(aReason) {
        let node = this.createMessageNode(CATEGORY_JS, SEVERITY_ERROR,
-                                         aReason.error + ": " + aReason.message);
-@@ -390,17 +379,28 @@ WebConsoleFrame.prototype = {
-       deferred.reject(aReason);
-     }.bind(this);
- 
-     let sendNotification = function() {
-       let id = WebConsoleUtils.supportsString(this.hudId);
-       Services.obs.notifyObservers(id, "web-console-created", null);
-     }.bind(this);
- 
--    this.proxy.connect().then(onSuccess, onFailure).then(sendNotification);
-+    // Remote debugging gets the debuggee from a RemoteTarget object.
-+    if (this.owner.target.isRemote) {
-+      this.proxy = new WebConsoleConnectionProxy(this, this.owner.target);
-+      this.proxy.connect().then(onSuccess, onFailure).then(sendNotification);
-+    }
-+    else {
-+      // Local debugging needs to convert the TabTarget to a RemoteTarget.
-+      this.owner.target.remote().then(function success(aRemoteTarget) {
-+        this.proxy = new WebConsoleConnectionProxy(this, aRemoteTarget);
-+        this.proxy.connect().then(onSuccess, onFailure).then(sendNotification);
-+      }.bind(this));
-+    }
- 
-     return deferred.promise;
-   },
- 
-   /**
-    * Find the Web Console UI elements and setup event listeners as needed.
-    * @private
-    */
-@@ -4021,17 +4021,16 @@ function WebConsoleConnectionProxy(aWebC
+@@ -4021,17 +4012,16 @@ function WebConsoleConnectionProxy(aWebC
    this.target = aTarget;
  
    this._onPageError = this._onPageError.bind(this);
@@ -473,7 +632,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
  WebConsoleConnectionProxy.prototype = {
    /**
-@@ -4106,27 +4105,16 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4106,27 +4096,16 @@ WebConsoleConnectionProxy.prototype = {
     * Tells if the window.console object of the remote web page is the native
     * object or not.
     * @private
@@ -501,7 +660,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    connect: function WCCP_connect()
    {
-@@ -4144,49 +4132,33 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4144,49 +4123,33 @@ WebConsoleConnectionProxy.prototype = {
      let promise = this._connectDefer.promise;
      promise.then(function _onSucess() {
        this._connectTimer.cancel();
@@ -558,7 +717,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Connection timeout handler.
     * @private
-@@ -4197,35 +4169,16 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4197,35 +4160,16 @@ WebConsoleConnectionProxy.prototype = {
        error: "timeout",
        message: l10n.getStr("connectionTimeout"),
      };
@@ -594,3 +753,24 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    _attachTab: function WCCP__attachTab(aTab)
    {
+diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/devtools/debugger/server/dbg-browser-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-browser-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-browser-actors.js
+@@ -672,17 +672,16 @@ DebuggerProgressListener.prototype = {
+         this._tabActor.threadActor.dbg.enabled = false;
+         this._tabActor._pendingNavigation = aRequest;
+       }
+ 
+       this._tabActor.conn.send({
+         from: this._tabActor.actorID,
+         type: "tabNavigated",
+         url: aRequest.URI.spec,
+-        title: "",
+         nativeConsoleAPI: true,
+         state: "start",
+       });
+     } else if (isStop) {
+       if (this._tabActor.threadActor.state == "running") {
+         this._tabActor.threadActor.dbg.enabled = true;
+       }
+ 

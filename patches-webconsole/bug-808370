@@ -1,10 +1,60 @@
 # HG changeset patch
-# Parent 8f21f5a3ad5ce5db8b7cd7731f93b6017ddf7a6f
+# Parent 34a9bb4bb69a3a652d91941b0a622c9228b19abd
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1358960352 -7200
+# Date 1359060246 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
+diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools/debugger/debugger-controller.js
+--- a/browser/devtools/debugger/debugger-controller.js
++++ b/browser/devtools/debugger/debugger-controller.js
+@@ -10,27 +10,16 @@ const Ci = Components.interfaces;
+ const Cu = Components.utils;
+ 
+ const DBG_STRINGS_URI = "chrome://browser/locale/devtools/debugger.properties";
+ const NEW_SCRIPT_IGNORED_URLS = ["debugger eval code", "self-hosted"];
+ const NEW_SCRIPT_DISPLAY_DELAY = 200; // ms
+ const FETCH_SOURCE_RESPONSE_DELAY = 50; // ms
+ const FRAME_STEP_CLEAR_DELAY = 100; // ms
+ const CALL_STACK_PAGE_SIZE = 25; // frames
+-const VARIABLES_VIEW_NON_SORTABLE = [
+-  "Array",
+-  "Int8Array",
+-  "Uint8Array",
+-  "Int16Array",
+-  "Uint16Array",
+-  "Int32Array",
+-  "Uint32Array",
+-  "Float32Array",
+-  "Float64Array"
+-];
+ 
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
+ Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
+ Cu.import("resource:///modules/source-editor.jsm");
+ Cu.import("resource:///modules/devtools/LayoutHelpers.jsm");
+ Cu.import("resource:///modules/devtools/VariablesView.jsm");
+@@ -899,17 +888,17 @@ StackFrames.prototype = {
+     // Fetch the properties only once.
+     if (aVar._fetched) {
+       return;
+     }
+     aVar._fetched = true;
+ 
+     this.activeThread.pauseGrip(aGrip).getPrototypeAndProperties(function(aResponse) {
+       let { ownProperties, prototype } = aResponse;
+-      let sortable = VARIABLES_VIEW_NON_SORTABLE.indexOf(aGrip.class) == -1;
++      let sortable = VariablesView.NON_SORTABLE_CLASSES.indexOf(aGrip.class) == -1;
+ 
+       // Add all the variable properties.
+       if (ownProperties) {
+         aVar.addProperties(ownProperties, { sorted: sortable });
+         // Expansion handlers must be set after the properties are added.
+         for (let name in ownProperties) {
+           this._addVarExpander(aVar.get(name), ownProperties[name].value);
+         }
 diff --git a/browser/devtools/framework/Sidebar.jsm b/browser/devtools/framework/Sidebar.jsm
 --- a/browser/devtools/framework/Sidebar.jsm
 +++ b/browser/devtools/framework/Sidebar.jsm
@@ -54,6 +104,27 @@ diff --git a/browser/devtools/framework/Sidebar.jsm b/browser/devtools/framework
    /**
     * Select a specific tab.
     */
+diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework/Toolbox.jsm
+--- a/browser/devtools/framework/Toolbox.jsm
++++ b/browser/devtools/framework/Toolbox.jsm
+@@ -670,17 +670,16 @@ Toolbox.prototype = {
+     outstanding.push(this._host.destroy());
+ 
+     gDevTools.off("tool-registered", this._toolRegistered);
+     gDevTools.off("tool-unregistered", this._toolUnregistered);
+ 
+     this._destroyer = Promise.all(outstanding);
+     this._destroyer.then(function() {
+       this.emit("destroyed");
+-      this._destroyer.resolve(null);
+     }.bind(this));
+ 
+     return this._destroyer.then(function() {
+       // Ensure that the promise resolves to nothing, rather than an array of
+       // several nothings, which is what we get from Promise.all
+       return undefined;
+     });
+   }
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 --- a/browser/devtools/jar.mn
 +++ b/browser/devtools/jar.mn
@@ -75,6 +146,60 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
      content/browser/devtools/csshtmltree.xul      (styleinspector/csshtmltree.xul)
      content/browser/devtools/cssruleview.xul      (styleinspector/cssruleview.xul)
      content/browser/devtools/styleinspector.css   (styleinspector/styleinspector.css)
+diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared/VariablesView.jsm
+--- a/browser/devtools/shared/VariablesView.jsm
++++ b/browser/devtools/shared/VariablesView.jsm
+@@ -585,16 +585,28 @@ VariablesView.prototype = {
+   _list: null,
+   _searchboxNode: null,
+   _searchboxContainer: null,
+   _searchboxPlaceholder: "",
+   _emptyTextNode: null,
+   _emptyTextValue: ""
+ };
+ 
++this.VariablesView.NON_SORTABLE_CLASSES = [
++  "Array",
++  "Int8Array",
++  "Uint8Array",
++  "Int16Array",
++  "Uint16Array",
++  "Int32Array",
++  "Uint32Array",
++  "Float32Array",
++  "Float64Array"
++];
++
+ /**
+  * A Scope is an object holding Variable instances.
+  * Iterable via "for (let [name, variable] in instance) { }".
+  *
+  * @param VariablesView aView
+  *        The view to contain this scope.
+  * @param string aName
+  *        The scope's name.
+@@ -1589,16 +1601,21 @@ create({ constructor: Variable, proto: S
+     let isUndefined = VariablesView.isUndefined(descriptor);
+ 
+     if (isPrimitive || isUndefined) {
+       this.hideArrow();
+     }
+     if (!isUndefined && (descriptor.get || descriptor.set)) {
+       // FIXME: editing getters and setters is not allowed yet. Bug 831794.
+       this.eval = null;
++      // Deleting getters and setters individually is not allowed.
++      this.delete = null;
++      // Changing getter/setter name is not allowed.
++      this.switch = null;
++
+       this.addProperty("get", { value: descriptor.get });
+       this.addProperty("set", { value: descriptor.set });
+       this.expand();
+       separatorLabel.hidden = true;
+       valueLabel.hidden = true;
+     }
+   },
+ 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
@@ -176,7 +301,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -992,55 +997,45 @@ WebConsoleFrame.prototype = {
+@@ -983,55 +988,45 @@ WebConsoleFrame.prototype = {
    logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
    {
      let body = null;
@@ -243,7 +368,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let functionName = aMessage.functionName ||
                             l10n.getStr("stacktrace.anonymousFunction");
  
-@@ -1060,16 +1055,22 @@ WebConsoleFrame.prototype = {
+@@ -1051,16 +1046,22 @@ WebConsoleFrame.prototype = {
        }
  
        case "group":
@@ -266,7 +391,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          if (timer.error) {
            Cu.reportError(l10n.getStr(timer.error));
            return;
-@@ -1098,64 +1099,44 @@ WebConsoleFrame.prototype = {
+@@ -1089,64 +1090,44 @@ WebConsoleFrame.prototype = {
      // we ignore their arguments.
      switch (level) {
        case "group":
@@ -337,7 +462,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * the window.console API call.
     *
     * @param object aMessage
-@@ -1166,59 +1147,30 @@ WebConsoleFrame.prototype = {
+@@ -1157,59 +1138,30 @@ WebConsoleFrame.prototype = {
      this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage]);
    },
  
@@ -401,7 +526,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1957,19 +1909,21 @@ WebConsoleFrame.prototype = {
+@@ -1948,19 +1900,21 @@ WebConsoleFrame.prototype = {
     *
     * @private
     * @param array aItem
@@ -426,7 +551,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          connectionId = args[0];
        }
        else if (typeof methodOrNode != "function") {
-@@ -1977,40 +1931,23 @@ WebConsoleFrame.prototype = {
+@@ -1968,40 +1922,23 @@ WebConsoleFrame.prototype = {
        }
        if (connectionId && connectionId in this._networkRequests) {
          delete this._networkRequests[connectionId];
@@ -469,7 +594,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * category's line limit by removing old messages as needed.
     *
     * @param integer aCategory
-@@ -2028,64 +1965,51 @@ WebConsoleFrame.prototype = {
+@@ -2019,64 +1956,51 @@ WebConsoleFrame.prototype = {
      let n = Math.max(0, messageNodes.length - logLimit);
      let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
      toRemove.forEach(this.removeOutputMessage, this);
@@ -546,7 +671,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2184,17 +2108,17 @@ WebConsoleFrame.prototype = {
+@@ -2175,17 +2099,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -565,7 +690,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2229,52 +2153,37 @@ WebConsoleFrame.prototype = {
+@@ -2220,52 +2144,37 @@ WebConsoleFrame.prototype = {
      node.clipboardText = aClipboardText;
      node.classList.add("hud-msg-node");
  
@@ -633,7 +758,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2312,53 +2221,46 @@ WebConsoleFrame.prototype = {
+@@ -2303,53 +2212,46 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -695,7 +820,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Click event handler for the ellipsis shown immediately after a long string.
     * This method retrieves the full string and updates the console output to
-@@ -2640,16 +2542,17 @@ WebConsoleFrame.prototype = {
+@@ -2631,16 +2533,17 @@ WebConsoleFrame.prototype = {
     * Release an actor.
     *
     * @private
@@ -713,7 +838,37 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Open the selected item's URL in a new tab.
     */
-@@ -2729,19 +2632,23 @@ function JSTerm(aWebConsoleFrame)
+@@ -2685,27 +2588,29 @@ WebConsoleFrame.prototype = {
+     if (this.jsterm) {
+       this.jsterm.destroy();
+       this.jsterm = null;
+     }
+ 
+     this._commandController = null;
+ 
+     let onDestroy = function() {
++      dump("WCF_destroy onDestroy\n");
+       this._destroyer.resolve(null);
+     }.bind(this);
+ 
+     if (this.proxy) {
+       this.proxy.disconnect().then(onDestroy);
+       this.proxy = null;
+     }
+     else {
+       onDestroy();
+     }
+ 
++    dump("WCF_destroy end\n");
+     return this._destroyer.promise;
+   },
+ };
+ 
+ /**
+  * Create a JSTerminal (a JavaScript command line). This is attached to an
+  * existing HeadsUpDisplay (a Web Console instance). This code is responsible
+  * with handling command line input, code evaluation and result output.
+@@ -2720,26 +2625,41 @@ function JSTerm(aWebConsoleFrame)
    this.hudId = this.hud.hudId;
  
    this.lastCompletion = { value: null };
@@ -736,8 +891,45 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    lastCompletion: null,
  
    /**
++   * The Web Console sidebar.
++   * @see this._createSidebar()
++   * @see Sidebar.jsm
++   */
++  sidebar: null,
++
++  _splitter: null,
++
++  _variablesView: null,
++
++  /**
     * Last input value.
-@@ -2809,33 +2716,45 @@ JSTerm.prototype = {
+    * @type string
+    */
+   lastInputValue: "",
+ 
+   /**
+    * History of code that was executed.
+    * @type array
+@@ -2778,16 +2698,18 @@ JSTerm.prototype = {
+ 
+     let doc = this.hud.document;
+     this.completeNode = doc.querySelector(".jsterm-complete-node");
+     this.inputNode = doc.querySelector(".jsterm-input-node");
+     this.inputNode.addEventListener("keypress", this._keyPress, false);
+     this.inputNode.addEventListener("input", this._inputEventHandler, false);
+     this.inputNode.addEventListener("keyup", this._inputEventHandler, false);
+ 
++    this._splitter = doc.querySelector(".devtools-side-splitter");
++
+     this.lastInputValue && this.setInputValue(this.lastInputValue);
+   },
+ 
+   /**
+    * The JavaScript evaluation response handler.
+    *
+    * @private
+    * @param nsIDOMElement [aAfterNode]
+@@ -2800,33 +2722,45 @@ JSTerm.prototype = {
     *        The message received from the server.
     */
    _executeResultCallback:
@@ -790,7 +982,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            catch (ex) {
              errorMessage = helperResult.message;
            }
-@@ -2874,48 +2793,42 @@ JSTerm.prototype = {
+@@ -2865,48 +2799,42 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -857,7 +1049,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2936,29 +2849,73 @@ JSTerm.prototype = {
+@@ -2927,29 +2855,73 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -935,7 +1127,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        - anchor:
     *        The DOM element you want the panel to be anchored to.
     *        - updateButtonCallback:
-@@ -2967,50 +2924,309 @@ JSTerm.prototype = {
+@@ -2958,50 +2930,338 @@ JSTerm.prototype = {
     *        not shown.
     *        - data:
     *        An object that represents the object you want to inspect. Please see
@@ -1026,6 +1218,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      this.sidebar = new ToolSidebar(tabbox, this);
 +    }
 +    this.sidebar.show();
++    this._splitter.setAttribute("state", "open");
 +  },
 +
 +  _addVariablesViewSidebarTab: function JST__addVariablesViewSidebarTab()
@@ -1068,6 +1261,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +  _updateVariablesView: function JST__updateVariablesView(aOptions)
 +  {
++    this._splitter.setAttribute("state", "open");
++
 +    let view = aOptions.view;
 +    view.createHierarchy();
 +    view.empty();
@@ -1088,9 +1283,13 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    if (aOptions.objectActor) {
 +      // Make sure eval works in the correct context.
 +      view.eval = this._variablesViewEvaluate.bind(this, aOptions);
++      view.switch = this._variablesViewSwitch.bind(this, aOptions);
++      view.delete = this._variablesViewDelete.bind(this, aOptions);
 +    }
 +    else {
 +      view.eval = null;
++      view.switch = null;
++      view.delete = null;
 +    }
 +
 +    let scope = view.addScope(aOptions.label);
@@ -1100,12 +1299,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    let container = scope.addVar();
 +    container.allowDeletion = true;
 +    if (aOptions.objectActor) {
-+      container.allowValueInput = true;
 +      this._fetchVarProperties(container, aOptions.objectActor);
 +      view._consoleLastObjectActor = aOptions.objectActor.actor;
 +    }
 +    else if (aOptions.rawObject) {
-+      container.allowValueInput = false;
 +      container.populate(aOptions.rawObject);
 +      view.commitHierarchy();
 +      view._consoleLastObjectActor = null;
@@ -1118,7 +1315,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +  _variablesViewEvaluate: function JST__variablesViewEvaluate(aOptions, aString)
 +  {
-+    // TODO: handle execution |result| and |error|
 +    let updater = this._updateVariablesView.bind(this, aOptions);
 +    let onEval = this._silentEvalCallback.bind(this, updater);
 +
@@ -1128,6 +1324,38 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    };
 +
 +    this.requestEvaluation("_self" + aString, evalOptions).then(onEval, onEval);
++  },
++
++  _variablesViewDelete: function JST__variablesViewDelete(aOptions, aVar)
++  {
++    let onEval = this._silentEvalCallback.bind(this, null);
++
++    let evalOptions = {
++      frame: this.SELECTED_FRAME,
++      bindObjectActor: aOptions.objectActor.actor,
++    };
++
++    this.requestEvaluation("delete _self" + aVar.symbolicName, evalOptions)
++        .then(onEval, onEval);
++  },
++
++  _variablesViewSwitch:
++  function JST__variablesViewSwitch(aOptions, aVar, aNewName)
++  {
++    let updater = this._updateVariablesView.bind(this, aOptions);
++    let onEval = this._silentEvalCallback.bind(this, updater);
++
++    let evalOptions = {
++      frame: this.SELECTED_FRAME,
++      bindObjectActor: aOptions.objectActor.actor,
++    };
++
++    let newSymbolicName = aVar.ownerView.symbolicName + '["' + aNewName + '"]';
++
++    let code = "_self" + newSymbolicName + " = _self" + aVar.symbolicName + ";" +
++               "delete _self" + aVar.symbolicName;
++
++    this.requestEvaluation(code, evalOptions).then(onEval, onEval);
 +  },
 +
 +  _silentEvalCallback: function JST__silentEvalCallback(aCallback, aResponse)
@@ -1145,6 +1373,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +        this.hud._releaseObject(grip.actor);
 +      }
 +    }
++
 +    if (aCallback) {
 +      aCallback(aResponse);
 +    }
@@ -1189,8 +1418,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      let grips = [prop.value, prop.gettter, prop.settter];
 +      grips.forEach(addActorForDescriptor);
 +
-+      prop.allowDeletion = true;
-+
 +      let inspectable = !VariablesView.isPrimitive({ value: prop.value });
 +      let longString = prop.value && typeof prop.value == "object" &&
 +                       prop.value.type == "longString";
@@ -1206,12 +1433,12 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    let client = new GripClient(this.hud.proxy.client, grip);
 +    client.getPrototypeAndProperties(function(aResponse) {
 +      let { ownProperties, prototype } = aResponse;
++      let sortable = VariablesView.NON_SORTABLE_CLASSES.indexOf(grip.class) == -1;
 +
 +      // Add all the variable properties.
 +      if (ownProperties) {
-+        aVar.addProperties(ownProperties);
++        aVar.addProperties(ownProperties, { sorted: sortable });
 +
-+        // Expansion handlers must be set after the properties are added.
 +        for (let name in ownProperties) {
 +          onNewProperty(name);
 +        }
@@ -1220,7 +1447,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      // Add the variable's __proto__.
 +      if (prototype && prototype.type != "null") {
 +        aVar.addProperty("__proto__", { value: prototype });
-+        // Expansion handlers must be set after the properties are added.
 +        onNewProperty("__proto__");
 +      }
 +
@@ -1248,14 +1474,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      throw new Error("No long string actor grip was given for the variable.");
 +    }
 +
-+    dump("_fetchVarLongString\n");
-+    dump("grip " + grip.actor + "\n");
-+
 +    let client = this.webConsoleClient.longString(grip);
 +    client.substring(grip.initial.length, grip.length,
 +      function _onSubstring(aResponse) {
-+        dump("on substring\n");
-+
 +        if (aResponse.error) {
 +          Cu.reportError("JST__fetchVarLongString substring failure: " +
 +                         aResponse.error);
@@ -1275,7 +1496,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3629,168 +3845,49 @@ JSTerm.prototype = {
+@@ -3620,168 +3880,66 @@ JSTerm.prototype = {
      let prefix = aSuffix ? this.inputNode.value.replace(/[\S]/g, " ") : "";
      this.completeNode.value = prefix + aSuffix;
    },
@@ -1447,7 +1668,24 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    destroy: function JST_destroy()
    {
-+    // TODO: destroy sidebar. cleanup
++    dump("JST_destroy\n");
++    if (this._variablesView) {
++      for (let actor of this._variablesView._consoleObjectActors) {
++        this.hud._releaseObject(actor);
++      }
++      this._variablesView._consoleObjectActors.clear();
++      this._variablesView = null;
++    }
++
++    dump("JST_destroy 2\n");
++
++    if (this.sidebar) {
++      this.sidebar.destroy();
++      this.sidebar = null;
++    }
++
++    dump("JST_destroy 3\n");
++
      this.clearCompletion();
      this.clearOutput();
  
@@ -1456,10 +1694,28 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      let popup = this.hud.owner.chromeDocument
                  .getElementById("webConsole_autocompletePopup");
+@@ -3789,16 +3947,17 @@ JSTerm.prototype = {
+       popup.parentNode.removeChild(popup);
+     }
+ 
+     this.inputNode.removeEventListener("keypress", this._keyPress, false);
+     this.inputNode.removeEventListener("input", this._inputEventHandler, false);
+     this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
+ 
+     this.hud = null;
++    dump("JST_destroy end\n");
+   },
+ };
+ 
+ /**
+  * Utils: a collection of globally used functions.
+  */
+ var Utils = {
+   /**
 diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webconsole/webconsole.xul
 --- a/browser/devtools/webconsole/webconsole.xul
 +++ b/browser/devtools/webconsole/webconsole.xul
-@@ -113,19 +113,26 @@
+@@ -113,19 +113,28 @@
  
          <spacer flex="1"/>
  
@@ -1475,8 +1731,10 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
 +        <richlistbox class="hud-output-node" orient="vertical" flex="1"
 +                     seltype="multiple" context="output-contextmenu"
 +                     style="direction:ltr;"/>
-+        <splitter class="devtools-side-splitter"/>
-+        <tabbox id="webconsole-sidebar" class="devtools-sidebar-tabs" hidden="true">
++        <splitter class="devtools-side-splitter" collapse="after" state="collapsed">
++          <grippy/>
++        </splitter>
++        <tabbox id="webconsole-sidebar" class="devtools-sidebar-tabs" hidden="true" width="300">
 +          <tabs/>
 +          <tabpanels flex="1"/>
 +        </tabbox>
@@ -1724,3 +1982,73 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
            bindings._self = bindSelf;
          }
        }
+@@ -1132,17 +1130,17 @@ NetworkEventActor.prototype =
+    * Add network request POST data.
+    *
+    * @param object aPostData
+    *        The request POST data.
+    */
+   addRequestPostData: function NEA_addRequestPostData(aPostData)
+   {
+     this._request.postData = aPostData;
+-    aPostData.text = this.parent.createStringGrip(aPostData.text);
++    aPostData.text = this._createStringGrip(aPostData.text);
+     if (typeof aPostData.text == "object") {
+       this._longStringActors.add(aPostData.text);
+     }
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "requestPostData",
+@@ -1227,17 +1225,17 @@ NetworkEventActor.prototype =
+    *        The response content.
+    * @param boolean aDiscardedResponseBody
+    *        Tells if the response content was recorded or not.
+    */
+   addResponseContent:
+   function NEA_addResponseContent(aContent, aDiscardedResponseBody)
+   {
+     this._response.content = aContent;
+-    aContent.text = this.parent.createStringGrip(aContent.text);
++    aContent.text = this._createStringGrip(aContent.text);
+     if (typeof aContent.text == "object") {
+       this._longStringActors.add(aContent.text);
+     }
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "responseContent",
+@@ -1277,22 +1275,30 @@ NetworkEventActor.prototype =
+    * LongStringActor for the header values, when needed.
+    *
+    * @private
+    * @param array aHeaders
+    */
+   _prepareHeaders: function NEA__prepareHeaders(aHeaders)
+   {
+     for (let header of aHeaders) {
+-      header.value = this.parent.createStringGrip(header.value);
++      header.value = this._createStringGrip(header.value);
+       if (typeof header.value == "object") {
+         this._longStringActors.add(header.value);
+       }
+     }
+   },
++
++  _createStringGrip: function NEA__createStringGrip(aString)
++  {
++    if (this.parent._stringIsLong(aString)) {
++      return this.parent.longStringGrip(aString, this.parent._actorPool);
++    }
++    return aString;
++  },
+ };
+ 
+ NetworkEventActor.prototype.requestTypes =
+ {
+   "release": NetworkEventActor.prototype.onRelease,
+   "getRequestHeaders": NetworkEventActor.prototype.onGetRequestHeaders,
+   "getRequestCookies": NetworkEventActor.prototype.onGetRequestCookies,
+   "getRequestPostData": NetworkEventActor.prototype.onGetRequestPostData,
