@@ -1,0 +1,99 @@
+# HG changeset patch
+# Parent d0c3b13e956ea7d9e6b2d7996e05081bda09197d
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1359130493 -7200
+
+Bug 834721 - Use plurals for toolbox button tooltip; r=paul
+
+diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/shared/DeveloperToolbar.jsm
+--- a/browser/devtools/shared/DeveloperToolbar.jsm
++++ b/browser/devtools/shared/DeveloperToolbar.jsm
+@@ -22,16 +22,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+                                   "resource:///modules/devtools/gcli.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "CmdCommands",
+                                   "resource:///modules/devtools/BuiltinCommands.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "PageErrorListener",
+                                   "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
++                                  "resource://gre/modules/PluralForm.jsm");
++
+ XPCOMUtils.defineLazyGetter(this, "prefBranch", function() {
+   let prefService = Components.classes["@mozilla.org/preferences-service;1"]
+           .getService(Components.interfaces.nsIPrefService);
+   return prefService.getBranch(null)
+           .QueryInterface(Components.interfaces.nsIPrefBranch2);
+ });
+ 
+ XPCOMUtils.defineLazyGetter(this, "toolboxStrings", function () {
+@@ -617,17 +620,29 @@ function DT__updateErrorsCount(aChangedT
+   if (aChangedTabId && tabId != aChangedTabId) {
+     return;
+   }
+ 
+   let errors = this._errorsCount[tabId];
+   let warnings = this._warningsCount[tabId];
+   let btn = this._errorCounterButton;
+   if (errors) {
+-    let tooltiptext = toolboxStrings.formatStringFromName("toolboxDockButtons.errorsCount.tooltip", [errors, warnings], 2);
++    let errorsText = toolboxStrings
++                     .GetStringFromName("toolboxToggleButton.errorsCount");
++    errorsText = PluralForm.get(errors, errorsText);
++
++    let warningsText = toolboxStrings
++                       .GetStringFromName("toolboxToggleButton.warningsCount");
++    warningsText = PluralForm.get(warnings, warningsText);
++
++    let tooltiptext = toolboxStrings
++                      .formatStringFromName("toolboxToggleButton.tooltiptext",
++                                            [errors, errorsText, warnings,
++                                             warningsText], 4);
++
+     btn.setAttribute("error-count", errors);
+     btn.setAttribute("tooltiptext", tooltiptext);
+   } else {
+     btn.removeAttribute("error-count");
+     btn.setAttribute("tooltiptext", btn._defaultTooltipText);
+   }
+ };
+ 
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+--- a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+@@ -39,17 +39,17 @@ function test() {
+ 
+   function getErrorsCount() {
+     let count = webconsole.getAttribute("error-count");
+     return count ? count : "0";
+   }
+ 
+   function getTooltipValues() {
+     let matches = webconsole.getAttribute("tooltiptext")
+-                  .match(/(\d+) errors, (\d+) warnings/);
++                  .match(/(\d+) errors?, (\d+) warnings?/);
+     return matches ? [matches[1], matches[2]] : [0, 0];
+   }
+ 
+   function waitForButtonUpdate(aOptions)
+   {
+     aOptions.validator = function() {
+       let errors = getErrorsCount();
+       let tooltip = getTooltipValues();
+diff --git a/browser/locales/en-US/chrome/browser/devtools/toolbox.properties b/browser/locales/en-US/chrome/browser/devtools/toolbox.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/toolbox.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/toolbox.properties
+@@ -1,4 +1,10 @@
+ toolboxDockButtons.bottom.tooltip=Dock to bottom of browser window
+ toolboxDockButtons.side.tooltip=Dock to side of browser window
+ toolboxDockButtons.window.tooltip=Show in separate window
+-toolboxDockButtons.errorsCount.tooltip=%S errors, %S warnings.\nClick to toggle developer tools.
+\ No newline at end of file
++
++# LOCALIZATION NOTE (toolboxToggleButton): These strings are used for the button
++# that allows users to open/close the developer tools. You can find this button
++# on the developer toolbar.
++toolboxToggleButton.errorsCount=error;errors
++toolboxToggleButton.warningsCount=warning;warnings
++toolboxToggleButton.tooltiptext=%S %S, %S %S.\nClick to toggle the developer tools.

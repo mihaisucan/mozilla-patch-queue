@@ -1,15 +1,14 @@
 # HG changeset patch
-# Parent c689ab8b33ee37324d1a72c6c28144412d0a35ce
+# Parent 6d23a1d2d19302648bc929d41ec4a142f848aedf
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1358541807 -7200
+# Date 1359143839 -7200
 
 Bug 783499 - Web Console should use the debugger API
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -348,16 +348,37 @@ WebConsole.prototype = {
-         });
+@@ -348,16 +348,50 @@ WebConsole.prototype = {
          return;
        }
      }
@@ -17,6 +16,19 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      this.viewSource(aSourceURL, aSourceLine);
    },
  
+   /**
++   * Retrieve information about the JavaScript debugger's stackframes list. This
++   * is used to allow the Web Console to evaluate code in the selected
++   * stackframe.
++   *
++   * @return object|null
++   *         An object which holds:
++   *         - frames: the active ThreadClient.cachedFrames array.
++   *         - selected: depth/index of the selected stackframe in the debugger
++   *         UI.
++   *         If the debugger is not open or if it's not paused, then |null| is
++   *         returned.
++   */
 +  getDebuggerFrames: function WC_getDebuggerFrames()
 +  {
 +    let toolbox = gDevTools.getToolbox(this.target);
@@ -38,7 +50,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +    return null;
 +  },
 +
-   /**
++  /**
     * Destroy the object. Call this method to avoid memory leaks when the Web
     * Console is closed.
     *
@@ -46,6 +58,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *         A Promise object that is resolved once the Web Console is closed.
     */
    destroy: function WC_destroy()
+   {
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
@@ -377,7 +390,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
 diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools/webconsole/WebConsoleClient.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleClient.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleClient.jsm
-@@ -77,22 +77,25 @@ WebConsoleClient.prototype = {
+@@ -76,23 +76,45 @@ WebConsoleClient.prototype = {
+ 
    /**
     * Evaluate a JavaScript expression.
     *
@@ -385,10 +399,29 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools
     *        The code you want to evaluate.
     * @param function aOnResponse
     *        The function invoked when the response is received.
++   * @param object [aOptions={}]
++   *        Options for evaluation:
++   *
++   *        - bindObjectActor: an ObjectActor ID. The OA holds a reference to
++   *        a Debugger.Object that wraps a content object. This option allows
++   *        you to bind |_self| to the D.O of the given OA, during string
++   *        evaluation.
++   *
++   *        See: Debugger.Object.evalInGlobalWithBindings() for information
++   *        about bindings.
++   *
++   *        Use case: the variable view needs to update objects and it does so
++   *        by knowing the ObjectActor it inspects and binding |_self| to the
++   *        D.O of the OA. As such, variable view sends strings like these for
++   *        eval:
++   *          _self["prop"] = value;
++   *
++   *        - frameActor: a FrameActor ID. The FA holds a reference to
++   *        a Debugger.Frame. This option allow you to evaluate the string in
++   *        the frame of the given FA.
     */
 -  evaluateJS: function WCC_evaluateJS(aString, aOnResponse)
-+  // TODO: update comment
-+  evaluateJS: function WCC_evaluateJS(aString, aOnResponse, aOptions)
++  evaluateJS: function WCC_evaluateJS(aString, aOnResponse, aOptions = {})
    {
      let packet = {
        to: this._actor,
@@ -407,7 +440,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -23,22 +23,26 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+@@ -23,22 +23,30 @@ XPCOMUtils.defineLazyModuleGetter(this, 
  
  XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
                                    "resource://gre/modules/devtools/NetworkHelper.jsm");
@@ -416,7 +449,11 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
                                     "@mozilla.org/network/http-activity-distributor;1",
                                     "nsIHttpActivityDistributor");
  
-+// FIXME: toolkit imports from browser.
++// FIXME: toolkit imports from browser. Can we move vview to toolkit or...?
++// It looks like we already import toolbox jsm's from browser/...
++// Maybe we can recheck how strongly WCA depends on WCU. If it's not much, move
++// this back to browser/? I wouldn't favor this kind of back and forth, but it's
++// an option.
  XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
                                    "resource:///modules/devtools/gDevTools.jsm");
  
@@ -434,7 +471,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  // Match the function name from the result of toString() or toSource().
  //
  // Examples:
-@@ -781,17 +785,17 @@ this.WebConsoleUtils = {
+@@ -781,17 +789,17 @@ this.WebConsoleUtils = {
     * Get the object class name. For example, the |window| object has the Window
     * class name (based on [object Window]).
     *
@@ -453,12 +490,19 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        return "undefined";
      }
  
-@@ -1540,56 +1544,46 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1537,60 +1545,52 @@ this.JSTermHelpers = function JSTermHelp
+    * @param string aXPath
+    *        xPath search query to execute.
+    * @param [optional] nsIDOMNode aContext
+    *        Context to run the xPath query on. Uses window.document if not set.
     * @return array of nsIDOMNode
     */
    aOwner.sandbox.$x = function JSTH_$x(aXPath, aContext)
    {
-     let nodes = [];
+-    let nodes = [];
++    // Work around bug 830818. If we return an object from chrome code the
++    // debuggee value will point to the proxy that wraps the chrome object.
++    let nodes = new aOwner.window.wrappedJSObject.Array();
      let doc = aOwner.window.document;
      let aContext = aContext || doc;
  
@@ -522,7 +566,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    /**
     * Clears the output of the JSTerm.
     */
-@@ -1604,40 +1598,37 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1605,38 +1605,37 @@ this.JSTermHelpers = function JSTermHelp
     * Returns the result of Object.keys(aObject).
     *
     * @param object aObject
@@ -531,8 +575,10 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     */
    aOwner.sandbox.keys = function JSTH_keys(aObject)
    {
-+    // FIXME: this return [object Proxy] for the array. ouch :(
-     return Object.keys(WebConsoleUtils.unwrap(aObject));
+-    return Object.keys(WebConsoleUtils.unwrap(aObject));
++    // Work around bug 830818. If we return an object from chrome code the
++    // debuggee value will point to the proxy that wraps the chrome object.
++    return aOwner.window.wrappedJSObject.Object.keys(WebConsoleUtils.unwrap(aObject));
    };
  
    /**
@@ -544,7 +590,10 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     */
    aOwner.sandbox.values = function JSTH_values(aObject)
    {
-     let arrValues = [];
+-    let arrValues = [];
++    // Work around bug 830818. If we return an object from chrome code the
++    // debuggee value will point to the proxy that wraps the chrome object.
++    let arrValues = new aOwner.window.wrappedJSObject.Array();
      let obj = WebConsoleUtils.unwrap(aObject);
  
 -    try {
@@ -558,16 +607,13 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +      arrValues.push(obj[prop]);
      }
  
-+    // FIXME: this return [object Proxy] for the array. ouch :(
      return arrValues;
    };
  
    /**
     * Opens a help window in MDN.
     */
-   aOwner.sandbox.help = function JSTH_help()
-   {
-@@ -1647,25 +1638,22 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1648,25 +1647,22 @@ this.JSTermHelpers = function JSTermHelp
    /**
     * Inspects the passed aObject. This is done by opening the PropertyPanel.
     *
@@ -596,7 +642,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     *
     * @param object aObject
     *        Object to print to the output.
-@@ -1684,23 +1672,36 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1685,23 +1681,36 @@ this.JSTermHelpers = function JSTermHelp
  
      aOwner.helperResult = { rawOutput: true };
  
@@ -642,7 +688,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 --- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -66,21 +66,31 @@ function WebConsoleActor(aConnection, aP
+@@ -66,21 +66,33 @@ function WebConsoleActor(aConnection, aP
      this._window = Services.wm.getMostRecentWindow("navigator:browser");
      this._isGlobalActor = true;
    }
@@ -652,6 +698,8 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
  
    this._prefs = {};
 +
++  // TODO: maybe we can reuse the Debugger() from the ThreadActor, if it's
++  // available. Thoughts? See complications in evalWithDebugger().
 +  this.dbg = new Debugger();
 +  this._createGlobal();
  }
@@ -674,7 +722,52 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
  
    /**
     * Actor pool for all of the actors we send to the client.
-@@ -180,76 +190,76 @@ WebConsoleActor.prototype =
+@@ -93,28 +105,39 @@ WebConsoleActor.prototype =
+   /**
+    * Web Console-related preferences.
+    * @private
+    * @type object
+    */
+   _prefs: null,
+ 
+   /**
+-   * Tells the current inner window associated to the sandbox. When the page
+-   * is navigated, we recreate the sandbox.
++   * Tells the current inner window of the window of |this._dbgWindow|. When the
++   * page is navigated, we recreate the debugger object.
+    * @private
+    * @type object
+    */
+-  _sandboxWindowId: 0,
++  _globalWindowId: 0,
+ 
+   /**
+-   * The JavaScript Sandbox where code is evaluated.
++   * The Debugger.Object that wraps the content window.
++   * @private
+    * @type object
+    */
+-  sandbox: null,
++  _dbgWindow: null,
++
++  /**
++   * Object that holds the API we give to the JSTermHelpers constructor. This is
++   * where the JSTerm helper functions are added.
++   *
++   * @see this._getJSTermHelpers()
++   * @private
++   * @type object
++   */
++  _jstermHelpers: null,
+ 
+   /**
+    * The debugger server connection instance.
+    * @type object
+    */
+   conn: null,
+ 
+   /**
+@@ -180,76 +203,87 @@ WebConsoleActor.prototype =
        this.networkMonitor = null;
      }
      if (this.consoleProgressListener) {
@@ -685,7 +778,10 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      this._actorPool = null;
 -    this.sandbox = null;
 -    this._sandboxWindowId = 0;
-+    // TODO: cleanup dbg stuff
++    this.dbg.enabled = false;
++    this.dbg = null;
++    this._dbgWindow = null;
++    this._globalWindowId = 0;
      this.conn = this._window = null;
    },
  
@@ -706,6 +802,14 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +    return this._createValueGrip(aValue, this._actorPool);
 +  },
 +
++  /**
++   * Make a debuggee value for the given value.
++   *
++   * @param mixed aValue
++   *        The value you want to get a debuggee value for.
++   * @return object
++   *         Debuggee value for |aValue|.
++   */
 +  makeDebuggeeValue: function WCA_makeDebuggeeValue(aValue)
 +  {
 +    return this._dbgWindow.makeDebuggeeValue(aValue);
@@ -717,7 +821,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     * @param object aObject
     *        The object you want.
 +   * @param object aPool
-+   *        An ActorPoo where the new LSA instance is added.
++   *        An ActorPool where the new actor instance is added.
     * @param object
     *        The object grip.
     */
@@ -749,7 +853,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 -   *         The same string, as is, or a LongStringActor object that wraps the
 -   *         given string.
 +   * @param object aPool
-+   *        An ActorPoo where the new LSA instance is added.
++   *        An ActorPool where the new actor instance is added.
 +   * @return object
 +   *         A LongStringActor object that wraps the given string.
     */
@@ -777,7 +881,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     */
    getActorByID: function WCA_getActorByID(aActorID)
    {
-@@ -447,54 +457,73 @@ WebConsoleActor.prototype =
+@@ -447,54 +481,73 @@ WebConsoleActor.prototype =
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
     * @return object
@@ -840,8 +944,8 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
        timestamp: timestamp,
 -      error: error,
 -      errorMessage: error ? String(error) : null,
-+      error: this.createValueGrip(error),
-+      errorMessage: errorMessage,
++      exception: this.createValueGrip(error),
++      exceptionMessage: errorMessage,
        helperResult: helperResult,
      };
    },
@@ -867,7 +971,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      };
    },
  
-@@ -524,75 +553,181 @@ WebConsoleActor.prototype =
+@@ -524,75 +577,190 @@ WebConsoleActor.prototype =
      return { updated: Object.keys(aRequest.preferences) };
    },
  
@@ -889,22 +993,33 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 -      wantXrays: false,
 -    });
 +    let windowId = WebConsoleUtils.getInnerWindowId(this.window);
-+    if (this._sandboxWindowId == windowId) {
++    if (this._globalWindowId == windowId) {
 +      return;
 +    }
  
 -    this.sandbox.console = this.window.console;
-+    this._sandboxWindowId = windowId;
++    this._globalWindowId = windowId;
  
 -    JSTermHelpers(this);
 +    this._dbgWindow = this.dbg.addDebuggee(this.window);
 +    this.dbg.removeDebuggee(this.window);
 +
 +    // Update the JSTerm helpers.
-+    this._jstermHelpers = this.getJSTermHelpers(this._dbgWindow);
-+  },
-+
-+  getJSTermHelpers: function WCA_getJSTermHelpers(aDebuggerObject)
++    this._jstermHelpers = this._getJSTermHelpers(this._dbgWindow);
+   },
+ 
+   /**
+-   * Evaluates a string in the sandbox.
++   * Create an object with the API we expose to the JSTermHelpers constructor.
++   * This object inherits properties and methods from the Web Console actor.
++   *
++   * @private
++   * @param object aDebuggerObject
++   *        A Debugger.Object that wraps a content global. This is used for the
++   *        JSTerm helpers.
++   * @return object
++   */
++  _getJSTermHelpers: function WCA__getJSTermHelpers(aDebuggerObject)
 +  {
 +    let helpers = Object.create(this);
 +    helpers.sandbox = Object.create(null);
@@ -920,10 +1035,9 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +      helpers.sandbox[name] = helpers.makeDebuggeeValue(desc.value);
 +    }
 +    return helpers;
-   },
- 
-   /**
--   * Evaluates a string in the sandbox.
++  },
++
++  /**
 +   * Evaluates a string using the debugger API.
     *
     * @param string aString
@@ -932,15 +1046,16 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +   *        String to evaluate.
 +   * @param object [aOptions]
 +   *        Options for evaluation:
-+   *        - objectActorID: the ObjectActor ID to use for evaluation.
++   *        - bindObjectActor: the ObjectActor ID to use for evaluation.
 +   *          evalWithBindings() will be called with one additional binding:
 +   *          |_self| which will point to the Debugger.Object of the given
 +   *          ObjectActor.
++   *        - frameActor: the FrameActor ID to use for evaluation. The given
++   *        debugger frame is used for evaluation, instead of the global window.
 +   * @return object
     *         The result of the evaluation.
     */
 -  evalInSandbox: function WCA_evalInSandbox(aString)
-+  // TODO: update comment.
 +  evalWithDebugger: function WCA_evalWithDebugger(aString, aOptions = {})
    {
 -    // If the user changed to a different location, we need to update the
@@ -999,7 +1114,6 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +    // for evaluation to work, we need to reinstance the jsterm helpers - they
 +    // need to be Debugger.Objects coming from the jsdebugger's Debugger
 +    // instance.
-+    dump("evalWithDebugger bindObjectActor " + aOptions.bindObjectActor +  " frame " + aOptions.frameActor + " str " + aString + "\n");
  
 -    if ($) {
 -      this.sandbox.$ = $;
@@ -1034,7 +1148,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +        }
 +
 +        // FIXME: need a way to get the global for bindSelf.
-+        bindings = this.getJSTermHelpers(bindSelf).sandbox;
++        bindings = this._getJSTermHelpers(bindSelf).sandbox;
 +        if (bindSelf) {
 +          bindings._self = bindSelf;
 +        }
@@ -1043,11 +1157,10 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +    }.bind(this);
 +
 +    if (frameActor) {
-+      dump("evalWithDebugger frame actor " + frameActor + "\n");
 +      let frame = frameActor.frame;
 +      let dbgObj = frame.this;
 +      if (dbgObj && dbgObj.makeDebuggeeValue) {
-+        bindings = this.getJSTermHelpers(dbgObj).sandbox;
++        bindings = this._getJSTermHelpers(dbgObj).sandbox;
 +        if (bindSelf) {
 +          bindings._self = bindSelf;
 +        }
@@ -1084,7 +1197,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    //////////////////
    // Event handlers for various listeners.
    //////////////////
-@@ -721,28 +856,20 @@ WebConsoleActor.prototype =
+@@ -721,28 +889,20 @@ WebConsoleActor.prototype =
    prepareConsoleMessageForRemote:
    function WCA_prepareConsoleMessageForRemote(aMessage)
    {
@@ -1115,7 +1228,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     *
     * @return Window
     *         The XUL window that owns the content window.
-@@ -762,89 +889,16 @@ WebConsoleActor.prototype.requestTypes =
+@@ -762,89 +922,16 @@ WebConsoleActor.prototype.requestTypes =
    getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
    evaluateJS: WebConsoleActor.prototype.onEvaluateJS,
    autocomplete: WebConsoleActor.prototype.onAutocomplete,
@@ -1205,3 +1318,83 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
   * @param object aWebConsoleActor
   *        The parent WebConsoleActor instance for this object.
   */
+@@ -1078,17 +1165,17 @@ NetworkEventActor.prototype =
+    * Add network request POST data.
+    *
+    * @param object aPostData
+    *        The request POST data.
+    */
+   addRequestPostData: function NEA_addRequestPostData(aPostData)
+   {
+     this._request.postData = aPostData;
+-    aPostData.text = this.parent.createStringGrip(aPostData.text);
++    aPostData.text = this._createStringGrip(aPostData.text);
+     if (typeof aPostData.text == "object") {
+       this._longStringActors.add(aPostData.text);
+     }
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "requestPostData",
+@@ -1173,17 +1260,17 @@ NetworkEventActor.prototype =
+    *        The response content.
+    * @param boolean aDiscardedResponseBody
+    *        Tells if the response content was recorded or not.
+    */
+   addResponseContent:
+   function NEA_addResponseContent(aContent, aDiscardedResponseBody)
+   {
+     this._response.content = aContent;
+-    aContent.text = this.parent.createStringGrip(aContent.text);
++    aContent.text = this._createStringGrip(aContent.text);
+     if (typeof aContent.text == "object") {
+       this._longStringActors.add(aContent.text);
+     }
+ 
+     let packet = {
+       from: this.actorID,
+       type: "networkEventUpdate",
+       updateType: "responseContent",
+@@ -1223,22 +1310,40 @@ NetworkEventActor.prototype =
+    * LongStringActor for the header values, when needed.
+    *
+    * @private
+    * @param array aHeaders
+    */
+   _prepareHeaders: function NEA__prepareHeaders(aHeaders)
+   {
+     for (let header of aHeaders) {
+-      header.value = this.parent.createStringGrip(header.value);
++      header.value = this._createStringGrip(header.value);
+       if (typeof header.value == "object") {
+         this._longStringActors.add(header.value);
+       }
+     }
+   },
++
++  /**
++   * Create a long string grip if needed for the given string.
++   *
++   * @private
++   * @param string aString
++   *        The string you want to create a long string grip for.
++   * @return string|object
++   *         A string is returned if |aString| is not a long string.
++   *         A LongStringActor grip is returned if |aString| is a long string.
++   */
++  _createStringGrip: function NEA__createStringGrip(aString)
++  {
++    if (this.parent._stringIsLong(aString)) {
++      return this.parent.longStringGrip(aString, this.parent._actorPool);
++    }
++    return aString;
++  },
+ };
+ 
+ NetworkEventActor.prototype.requestTypes =
+ {
+   "release": NetworkEventActor.prototype.onRelease,
+   "getRequestHeaders": NetworkEventActor.prototype.onGetRequestHeaders,
+   "getRequestCookies": NetworkEventActor.prototype.onGetRequestCookies,
+   "getRequestPostData": NetworkEventActor.prototype.onGetRequestPostData,

@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Panos Astithas <past@mozilla.com>
-# Date 1358886249 -7200
-# Node ID c5558b4909ba0df62b5ca6f604e0352b6d2ec46c
-# Parent  8d85fac98a8cab0c5b59a8c7fb520905a37843cc
+# Date 1359062053 -7200
+# Node ID 50e067c733252da7ce6c785477b0ebc6deb3858e
+# Parent  98ea4d29436917a1f63456b6fd467560ae8ad256
 Bug 820524 - Debugger and Web Console should share the debugger client even for local sessions
 
 diff --git a/browser/devtools/commandline/test/browser_dbg_cmd.js b/browser/devtools/commandline/test/browser_dbg_cmd.js
@@ -97,7 +97,7 @@ diff --git a/browser/devtools/debugger/DebuggerPanel.jsm b/browser/devtools/debu
 -    return deferred.promise;
 +    // Remote debugging gets the debuggee from a RemoteTarget object.
 +    if (this.target.isRemote) {
-+      this.panelWin._isRemoteDebugger = true;
++      this.panelWin._remoteFlag = true;
 +      this._controller._target = this.target;
 +      return deferred.promise;
 +    }
@@ -399,17 +399,10 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
 diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework/Toolbox.jsm
 --- a/browser/devtools/framework/Toolbox.jsm
 +++ b/browser/devtools/framework/Toolbox.jsm
-@@ -641,39 +641,46 @@ Toolbox.prototype = {
- 
-   /**
-    * Remove all UI elements, detach from target and clear up
-    */
-   destroy: function TBOX_destroy() {
-     // If several things call destroy then we give them all the same
+@@ -647,18 +647,24 @@ Toolbox.prototype = {
      // destruction promise so we're sure to destroy only once
      if (this._destroyer) {
--      return this._destroyer;
-+      return this._destroyer.promise;
+       return this._destroyer;
      }
  
      let outstanding = [];
@@ -433,22 +426,6 @@ diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework
      }
  
      outstanding.push(this._host.destroy());
- 
-     gDevTools.off("tool-registered", this._toolRegistered);
-     gDevTools.off("tool-unregistered", this._toolUnregistered);
- 
-     this._destroyer = Promise.all(outstanding);
-     this._destroyer.then(function() {
-       this.emit("destroyed");
-+      this._destroyer.resolve(null);
-     }.bind(this));
- 
-     return this._destroyer.then(function() {
-       // Ensure that the promise resolves to nothing, rather than an array of
-       // several nothings, which is what we get from Promise.all
-       return undefined;
-     });
-   }
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
