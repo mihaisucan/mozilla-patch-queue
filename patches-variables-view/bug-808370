@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 746852f724c68f88e32268e1db12cbab759cd271
+# Parent 4802ba64356cd133bce52bcd5820d2730df3f791
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1359409923 -7200
+# Date 1359377833 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -36,25 +36,25 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
  Cu.import("resource:///modules/source-editor.jsm");
  Cu.import("resource:///modules/devtools/LayoutHelpers.jsm");
  Cu.import("resource:///modules/devtools/VariablesView.jsm");
-@@ -899,17 +888,17 @@ StackFrames.prototype = {
-     // Fetch the properties only once.
+@@ -903,17 +892,17 @@ StackFrames.prototype = {
      if (aVar._fetched) {
        return;
      }
      aVar._fetched = true;
+     let grip = aVar._sourceGrip;
  
-     this.activeThread.pauseGrip(aGrip).getPrototypeAndProperties(function(aResponse) {
+     this.activeThread.pauseGrip(grip).getPrototypeAndProperties(function(aResponse) {
        let { ownProperties, prototype } = aResponse;
--      let sortable = VARIABLES_VIEW_NON_SORTABLE.indexOf(aGrip.class) == -1;
-+      let sortable = VariablesView.NON_SORTABLE_CLASSES.indexOf(aGrip.class) == -1;
+-      let sortable = VARIABLES_VIEW_NON_SORTABLE.indexOf(grip.class) == -1;
++      let sortable = VariablesView.NON_SORTABLE_CLASSES.indexOf(grip.class) == -1;
  
        // Add all the variable properties.
        if (ownProperties) {
-         aVar.addProperties(ownProperties, { sorted: sortable });
-         // Expansion handlers must be set after the properties are added.
-         for (let name in ownProperties) {
-           this._addVarExpander(aVar.get(name), ownProperties[name].value);
-         }
+         aVar.addProperties(ownProperties, {
+           // Not all variables need to force sorted properties.
+           sorted: sortable,
+           // Expansion handlers must be set after the properties are added.
+           callback: this._addVarExpander
 diff --git a/browser/devtools/framework/Sidebar.jsm b/browser/devtools/framework/Sidebar.jsm
 --- a/browser/devtools/framework/Sidebar.jsm
 +++ b/browser/devtools/framework/Sidebar.jsm
@@ -128,7 +128,7 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared/VariablesView.jsm
 --- a/browser/devtools/shared/VariablesView.jsm
 +++ b/browser/devtools/shared/VariablesView.jsm
-@@ -586,16 +586,28 @@ VariablesView.prototype = {
+@@ -725,16 +725,28 @@ VariablesView.prototype = {
    _list: null,
    _searchboxNode: null,
    _searchboxContainer: null,
@@ -150,35 +150,31 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
 +];
 +
  /**
-  * A Scope is an object holding Variable instances.
-  * Iterable via "for (let [name, variable] in instance) { }".
+  * Generates the string evaluated when performing simple value changes.
   *
-  * @param VariablesView aView
-  *        The view to contain this scope.
-  * @param string aName
-  *        The scope's name.
-@@ -1590,16 +1602,21 @@ create({ constructor: Variable, proto: S
-     let isUndefined = VariablesView.isUndefined(descriptor);
+  * @param Variable | Property aItem
+  *        The current variable or property.
+  * @param string aCurrentString
+  *        The user inputted string.
+  * @return string
+@@ -1886,16 +1898,17 @@ create({ constructor: Variable, proto: S
  
      if (isPrimitive || isUndefined) {
        this.hideArrow();
      }
      if (!isUndefined && (descriptor.get || descriptor.set)) {
-       // FIXME: editing getters and setters is not allowed yet. Bug 831794.
-       this.eval = null;
-+      // Deleting getters and setters individually is not allowed.
-+      this.delete = null;
-+      // Changing getter/setter name is not allowed.
-+      this.switch = null;
-+
-       this.addProperty("get", { value: descriptor.get });
-       this.addProperty("set", { value: descriptor.set });
-       this.expand();
        separatorLabel.hidden = true;
        valueLabel.hidden = true;
-     }
-   },
+       this.delete = null;
++      this.switch = null;
  
+       let getter = this.addProperty("get", { value: descriptor.get });
+       let setter = this.addProperty("set", { value: descriptor.set });
+       getter._evaluationMacro = VariablesView.GETTER_OR_SETTER_EVAL_MACRO;
+       setter._evaluationMacro = VariablesView.GETTER_OR_SETTER_EVAL_MACRO;
+       this._evaluationMacro = VariablesView.OVERRIDE_VALUE_EVAL_MACRO;
+ 
+       this.expand();
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
@@ -221,89 +217,10 @@ new file mode 100644
 +<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" title="&PropertiesViewWindowTitle;">
 +  <vbox id="variables" flex="1"/>
 +</window>
-diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
---- a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
-+++ b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
-@@ -31,27 +31,31 @@ function performTest(hud)
-     },
-     successFn: function()
-     {
-       isnot(hud.outputNode.textContent.indexOf("myObj = {"), -1,
-             "myObj = ... is shown");
- 
-       let clickable = hud.outputNode.querySelector(".hud-clickable");
-       ok(clickable, "the console.log() object .hud-clickable was found");
--      isnot(clickable.textContent.indexOf("omgBug676722"), -1,
-+      isnot(clickable.textContent.indexOf("Object"), -1,
-             "clickable node content is correct");
- 
--      document.addEventListener("popupshown", function _onPopupShown(aEvent) {
--        document.removeEventListener("popupshown", _onPopupShown);
-+      hud.jsterm.once("variablesview-open",
-+        function _onOpen(aEvent, aView) {
-+          ok(aView, "object inspector opened on click");
-+          console.debug(aView);
- 
--        isnot(aEvent.target.label.indexOf("omgBug676722"), -1,
--           "object inspector opened on click");
-+          findVariableViewProperties(aView, [{
-+            name: "abba",
-+            value: "omgBug676722",
-+          }]);
- 
--        executeSoon(finishTest);
--      });
-+          executeSoon(finishTest);
-+        });
- 
-       executeSoon(function() {
-         EventUtils.synthesizeMouse(clickable, 2, 2, {}, hud.iframeWindow);
-       });
-     },
-     failureFn: finishTest,
-   });
- }
-diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
---- a/browser/devtools/webconsole/test/head.js
-+++ b/browser/devtools/webconsole/test/head.js
-@@ -310,8 +310,33 @@ function waitForSuccess(aOptions)
- 
- function openInspector(aCallback, aTab = gBrowser.selectedTab)
- {
-   let target = TargetFactory.forTab(aTab);
-   gDevTools.showToolbox(target, "inspector").then(function(toolbox) {
-     aCallback(toolbox.getCurrentPanel());
-   });
- }
-+
-+function findVariableViewProperties(aView, aProperties)
-+{
-+  function finder(aVar) {
-+    for (let item of aVar._store) {
-+      for (let prop of aProperties) {
-+        if (item.name == prop.name && item._valueString == prop.value) {
-+          aProperties.splice(aProperties.indexOf(prop), 1);
-+          ok(true, "found " + prop.name);
-+        }
-+      }
-+      if (aProperties.length > 0) {
-+        finder(item);
-+      }
-+    }
-+  }
-+  finder(aView);
-+  is(aProperties.length, 0, "all properties found");
-+  if (aProperties.length) {
-+    info("properties not found: " + notFound);
-+    let notFound = aProperties.reduce(function(a, b) {
-+      return a.name + ", " + b.name;
-+    }, "");
-+  }
-+}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -14,45 +14,53 @@ Cu.import("resource://gre/modules/XPCOMU
+@@ -14,45 +14,50 @@ Cu.import("resource://gre/modules/XPCOMU
  
  XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                    "resource://gre/modules/Services.jsm");
@@ -338,9 +255,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +XPCOMUtils.defineLazyModuleGetter(this, "ToolSidebar",
 +                                  "resource:///modules/devtools/Sidebar.jsm");
 +
-+XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
-+                                  "resource:///modules/devtools/EventEmitter.jsm");
-+
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
  let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
  
@@ -362,26 +276,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -182,16 +190,18 @@ function WebConsoleFrame(aWebConsoleOwne
-   this._pruneCategoriesQueue = {};
-   this._networkRequests = {};
- 
-   this._toggleFilter = this._toggleFilter.bind(this);
-   this._flushMessageQueue = this._flushMessageQueue.bind(this);
- 
-   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-   this._outputTimerInitialized = false;
-+
-+  EventEmitter.decorate(this);
- }
- 
- WebConsoleFrame.prototype = {
-   /**
-    * The WebConsole instance that owns this frame.
-    * @see HUDService.jsm::WebConsole
-    * @type object
-    */
-@@ -983,55 +993,42 @@ WebConsoleFrame.prototype = {
+@@ -983,55 +988,42 @@ WebConsoleFrame.prototype = {
    logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
    {
      let body = null;
@@ -445,7 +340,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let functionName = aMessage.functionName ||
                             l10n.getStr("stacktrace.anonymousFunction");
  
-@@ -1051,16 +1048,22 @@ WebConsoleFrame.prototype = {
+@@ -1051,16 +1043,22 @@ WebConsoleFrame.prototype = {
        }
  
        case "group":
@@ -468,7 +363,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          if (timer.error) {
            Cu.reportError(l10n.getStr(timer.error));
            return;
-@@ -1089,64 +1092,44 @@ WebConsoleFrame.prototype = {
+@@ -1089,64 +1087,44 @@ WebConsoleFrame.prototype = {
      // we ignore their arguments.
      switch (level) {
        case "group":
@@ -539,7 +434,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * the window.console API call.
     *
     * @param object aMessage
-@@ -1157,59 +1140,29 @@ WebConsoleFrame.prototype = {
+@@ -1157,59 +1135,29 @@ WebConsoleFrame.prototype = {
      this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage]);
    },
  
@@ -603,7 +498,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1948,19 +1901,21 @@ WebConsoleFrame.prototype = {
+@@ -1948,19 +1896,21 @@ WebConsoleFrame.prototype = {
     *
     * @private
     * @param array aItem
@@ -628,7 +523,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          connectionId = args[0];
        }
        else if (typeof methodOrNode != "function") {
-@@ -1968,40 +1923,23 @@ WebConsoleFrame.prototype = {
+@@ -1968,40 +1918,23 @@ WebConsoleFrame.prototype = {
        }
        if (connectionId && connectionId in this._networkRequests) {
          delete this._networkRequests[connectionId];
@@ -671,7 +566,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * category's line limit by removing old messages as needed.
     *
     * @param integer aCategory
-@@ -2019,64 +1957,51 @@ WebConsoleFrame.prototype = {
+@@ -2019,64 +1952,51 @@ WebConsoleFrame.prototype = {
      let n = Math.max(0, messageNodes.length - logLimit);
      let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
      toRemove.forEach(this.removeOutputMessage, this);
@@ -748,7 +643,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2175,17 +2100,17 @@ WebConsoleFrame.prototype = {
+@@ -2175,17 +2095,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -767,7 +662,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2220,52 +2145,37 @@ WebConsoleFrame.prototype = {
+@@ -2220,52 +2140,37 @@ WebConsoleFrame.prototype = {
      node.clipboardText = aClipboardText;
      node.classList.add("hud-msg-node");
  
@@ -835,7 +730,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2303,53 +2213,46 @@ WebConsoleFrame.prototype = {
+@@ -2303,53 +2208,46 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -897,7 +792,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Click event handler for the ellipsis shown immediately after a long string.
     * This method retrieves the full string and updates the console output to
-@@ -2720,26 +2623,53 @@ function JSTerm(aWebConsoleFrame)
+@@ -2720,26 +2618,51 @@ function JSTerm(aWebConsoleFrame)
    this.hudId = this.hud.hudId;
  
    this.lastCompletion = { value: null };
@@ -908,8 +803,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    this._inputEventHandler = this.inputEventHandler.bind(this);
 +  this._fetchVarProperties = this._fetchVarProperties.bind(this);
 +  this._fetchVarLongString = this._fetchVarLongString.bind(this);
-+
-+  EventEmitter.decorate(this);
  }
  
  JSTerm.prototype = {
@@ -951,7 +844,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * History of code that was executed.
     * @type array
-@@ -2778,16 +2708,18 @@ JSTerm.prototype = {
+@@ -2778,16 +2701,18 @@ JSTerm.prototype = {
  
      let doc = this.hud.document;
      this.completeNode = doc.querySelector(".jsterm-complete-node");
@@ -970,7 +863,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement [aAfterNode]
-@@ -2800,33 +2732,47 @@ JSTerm.prototype = {
+@@ -2800,33 +2725,47 @@ JSTerm.prototype = {
     *        The message received from the server.
     */
    _executeResultCallback:
@@ -1025,7 +918,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            catch (ex) {
              errorMessage = helperResult.message;
            }
-@@ -2865,48 +2811,40 @@ JSTerm.prototype = {
+@@ -2865,48 +2804,40 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -1090,7 +983,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2927,81 +2865,514 @@ JSTerm.prototype = {
+@@ -2927,81 +2858,513 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -1249,7 +1142,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      }
 +      aOptions.view = view;
 +      this._updateVariablesView(aOptions);
-+      this.emit("variablesview-open", view, aOptions);
 +      return view;
 +    }.bind(this);
 +
@@ -1653,7 +1545,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3617,171 +3988,48 @@ JSTerm.prototype = {
+@@ -3617,171 +3980,48 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces

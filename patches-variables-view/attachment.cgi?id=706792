@@ -1,0 +1,1198 @@
+# HG changeset patch
+# User Victor Porof <vporof@mozilla.com>
+# Date 1359219880 -7200
+# Node ID ed21873ff25c1fc8bfc7173f4ec97cba16897bb7
+# Parent  fdefde7ecc953d3ffca62536d0de96a2b86b608c
+Bug 828987 - The Variables View should be keyboard accessible, r=past
+
+diff --git a/browser/devtools/debugger/debugger-toolbar.js b/browser/devtools/debugger/debugger-toolbar.js
+--- a/browser/devtools/debugger/debugger-toolbar.js
++++ b/browser/devtools/debugger/debugger-toolbar.js
+@@ -1017,8 +1017,16 @@ FilterView.prototype = {
+     this._doSearch(SEARCH_VARIABLE_FLAG);
+     this._searchboxPanel.hidePopup();
+   },
+ 
++  /**
++   * Called when the variables focus key sequence was pressed.
++   */
++  _doVariablesFocus: function DVG__doVariablesFocus() {
++    DebuggerView.showPanesSoon();
++    DebuggerView.Variables.focusFirstVisibleNode();
++  },
++
+   _searchbox: null,
+   _searchboxPanel: null,
+   _globalOperatorButton: null,
+   _globalOperatorLabel: null,
+diff --git a/browser/devtools/debugger/debugger.css b/browser/devtools/debugger/debugger.css
+--- a/browser/devtools/debugger/debugger.css
++++ b/browser/devtools/debugger/debugger.css
+@@ -60,23 +60,22 @@
+ /**
+  * Scope, variable and property elements
+  */
+ 
+-#variables .details:not([open]) {
++.details:not([open]) {
+   display: none;
+ }
+ 
++.scope:not([non-header]),
++.variable:not([non-header]):not([non-match]),
++.property:not([non-header]):not([non-match]) {
++  -moz-user-focus: normal;
++}
++
+ .scope[non-header] > .title,
+ .variable[non-header] > .title,
+-.property[non-header] > .title {
+-  display: none;
+-}
+-
+-/**
+- * Variables and properties searching
+- */
+-
+ .variable[non-match] > .title,
++.property[non-header] > .title,
+ .property[non-match] > .title {
+   display: none;
+ }
+ 
+diff --git a/browser/devtools/debugger/debugger.xul b/browser/devtools/debugger/debugger.xul
+--- a/browser/devtools/debugger/debugger.xul
++++ b/browser/devtools/debugger/debugger.xul
+@@ -42,8 +42,10 @@
+     <command id="lineSearchCommand"
+              oncommand="DebuggerView.Filtering._doLineSearch()"/>
+     <command id="variableSearchCommand"
+              oncommand="DebuggerView.Filtering._doVariableSearch()"/>
++    <command id="variablesFocusCommand"
++             oncommand="DebuggerView.Filtering._doVariablesFocus()"/>
+     <command id="addBreakpointCommand"
+              oncommand="DebuggerView.Breakpoints._onCmdAddBreakpoint()"/>
+     <command id="addConditionalBreakpointCommand"
+              oncommand="DebuggerView.Breakpoints._onCmdAddConditionalBreakpoint()"/>
+@@ -107,8 +109,13 @@
+                 label="&debuggerUI.searchVariable;"
+                 accesskey="&debuggerUI.searchVariable.key;"
+                 key="variableSearchKey"
+                 command="variableSearchCommand"/>
++      <menuitem id="se-dbg-cMenu-focusVariables"
++                label="&debuggerUI.focusVariables;"
++                accesskey="&debuggerUI.focusVariables.key;"
++                key="variablesFocusKey"
++                command="variablesFocusCommand"/>
+     </menupopup>
+ 
+     <menupopup id="debuggerWatchExpressionsContextMenu">
+       <menuitem id="add-watch-expression"
+@@ -183,8 +190,12 @@
+     <key id="variableSearchKey"
+          key="&debuggerUI.searchVariable.key;"
+          modifiers="accel alt"
+          command="variableSearchCommand"/>
++    <key id="variablesFocusKey"
++         key="&debuggerUI.focusVariables.key;"
++         modifiers="accel shift"
++         command="variablesFocusCommand"/>
+     <key id="addBreakpointKey"
+          key="&debuggerUI.seMenuBreak.key;"
+          modifiers="accel"
+          command="addBreakpointCommand"/>
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-03.js b/browser/devtools/debugger/test/browser_dbg_propertyview-03.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-03.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-03.js
+@@ -138,10 +138,10 @@ function testSimpleCall() {
+       EventUtils.sendMouseEvent({ type: "mousedown" },
+         testVar.target.querySelector(".title"),
+         gDebugger);
+ 
+-      ok(!testVar.expanded,
+-        "Clicking the testVar title div shouldn't expand it.");
++      ok(testVar.expanded,
++        "Clicking the testVar title div should expand it again.");
+ 
+ 
+       testScope.show();
+       testScope.expand();
+@@ -184,10 +184,10 @@ function testSimpleCall() {
+       EventUtils.sendMouseEvent({ type: "mousedown" },
+         testVar.get("child").target.querySelector(".title"),
+         gDebugger);
+ 
+-      ok(!testVar.get("child").expanded,
+-        "Clicking the testVar child property title div shouldn't expand it.");
++      ok(testVar.get("child").expanded,
++        "Clicking the testVar child property title div should expand it again.");
+ 
+ 
+       gDebugger.DebuggerView.Variables.empty();
+       is(gDebugger.DebuggerView.Variables._list.childNodes.length, 0,
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-08.js b/browser/devtools/debugger/test/browser_dbg_propertyview-08.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-08.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-08.js
+@@ -73,11 +73,11 @@ function testFrameParameters()
+       is(gVars.getScopeForNode(gVars._list.querySelectorAll(".scope")[2]).expanded, false,
+         "The global scope should be collapsed by default.");
+ 
+ 
+-      let thisNode = gVars.getVariableOrPropertyForNode(localNodes[0]);
+-      let argumentsNode = gVars.getVariableOrPropertyForNode(localNodes[8]);
+-      let cNode = gVars.getVariableOrPropertyForNode(localNodes[10]);
++      let thisNode = gVars.getItemForNode(localNodes[0]);
++      let argumentsNode = gVars.getItemForNode(localNodes[8]);
++      let cNode = gVars.getItemForNode(localNodes[10]);
+ 
+       is(thisNode.expanded, false,
+         "The thisNode should not be expanded at this point.");
+       is(argumentsNode.expanded, false,
+@@ -179,22 +179,22 @@ function testFrameParameters()
+            .getAttribute("value"), "true",
+           "Should have the right value for 'c.c'.");
+ 
+ 
+-        is(gVars.getVariableOrPropertyForNode(
++        is(gVars.getItemForNode(
+            cNode.target.querySelectorAll(".property")[0]).target,
+            cNode.target.querySelectorAll(".property")[0],
+-          "getVariableOrPropertyForNode([0]) didn't return the expected property.");
++          "getItemForNode([0]) didn't return the expected property.");
+ 
+-        is(gVars.getVariableOrPropertyForNode(
++        is(gVars.getItemForNode(
+            cNode.target.querySelectorAll(".property")[1]).target,
+            cNode.target.querySelectorAll(".property")[1],
+-          "getVariableOrPropertyForNode([1]) didn't return the expected property.");
++          "getItemForNode([1]) didn't return the expected property.");
+ 
+-        is(gVars.getVariableOrPropertyForNode(
++        is(gVars.getItemForNode(
+            cNode.target.querySelectorAll(".property")[2]).target,
+            cNode.target.querySelectorAll(".property")[2],
+-          "getVariableOrPropertyForNode([2]) didn't return the expected property.");
++          "getItemForNode([2]) didn't return the expected property.");
+ 
+ 
+         is(cNode.find(
+            cNode.target.querySelectorAll(".property")[0]).target,
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-data.js b/browser/devtools/debugger/test/browser_dbg_propertyview-data.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-data.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-data.js
+@@ -20,8 +20,9 @@ function test()
+     gPane = aPane;
+     gDebugger = gPane.panelWin;
+     gVariablesView = gDebugger.DebuggerView.Variables;
+ 
++    gDebugger.DebuggerView.togglePanes({ visible: true, animated: false });
+     testVariablesView();
+   });
+ }
+ 
+@@ -60,8 +61,11 @@ function testVariablesView()
+     get someProp7() { return arr; },
+     set someProp7(value) { arr[0] = value }
+   };
+ 
++  gVariablesView.eval = function() {};
++  gVariablesView.switch = function() {};
++  gVariablesView.delete = function() {};
+   gVariablesView.rawObject = test;
+ 
+   testHierarchy();
+   testHeader();
+@@ -69,12 +73,8 @@ function testVariablesView()
+   testSecondLevelContents();
+   testThirdLevelContents();
+   testIntegrity(arr, obj);
+ 
+-  gVariablesView.eval = function() {};
+-  gVariablesView.switch = function() {};
+-  gVariablesView.delete = function() {};
+-
+   let fooScope = gVariablesView.addScope("foo");
+   let anonymousVar = fooScope.addVar();
+ 
+   let anonymousScope = gVariablesView.addScope();
+@@ -82,11 +82,16 @@ function testVariablesView()
+   let bazProperty = barVar.addProperty("baz");
+ 
+   testAnonymousHeaders(fooScope, anonymousVar, anonymousScope, barVar, bazProperty);
+   testPropertyInheritance(fooScope, anonymousVar, anonymousScope, barVar, bazProperty);
+-  testClearHierarchy();
+ 
+-  closeDebuggerAndFinish();
++  executeSoon(function() {
++    testKeyboardAccessibility(function() {
++      testClearHierarchy();
++
++      closeDebuggerAndFinish();
++    });
++  });
+ }
+ 
+ function testHierarchy() {
+   is(gVariablesView._currHierarchy.size, 13,
+@@ -581,8 +586,197 @@ function testPropertyInheritance(fooScop
+   isnot(bazProperty.switch, bazProperty.delete,
+     "The eval and switch functions got mixed up in the property.");
+ }
+ 
++function testKeyboardAccessibility(callback) {
++  gDebugger.DebuggerView.Filtering._doVariablesFocus();
++
++  is(gVariablesView.getFocusedItem().name, "someProp0",
++    "The someProp0 item should be focused.");
++
++  gVariablesView.focusNextItem();
++  is(gVariablesView.getFocusedItem().name, "someProp1",
++    "The someProp1 item should be focused.");
++
++  gVariablesView.focusPrevItem();
++  is(gVariablesView.getFocusedItem().name, "someProp0",
++    "The someProp0 item should be focused again.");
++
++
++  ok(!gVariablesView._list.querySelector(".element-value-input"),
++    "There shouldn't be a value input element created.");
++
++  EventUtils.synthesizeKey("e", { ctrlKey: true }, gDebugger);
++  waitForElement(".element-value-input", true, function() {
++
++    ok(gVariablesView._list.querySelector(".element-value-input"),
++      "There should be a value input element created.");
++
++    EventUtils.sendKey("ESCAPE", gDebugger);
++    waitForElement(".element-value-input", false, function() {
++
++      ok(!gVariablesView._list.querySelector(".element-value-input"),
++        "There shouldn't be a value input element anymore.");
++
++      ok(!gVariablesView._list.querySelector(".element-name-input"),
++        "There shouldn't be a name input element created.");
++
++      EventUtils.synthesizeKey("e", { ctrlKey: true, altKey: true }, gDebugger);
++      waitForElement(".element-name-input", true, function() {
++
++        ok(gVariablesView._list.querySelector(".element-name-input"),
++          "There should be a name input element created.");
++
++        EventUtils.sendKey("ESCAPE", gDebugger);
++        waitForElement(".element-name-input", false, function() {
++
++          ok(!gVariablesView._list.querySelector(".element-name-input"),
++            "There shouldn't be a name input element anymore.");
++
++          EventUtils.sendKey("DOWN", gDebugger);
++          executeSoon(function() {
++            is(gVariablesView._parent.scrollTop, 0,
++              "The variables view shouldn't scroll when pressing the DOWN key.");
++
++            EventUtils.sendKey("UP", gDebugger);
++            executeSoon(function() {
++              is(gVariablesView._parent.scrollTop, 0,
++                "The variables view shouldn't scroll when pressing the UP key.");
++
++              EventUtils.sendKey("RETURN", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "someProp1",
++                "The someProp1 item should be focused now.");
++
++              EventUtils.sendKey("ENTER", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "someProp2",
++                "The someProp2 item should be focused now.");
++
++              EventUtils.sendKey("RIGHT", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "someProp3",
++                "The someProp3 item should be focused now.");
++
++              for (let i = 0; i < 13; i++) {
++                // Advance to the first collapsed __proto__ property.
++                EventUtils.sendKey("RIGHT", gDebugger);
++              }
++              is(gVariablesView.getFocusedItem().name, "__proto__",
++                "The __proto__ item should be focused now.");
++              is(gVariablesView.getFocusedItem().expanded, false,
++                "The __proto__ item shouldn't be expanded yet.");
++
++              EventUtils.sendKey("RIGHT", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "__proto__",
++                "The __proto__ item should still be focused.");
++              is(gVariablesView.getFocusedItem().expanded, true,
++                "The __proto__ item should be expanded now.");
++
++              for (let i = 0; i < 11; i++) {
++                // Advance to the fifth top-level someProp5 property.
++                EventUtils.sendKey("UP", gDebugger);
++              }
++              is(gVariablesView.getFocusedItem().name, "someProp5",
++                "The someProp5 item should be focused now.");
++              is(gVariablesView.getFocusedItem().expanded, true,
++                "The someProp5 item should already be expanded.");
++
++              EventUtils.sendKey("LEFT", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "someProp5",
++                "The someProp5 item should still be focused.");
++              is(gVariablesView.getFocusedItem().expanded, false,
++                "The someProp5 item should not be expanded now.");
++
++              EventUtils.sendKey("LEFT", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "someProp4",
++                "The someProp4 item should be focused.");
++
++              EventUtils.sendKey("LEFT", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "someProp3",
++                "The someProp3 item should be focused.");
++
++              EventUtils.sendKey("LEFT", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "someProp2",
++                "The someProp2 item should be focused.");
++
++              EventUtils.sendKey("LEFT", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "someProp1",
++                "The someProp1 item should be focused.");
++
++              EventUtils.sendKey("LEFT", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "someProp0",
++                "The someProp0 item should be focused.");
++
++              for (let i = 0; i < 32; i++) {
++                // Advance to the last property in this scope.
++                EventUtils.sendKey("DOWN", gDebugger);
++              }
++              is(gVariablesView.getFocusedItem().name, "__proto__",
++                "The top-level __proto__ item should be focused.");
++
++              EventUtils.sendKey("DOWN", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "foo",
++                "The foo scope should be focused now.");
++              is(gVariablesView.getFocusedItem().expanded, false,
++                "The foo scope shouldn't be expanded yet.");
++
++              EventUtils.sendKey("DOWN", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "foo",
++                "The foo scope should still be focused.");
++              is(gVariablesView.getFocusedItem().expanded, true,
++                "The foo scope should be expanded now.");
++
++              EventUtils.sendKey("DOWN", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "bar",
++                "The bar variable should still be focused.");
++              is(gVariablesView.getFocusedItem().expanded, false,
++                "The bar variable shouldn't be expanded.");
++              is(gVariablesView.getFocusedItem().visible, true,
++                "The bar variable shouldn't be hidden.");
++
++              EventUtils.sendKey("BACK_SPACE", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "bar",
++                "The bar variable should still be focused.");
++              is(gVariablesView.getFocusedItem().expanded, false,
++                "The bar variable should still not be expanded.");
++              is(gVariablesView.getFocusedItem().visible, false,
++                "The bar variable should be hidden.");
++
++              EventUtils.sendKey("UP", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "foo",
++                "The foo scope should be focused.");
++
++              EventUtils.sendKey("UP", gDebugger);
++              is(gVariablesView.getFocusedItem().name, "__proto__",
++                "The top-level __proto__ item should be focused.");
++
++              executeSoon(callback);
++            });
++          });
++        });
++      });
++    });
++  });
++}
++
++function waitForElement(selector, exists, callback)
++{
++  // Poll every few milliseconds until the element are retrieved.
++  let count = 0;
++  let intervalID = window.setInterval(function() {
++    info("count: " + count + " ");
++    if (++count > 50) {
++      ok(false, "Timed out while polling for the element.");
++      window.clearInterval(intervalID);
++      return closeDebuggerAndFinish();
++    }
++    if (!!gVariablesView._list.querySelector(selector) != exists) {
++      return;
++    }
++    // We got the element, it's safe to callback.
++    window.clearInterval(intervalID);
++    callback();
++  }, 100);
++}
++
+ function testClearHierarchy() {
+   gVariablesView.clearHierarchy();
+   is (gVariablesView._prevHierarchy.size, 0,
+     "The previous hierarchy should have been cleared.");
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-edit.js b/browser/devtools/debugger/test/browser_dbg_propertyview-edit.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-edit.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-edit.js
+@@ -68,9 +68,9 @@ function testModification(aVar, aCallbac
+     EventUtils.sendString(aNewValue, gDebugger);
+     EventUtils.sendKey("RETURN", gDebugger);
+   }
+ 
+-  EventUtils.sendMouseEvent({ type: "click" },
++  EventUtils.sendMouseEvent({ type: "mousedown" },
+     aVar.querySelector(".value"),
+     gDebugger);
+ 
+   executeSoon(function() {
+diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared/VariablesView.jsm
+--- a/browser/devtools/shared/VariablesView.jsm
++++ b/browser/devtools/shared/VariablesView.jsm
+@@ -47,11 +47,13 @@ this.VariablesView = function VariablesV
+   this._appendEmptyNotice();
+ 
+   this._onSearchboxInput = this._onSearchboxInput.bind(this);
+   this._onSearchboxKeyPress = this._onSearchboxKeyPress.bind(this);
++  this._onViewKeyPress = this._onViewKeyPress.bind(this);
+ 
+   // Create an internal list container.
+   this._list = this.document.createElement("vbox");
++  this._list.addEventListener("keypress", this._onViewKeyPress, false);
+   this._parent.appendChild(this._list);
+ };
+ 
+ VariablesView.prototype = {
+@@ -138,8 +140,11 @@ VariablesView.prototype = {
+ 
+     this._emptyTimeout = this.window.setTimeout(function() {
+       this._emptyTimeout = null;
+ 
++      prevList.removeEventListener("keypress", this._onViewKeyPress, false);
++      currList.addEventListener("keypress", this._onViewKeyPress, false);
++
+       this._parent.removeChild(prevList);
+       this._parent.appendChild(currList);
+ 
+       if (!this._store.size) {
+@@ -467,13 +472,19 @@ VariablesView.prototype = {
+    * Expands the first search results in this container.
+    */
+   expandFirstSearchResults: function VV_expandFirstSearchResults() {
+     for (let [, scope] of this._store) {
+-      for (let [, variable] of scope._store) {
+-        if (variable._isMatch) {
+-          variable.expand();
+-          break;
+-        }
++      scope._expandFirstSearchResults();
++    }
++  },
++
++  /**
++   * Focuses the first visible variable or property in this container.
++   */
++  focusFirstVisibleNode: function VV_focusFirstVisibleNode() {
++    for (let [, scope] of this._store) {
++      if (scope._focusFirstVisibleNode()) {
++        return;
+       }
+     }
+   },
+ 
+@@ -494,27 +505,146 @@ VariablesView.prototype = {
+     return null;
+   },
+ 
+   /**
+-   * Recursively searches all the scopes for the variable or property
++   * Recursively searches this container for the scope, variable or property
+    * displayed by the specified node.
+    *
+    * @param nsIDOMNode aNode
+    *        The node to search for.
+-   * @return Variable | Property
+-   *         The matched variable or property, or null if nothing is found.
++   * @return Scope | Variable | Property
++   *         The matched scope, variable or property, or null if nothing is found.
+    */
+-  getVariableOrPropertyForNode: function VV_getVariableOrPropertyForNode(aNode) {
++  getItemForNode: function VV_getItemForNode(aNode) {
+     for (let [, scope] of this._store) {
+-      let match = scope.find(aNode);
++      let match;
++      if (scope._target == aNode) {
++        match = scope;
++      } else {
++        match = scope.find(aNode);
++      }
+       if (match) {
+         return match;
+       }
+     }
+     return null;
+   },
+ 
+   /**
++   * Gets the currently focused scope, variable or property in this view.
++   *
++   * @return Scope | Variable | Property
++   *         The focused scope, variable or property, or null if nothing is found.
++   */
++  getFocusedItem: function VV_getFocusedItem() {
++    let focused = this.document.commandDispatcher.focusedElement;
++    return this.getItemForNode(focused);
++  },
++
++  /**
++   * Focuses the next scope, variable or property in this view.
++   */
++  focusNextItem: function VV_focusNextItem() this._changeFocus("advanceFocus"),
++
++  /**
++   * Focuses the previous scope, variable or property in this view.
++   */
++  focusPrevItem: function VV_focusPrevItem() this._changeFocus("rewindFocus"),
++
++  /**
++   * Focuses the next or previous scope, variable or property in this view.
++   *
++   * @param string aFlag
++   *        Either "advanceFocus" or "rewindFocus".
++   */
++  _changeFocus: function VV__changeFocus(aFlag) {
++    let commandDispatcher = this.document.commandDispatcher;
++    let item;
++    do {
++      commandDispatcher[aFlag]();
++      item = this.getFocusedItem();
++    } while (item && !item.focusable);
++  },
++
++  /**
++   * Listener handling a key press event on the view.
++   */
++  _onViewKeyPress: function VV__onViewKeyPress(e) {
++    let item = this.getFocusedItem();
++
++    switch (e.keyCode) {
++      case e.DOM_VK_UP:
++      case e.DOM_VK_DOWN:
++        // Prevent scrolling when pressing navigation keys.
++        e.preventDefault();
++        e.stopPropagation();
++    }
++
++    switch (e.keyCode) {
++      case e.DOM_VK_RETURN:
++      case e.DOM_VK_ENTER:
++      case e.DOM_VK_RIGHT:
++        // Expand scopes, variables and properties before advancing focus.
++        if (!item._isExpanded && item._isArrowVisible) {
++          item.expand();
++        } else {
++          this.focusNextItem();
++        }
++        return;
++
++      case e.DOM_VK_DOWN:
++        // Expand only scopes before advancing focus.
++        if (!(item instanceof Variable) &&
++            !(item instanceof Property) &&
++            !item._isExpanded && item._isArrowVisible) {
++          item.expand();
++        } else {
++          this.focusNextItem();
++        }
++        return;
++
++      case e.DOM_VK_LEFT:
++        // Collapse scopes, variables and properties before rewinding focus.
++        if (item._isExpanded && item._isArrowVisible) {
++          item.collapse();
++        } else {
++          this.focusPrevItem();
++        }
++        return;
++
++      case e.DOM_VK_UP:
++        // Always rewind focus when pressing the UP key.
++        this.focusPrevItem();
++        return;
++
++      case e.DOM_VK_DELETE:
++      case e.DOM_VK_BACK_SPACE:
++        // Delete the variable or property if allowed.
++        if (item instanceof Variable ||
++            item instanceof Property) {
++          item._onDelete(e);
++        }
++        return;
++    }
++
++    // This attribute is not implemented in Gecko at this time, see bug 680830.
++    e.char = String.fromCharCode(e.charCode);
++
++    // Start editing the value or name of the variable or property.
++    if (e.ctrlKey && e.char == "e" &&
++        (item instanceof Variable ||
++         item instanceof Property)) {
++      e.preventDefault();
++      e.stopPropagation();
++      if (e.altKey) {
++        item._activateNameInput();
++      } else {
++        item._activateValueInput();
++      }
++    }
++  },
++
++  /**
+    * Sets the text displayed in this container when there are no available items.
+    * @param string aValue
+    */
+   set emptyText(aValue) {
+@@ -603,10 +733,9 @@ VariablesView.prototype = {
+  */
+ function Scope(aView, aName, aFlags = {}) {
+   this.ownerView = aView;
+ 
+-  this.expand = this.expand.bind(this);
+-  this.toggle = this.toggle.bind(this);
++  this._onClick = this._onClick.bind(this);
+   this._openEnum = this._openEnum.bind(this);
+   this._openNonEnum = this._openNonEnum.bind(this);
+   this._batchAppend = this._batchAppend.bind(this);
+   this._batchItems = [];
+@@ -737,9 +866,9 @@ Scope.prototype = {
+ 
+       // Start spinning a throbber in this scope's title and allow a few
+       // milliseconds for it to be painted.
+       this._startThrobber();
+-      this.window.setTimeout(this.expand, LAZY_EXPAND_DELAY);
++      this.window.setTimeout(this.expand.bind(this), LAZY_EXPAND_DELAY);
+       return;
+     }
+ 
+     if (this._variablesView._enumVisible) {
+@@ -840,8 +969,14 @@ Scope.prototype = {
+     this._isArrowVisible = false;
+   },
+ 
+   /**
++   * Specifies if this variable may be focused.
++   * @return boolean
++   */
++  get focusable() this._nameString && this._isShown,
++
++  /**
+    * Gets the visibility state.
+    * @return boolean
+    */
+   get visible() this._isShown,
+@@ -997,9 +1132,17 @@ Scope.prototype = {
+   /**
+    * Adds the necessary event listeners for this scope.
+    */
+   _addEventListeners: function S__addEventListeners() {
+-    this._title.addEventListener("mousedown", this.toggle, false);
++    this._title.addEventListener("mousedown", this._onClick, false);
++  },
++
++  /**
++   * The click listener for this scope's title.
++   */
++  _onClick: function S__onClick() {
++    this.toggle();
++    this._target.focus();
+   },
+ 
+   /**
+    * Lazily appends a node to this scope's enumerable or non-enumerable
+@@ -1215,8 +1358,40 @@ Scope.prototype = {
+     }
+   },
+ 
+   /**
++   * Expands the first search results in this scope.
++   */
++  _expandFirstSearchResults: function S__expandFirstSearchResults() {
++    for (let [, variable] of this._store) {
++      if (variable._isMatch) {
++        variable.expand();
++        return;
++      } else {
++        variable._expandFirstSearchResults();
++      }
++    }
++  },
++
++  /**
++   * Focuses the first visible variable or property in this scope.
++   *
++   * @return boolean
++   *         True if a node in this scope was successfully focused.
++   */
++  _focusFirstVisibleNode: function S__focusFirstVisibleNode() {
++    for (let [, variable] of this._store) {
++      if (variable.focusable) {
++        variable._target.focus();
++        return true;
++      } else {
++        return variable._focusFirstVisibleNode();
++      }
++    }
++    return false;
++  },
++
++  /**
+    * Gets top level variables view instance.
+    * @return VariablesView
+    */
+   get _variablesView() this._topView || (this._topView = (function(self) {
+@@ -1535,9 +1710,9 @@ create({ constructor: Variable, proto: S
+    *        The variable's descriptor.
+    */
+   _init: function V__init(aName, aDescriptor) {
+     this._idString = generateId(this._nameString = aName);
+-    this._displayScope(aName, "variable");
++    this._displayScope(aName, "variable variable-or-property");
+ 
+     // Don't allow displaying variable information there's no name available.
+     if (this._nameString) {
+       this._displayVariable();
+@@ -1693,12 +1868,11 @@ create({ constructor: Variable, proto: S
+   /**
+    * Adds the necessary event listeners for this variable.
+    */
+   _addEventListeners: function V__addEventListeners() {
+-    this._arrow.addEventListener("mousedown", this.toggle, false);
+-    this._name.addEventListener("mousedown", this.toggle, false);
+     this._name.addEventListener("dblclick", this._activateNameInput, false);
+-    this._valueLabel.addEventListener("click", this._activateValueInput, false);
++    this._valueLabel.addEventListener("mousedown", this._activateValueInput, false);
++    this._title.addEventListener("mousedown", this._onClick, false);
+   },
+ 
+   /**
+    * Creates a textbox node in place of a label.
+@@ -1773,8 +1947,13 @@ create({ constructor: Variable, proto: S
+     }
+     if (!this.ownerView.switch) {
+       return;
+     }
++    if (e) {
++      e.preventDefault();
++      e.stopPropagation();
++    }
++
+     this._activateInput(this._name, "element-name-input", {
+       onKeypress: this._onNameInputKeyPress,
+       onBlur: this._deactivateNameInput
+     });
+@@ -1804,8 +1983,13 @@ create({ constructor: Variable, proto: S
+     }
+     if (!this.ownerView.eval) {
+       return;
+     }
++    if (e) {
++      e.preventDefault();
++      e.stopPropagation();
++    }
++
+     this._activateInput(this._valueLabel, "element-value-input", {
+       onKeypress: this._onValueInputKeyPress,
+       onBlur: this._deactivateValueInput
+     });
+@@ -1866,42 +2050,52 @@ create({ constructor: Variable, proto: S
+   /**
+    * The key press listener for this variable's editable name textbox.
+    */
+   _onNameInputKeyPress: function V__onNameInputKeyPress(e) {
++    e.stopPropagation();
++
+     switch(e.keyCode) {
+       case e.DOM_VK_RETURN:
+       case e.DOM_VK_ENTER:
+         this._saveNameInput(e);
++        this._target.focus();
+         return;
+       case e.DOM_VK_ESCAPE:
+         this._deactivateNameInput(e);
++        this._target.focus();
+         return;
+     }
+   },
+ 
+   /**
+    * The key press listener for this variable's editable value textbox.
+    */
+   _onValueInputKeyPress: function V__onValueInputKeyPress(e) {
++    e.stopPropagation();
++
+     switch(e.keyCode) {
+       case e.DOM_VK_RETURN:
+       case e.DOM_VK_ENTER:
+         this._saveValueInput(e);
++        this._target.focus();
+         return;
+       case e.DOM_VK_ESCAPE:
+         this._deactivateValueInput(e);
++        this._target.focus();
+         return;
+     }
+   },
+ 
+   /**
+    * The click listener for the delete button.
+    */
+-  _onDelete: function V__onDelete() {
+-    this.hide();
++  _onDelete: function V__onDelete(e) {
++    e.preventDefault();
++    e.stopPropagation();
+ 
+     if (this.ownerView.delete) {
+       this.ownerView.delete(this);
++      this.hide();
+     }
+   },
+ 
+   _symbolicName: "",
+@@ -1945,9 +2139,9 @@ create({ constructor: Property, proto: V
+    *        The property's descriptor.
+    */
+   _init: function P__init(aName, aDescriptor) {
+     this._idString = generateId(this._nameString = aName);
+-    this._displayScope(aName, "property");
++    this._displayScope(aName, "property variable-or-property");
+ 
+     // Don't allow displaying property information there's no name available.
+     if (this._nameString) {
+       this._displayVariable();
+diff --git a/browser/locales/en-US/chrome/browser/devtools/debugger.dtd b/browser/locales/en-US/chrome/browser/devtools/debugger.dtd
+--- a/browser/locales/en-US/chrome/browser/devtools/debugger.dtd
++++ b/browser/locales/en-US/chrome/browser/devtools/debugger.dtd
+@@ -93,8 +93,13 @@
+   -  in the source editor's context menu for the variables search operation. -->
+ <!ENTITY debuggerUI.searchVariable      "Filter variables">
+ <!ENTITY debuggerUI.searchVariable.key  "V">
+ 
++<!-- LOCALIZATION NOTE (debuggerUI.focusVariables): This is the text that appears
++  -  in the source editor's context menu for the variables focus operation. -->
++<!ENTITY debuggerUI.focusVariables      "Focus variables tree">
++<!ENTITY debuggerUI.focusVariables.key  "V">
++
+ <!-- LOCALIZATION NOTE (debuggerUI.condBreakPanelTitle): This is the text that
+   -  appears in the conditional breakpoint panel popup as a description. -->
+ <!ENTITY debuggerUI.condBreakPanelTitle "This breakpoint will stop execution only if the following expression is true">
+ 
+diff --git a/browser/themes/gnomestripe/devtools/debugger.css b/browser/themes/gnomestripe/devtools/debugger.css
+--- a/browser/themes/gnomestripe/devtools/debugger.css
++++ b/browser/themes/gnomestripe/devtools/debugger.css
+@@ -334,11 +334,20 @@
+   background: rgba(255, 255, 0, 0.65);
+   transition-duration: 0.4s;
+ }
+ 
++.variable:focus > .title {
++  background: Highlight;
++  color: HighlightText;
++  border-radius: 4px;
++}
++
+ .variable > .title > .name {
++  font-weight: 600;
++}
++
++.variable:not(:focus) > .title > .name {
+   color: #048;
+-  font-weight: 600;
+ }
+ 
+ .variable > .title > .value {
+   -moz-padding-start: 6px;
+@@ -362,9 +371,15 @@
+   background: rgba(255, 255, 0, 0.65);
+   transition-duration: 0.4s;
+ }
+ 
+-.property > .title > .name {
++.property:focus > .title {
++  background: Highlight;
++  color: HighlightText;
++  border-radius: 4px;
++}
++
++.property:not(:focus) > .title > .name {
+   color: #881090;
+ }
+ 
+ .property > .title > .value {
+@@ -376,9 +391,9 @@
+   -moz-margin-start: 10px;
+ }
+ 
+ /**
+- * Non enumerable, configurable and writable variables and properties.
++ * Non enumerable, configurable and writable variables and properties
+  */
+ 
+ .variable[proto] > .title > .name,
+ .property[proto] > .title > .name,
+@@ -414,10 +429,10 @@
+     background-size: 32px;
+   }
+ }
+ 
+-.variable[exception] > .title > .name,
+-.property[exception] > .title > .name {
++.variable[exception]:not(:focus) > .title > .name,
++.property[exception]:not(:focus) > .title > .name {
+   color: #a00;
+   text-shadow: 0 0 8px #fcc;
+ }
+ 
+@@ -468,30 +483,30 @@
+ /**
+  * Token value colors
+  */
+ 
+-.token-undefined {
++.variable-or-property:not(:focus) > .title > .token-undefined {
+   color: #bbb;
+ }
+ 
+-.token-null {
++.variable-or-property:not(:focus) > .title > .token-null {
+   color: #999;
+ }
+ 
+-.token-boolean {
++.variable-or-property:not(:focus) > .title > .token-boolean {
+   color: #777;
+ }
+ 
+-.token-number {
++.variable-or-property:not(:focus) > .title > .token-number {
+   color: #c40a16;
+ }
+ 
+-.token-string {
++.variable-or-property:not(:focus) > .title > .token-string {
+   max-width: 30em;
+   color: #1c00cf;
+ }
+ 
+-.token-other {
++.variable-or-property:not(:focus) > .title > .token-other {
+   color: #333;
+ }
+ 
+ /**
+diff --git a/browser/themes/pinstripe/devtools/debugger.css b/browser/themes/pinstripe/devtools/debugger.css
+--- a/browser/themes/pinstripe/devtools/debugger.css
++++ b/browser/themes/pinstripe/devtools/debugger.css
+@@ -341,11 +341,20 @@
+   background: rgba(255, 255, 0, 0.65);
+   transition-duration: 0.4s;
+ }
+ 
++.variable:focus > .title {
++  background: Highlight;
++  color: HighlightText;
++  border-radius: 4px;
++}
++
+ .variable > .title > .name {
++  font-weight: 600;
++}
++
++.variable:not(:focus) > .title > .name {
+   color: #048;
+-  font-weight: 600;
+ }
+ 
+ .variable > .title > .value {
+   -moz-padding-start: 6px;
+@@ -369,9 +378,15 @@
+   background: rgba(255, 255, 0, 0.65);
+   transition-duration: 0.4s;
+ }
+ 
+-.property > .title > .name {
++.property:focus > .title {
++  background: Highlight;
++  color: HighlightText;
++  border-radius: 4px;
++}
++
++.property:not(:focus) > .title > .name {
+   color: #881090;
+ }
+ 
+ .property > .title > .value {
+@@ -383,9 +398,9 @@
+   -moz-margin-start: 10px;
+ }
+ 
+ /**
+- * Non enumerable, configurable and writable variables and properties.
++ * Non enumerable, configurable and writable variables and properties
+  */
+ 
+ .variable[proto] > .title > .name,
+ .property[proto] > .title > .name,
+@@ -421,10 +436,10 @@
+     background-size: 32px;
+   }
+ }
+ 
+-.variable[exception] > .title > .name,
+-.property[exception] > .title > .name {
++.variable[exception]:not(:focus) > .title > .name,
++.property[exception]:not(:focus) > .title > .name {
+   color: #a00;
+   text-shadow: 0 0 8px #fcc;
+ }
+ 
+@@ -475,30 +490,30 @@
+ /**
+  * Token value colors
+  */
+ 
+-.token-undefined {
++.variable-or-property:not(:focus) > .title > .token-undefined {
+   color: #bbb;
+ }
+ 
+-.token-null {
++.variable-or-property:not(:focus) > .title > .token-null {
+   color: #999;
+ }
+ 
+-.token-boolean {
++.variable-or-property:not(:focus) > .title > .token-boolean {
+   color: #777;
+ }
+ 
+-.token-number {
++.variable-or-property:not(:focus) > .title > .token-number {
+   color: #c40a16;
+ }
+ 
+-.token-string {
++.variable-or-property:not(:focus) > .title > .token-string {
+   max-width: 30em;
+   color: #1c00cf;
+ }
+ 
+-.token-other {
++.variable-or-property:not(:focus) > .title > .token-other {
+   color: #333;
+ }
+ 
+ /**
+diff --git a/browser/themes/winstripe/devtools/debugger.css b/browser/themes/winstripe/devtools/debugger.css
+--- a/browser/themes/winstripe/devtools/debugger.css
++++ b/browser/themes/winstripe/devtools/debugger.css
+@@ -347,11 +347,20 @@
+   background: rgba(255, 255, 0, 0.65);
+   transition-duration: 0.4s;
+ }
+ 
++.variable:focus > .title {
++  background: Highlight;
++  color: HighlightText;
++  border-radius: 4px;
++}
++
+ .variable > .title > .name {
++  font-weight: 600;
++}
++
++.variable:not(:focus) > .title > .name {
+   color: #048;
+-  font-weight: 600;
+ }
+ 
+ .variable > .title > .value {
+   -moz-padding-start: 6px;
+@@ -375,9 +384,15 @@
+   background: rgba(255, 255, 0, 0.65);
+   transition-duration: 0.4s;
+ }
+ 
+-.property > .title > .name {
++.property:focus > .title {
++  background: Highlight;
++  color: HighlightText;
++  border-radius: 4px;
++}
++
++.property:not(:focus) > .title > .name {
+   color: #881090;
+ }
+ 
+ .property > .title > .value {
+@@ -389,9 +404,9 @@
+   -moz-margin-start: 10px;
+ }
+ 
+ /**
+- * Non enumerable, configurable and writable variables and properties.
++ * Non enumerable, configurable and writable variables and properties
+  */
+ 
+ .variable[proto] > .title > .name,
+ .property[proto] > .title > .name,
+@@ -427,10 +442,10 @@
+     background-size: 32px;
+   }
+ }
+ 
+-.variable[exception] > .title > .name,
+-.property[exception] > .title > .name {
++.variable[exception]:not(:focus) > .title > .name,
++.property[exception]:not(:focus) > .title > .name {
+   color: #a00;
+   text-shadow: 0 0 8px #fcc;
+ }
+ 
+@@ -481,30 +496,30 @@
+ /**
+  * Token value colors
+  */
+ 
+-.token-undefined {
++.variable-or-property:not(:focus) > .title > .token-undefined {
+   color: #bbb;
+ }
+ 
+-.token-null {
++.variable-or-property:not(:focus) > .title > .token-null {
+   color: #999;
+ }
+ 
+-.token-boolean {
++.variable-or-property:not(:focus) > .title > .token-boolean {
+   color: #777;
+ }
+ 
+-.token-number {
++.variable-or-property:not(:focus) > .title > .token-number {
+   color: #c40a16;
+ }
+ 
+-.token-string {
++.variable-or-property:not(:focus) > .title > .token-string {
+   max-width: 30em;
+   color: #1c00cf;
+ }
+ 
+-.token-other {
++.variable-or-property:not(:focus) > .title > .token-other {
+   color: #333;
+ }
+ 
+ /**
