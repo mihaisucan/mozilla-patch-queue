@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 746852f724c68f88e32268e1db12cbab759cd271
+# Parent f2a9b0b4db2f515e1e7929caf285febb3559c823
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1359409923 -7200
+# Date 1359480092 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -128,7 +128,7 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared/VariablesView.jsm
 --- a/browser/devtools/shared/VariablesView.jsm
 +++ b/browser/devtools/shared/VariablesView.jsm
-@@ -586,16 +586,28 @@ VariablesView.prototype = {
+@@ -585,16 +585,28 @@ VariablesView.prototype = {
    _list: null,
    _searchboxNode: null,
    _searchboxContainer: null,
@@ -157,7 +157,7 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
   *        The view to contain this scope.
   * @param string aName
   *        The scope's name.
-@@ -1590,16 +1602,21 @@ create({ constructor: Variable, proto: S
+@@ -1589,16 +1601,21 @@ create({ constructor: Variable, proto: S
      let isUndefined = VariablesView.isUndefined(descriptor);
  
      if (isPrimitive || isUndefined) {
@@ -224,7 +224,7 @@ new file mode 100644
 diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 --- a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 +++ b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
-@@ -31,27 +31,31 @@ function performTest(hud)
+@@ -31,27 +31,30 @@ function performTest(hud)
      },
      successFn: function()
      {
@@ -239,14 +239,13 @@ diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_ob
  
 -      document.addEventListener("popupshown", function _onPopupShown(aEvent) {
 -        document.removeEventListener("popupshown", _onPopupShown);
-+      hud.jsterm.once("variablesview-open",
-+        function _onOpen(aEvent, aView) {
-+          ok(aView, "object inspector opened on click");
-+          console.debug(aView);
++      hud.jsterm.once("variablesview-fetched",
++        function _onFetch(aEvent, aVar) {
++          ok(aVar, "object inspector opened on click");
  
 -        isnot(aEvent.target.label.indexOf("omgBug676722"), -1,
 -           "object inspector opened on click");
-+          findVariableViewProperties(aView, [{
++          findVariableViewProperties(aVar, [{
 +            name: "abba",
 +            value: "omgBug676722",
 +          }]);
@@ -266,7 +265,28 @@ diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_ob
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
-@@ -310,8 +310,33 @@ function waitForSuccess(aOptions)
+@@ -138,17 +138,19 @@ function findLogEntry(aString)
+  * @param function [aCallback]
+  *        Optional function to invoke after the Web Console completes
+  *        initialization (web-console-created).
+  */
+ function openConsole(aTab, aCallback = function() { })
+ {
+   let target = TargetFactory.forTab(aTab || tab);
+   gDevTools.showToolbox(target, "webconsole").then(function(toolbox) {
+-    aCallback(toolbox.getCurrentPanel().hud);
++    let hud = toolbox.getCurrentPanel().hud;
++    hud.jsterm._lazyVariablesView = false;
++    aCallback(hud);
+   });
+ }
+ 
+ /**
+  * Close the Web Console for the given tab.
+  *
+  * @param nsIDOMElement [aTab]
+  *        Optional tab element for which you want close the Web Console. The
+@@ -310,8 +312,41 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -279,11 +299,19 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +function findVariableViewProperties(aView, aProperties)
 +{
 +  function finder(aVar) {
-+    for (let item of aVar._store) {
++    //console.debug("finder", aVar);
++    for (let [id, item] of aVar._store) {
 +      for (let prop of aProperties) {
-+        if (item.name == prop.name && item._valueString == prop.value) {
++        //console.debug(item._nameString, item._valueString, prop);
++        //console.debug(item._nameString == prop.name, item._valueString == prop.value);
++        let valueString = item._valueString;
++        if (item._valueClassName == "token-string") {
++          valueString = valueString.substring(1, valueString.length - 1);
++        }
++        if (item._nameString == prop.name &&
++            valueString == prop.value) {
 +          aProperties.splice(aProperties.indexOf(prop), 1);
-+          ok(true, "found " + prop.name);
++          ok(true, "found property " + prop.name);
 +        }
 +      }
 +      if (aProperties.length > 0) {
@@ -294,10 +322,10 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  finder(aView);
 +  is(aProperties.length, 0, "all properties found");
 +  if (aProperties.length) {
-+    info("properties not found: " + notFound);
-+    let notFound = aProperties.reduce(function(a, b) {
-+      return a.name + ", " + b.name;
-+    }, "");
++    let notFound = aProperties.map(function(aProp) {
++      return aProp.name;
++    });
++    info("properties not found: " + notFound.join(", "));
 +  }
 +}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
@@ -362,26 +390,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -182,16 +190,18 @@ function WebConsoleFrame(aWebConsoleOwne
-   this._pruneCategoriesQueue = {};
-   this._networkRequests = {};
- 
-   this._toggleFilter = this._toggleFilter.bind(this);
-   this._flushMessageQueue = this._flushMessageQueue.bind(this);
- 
-   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-   this._outputTimerInitialized = false;
-+
-+  EventEmitter.decorate(this);
- }
- 
- WebConsoleFrame.prototype = {
-   /**
-    * The WebConsole instance that owns this frame.
-    * @see HUDService.jsm::WebConsole
-    * @type object
-    */
-@@ -983,55 +993,42 @@ WebConsoleFrame.prototype = {
+@@ -983,55 +991,42 @@ WebConsoleFrame.prototype = {
    logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
    {
      let body = null;
@@ -445,7 +454,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let functionName = aMessage.functionName ||
                             l10n.getStr("stacktrace.anonymousFunction");
  
-@@ -1051,16 +1048,22 @@ WebConsoleFrame.prototype = {
+@@ -1051,16 +1046,22 @@ WebConsoleFrame.prototype = {
        }
  
        case "group":
@@ -468,7 +477,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          if (timer.error) {
            Cu.reportError(l10n.getStr(timer.error));
            return;
-@@ -1089,64 +1092,44 @@ WebConsoleFrame.prototype = {
+@@ -1089,64 +1090,44 @@ WebConsoleFrame.prototype = {
      // we ignore their arguments.
      switch (level) {
        case "group":
@@ -539,7 +548,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * the window.console API call.
     *
     * @param object aMessage
-@@ -1157,59 +1140,29 @@ WebConsoleFrame.prototype = {
+@@ -1157,59 +1138,29 @@ WebConsoleFrame.prototype = {
      this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage]);
    },
  
@@ -603,7 +612,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1948,19 +1901,21 @@ WebConsoleFrame.prototype = {
+@@ -1948,19 +1899,21 @@ WebConsoleFrame.prototype = {
     *
     * @private
     * @param array aItem
@@ -628,7 +637,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          connectionId = args[0];
        }
        else if (typeof methodOrNode != "function") {
-@@ -1968,40 +1923,23 @@ WebConsoleFrame.prototype = {
+@@ -1968,40 +1921,23 @@ WebConsoleFrame.prototype = {
        }
        if (connectionId && connectionId in this._networkRequests) {
          delete this._networkRequests[connectionId];
@@ -671,7 +680,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * category's line limit by removing old messages as needed.
     *
     * @param integer aCategory
-@@ -2019,64 +1957,51 @@ WebConsoleFrame.prototype = {
+@@ -2019,64 +1955,51 @@ WebConsoleFrame.prototype = {
      let n = Math.max(0, messageNodes.length - logLimit);
      let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
      toRemove.forEach(this.removeOutputMessage, this);
@@ -748,7 +757,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2175,17 +2100,17 @@ WebConsoleFrame.prototype = {
+@@ -2175,17 +2098,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -767,7 +776,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2220,52 +2145,37 @@ WebConsoleFrame.prototype = {
+@@ -2220,52 +2143,37 @@ WebConsoleFrame.prototype = {
      node.clipboardText = aClipboardText;
      node.classList.add("hud-msg-node");
  
@@ -835,7 +844,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2303,53 +2213,46 @@ WebConsoleFrame.prototype = {
+@@ -2303,53 +2211,46 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -897,7 +906,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Click event handler for the ellipsis shown immediately after a long string.
     * This method retrieves the full string and updates the console output to
-@@ -2720,26 +2623,53 @@ function JSTerm(aWebConsoleFrame)
+@@ -2720,26 +2621,62 @@ function JSTerm(aWebConsoleFrame)
    this.hudId = this.hud.hudId;
  
    this.lastCompletion = { value: null };
@@ -943,6 +952,15 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  _variablesView: null,
 +
 +  /**
++   * Tells if you want the variables view UI updates to be lazy or not. Tests
++   * disable lazy updates.
++   *
++   * @private
++   * @type boolean
++   */
++  _lazyVariablesView: true,
++
++  /**
     * Last input value.
     * @type string
     */
@@ -951,7 +969,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * History of code that was executed.
     * @type array
-@@ -2778,16 +2708,18 @@ JSTerm.prototype = {
+@@ -2778,16 +2715,18 @@ JSTerm.prototype = {
  
      let doc = this.hud.document;
      this.completeNode = doc.querySelector(".jsterm-complete-node");
@@ -970,7 +988,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement [aAfterNode]
-@@ -2800,33 +2732,47 @@ JSTerm.prototype = {
+@@ -2800,33 +2739,47 @@ JSTerm.prototype = {
     *        The message received from the server.
     */
    _executeResultCallback:
@@ -1025,7 +1043,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            catch (ex) {
              errorMessage = helperResult.message;
            }
-@@ -2865,48 +2811,40 @@ JSTerm.prototype = {
+@@ -2865,48 +2818,40 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -1090,7 +1108,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2927,81 +2865,514 @@ JSTerm.prototype = {
+@@ -2927,81 +2872,519 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -1249,7 +1267,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      }
 +      aOptions.view = view;
 +      this._updateVariablesView(aOptions);
-+      this.emit("variablesview-open", view, aOptions);
++      this.emit("variablesview-open", view);
 +      return view;
 +    }.bind(this);
 +
@@ -1363,7 +1381,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    view.searchPlaceholder = l10n.getStr("propertiesFilterPlaceholder");
 +    view.emptyText = l10n.getStr("emptyPropertiesList");
 +    view.searchEnabled = !aOptions.hideFilterInput;
-+    view.lazyEmpty = true;
++    view.lazyEmpty = this._lazyVariablesView;
++    view.lazyAppend = this._lazyVariablesView;
 +    view._consoleObjectActors = new Set();
 +    return view;
 +  },
@@ -1428,6 +1447,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      throw new Error("Variables View cannot open without giving it an object " +
 +                      "display.");
 +    }
++
++    this.emit("variablesview-updated", view);
 +  },
 +
 +  /**
@@ -1610,6 +1631,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      aVar._retrieved = true;
 +
 +      aVar._variablesView.commitHierarchy();
++
++      this.emit("variablesview-fetched", aVar);
 +    }.bind(this));
 +  },
 +
@@ -1653,7 +1676,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3617,171 +3988,48 @@ JSTerm.prototype = {
+@@ -3617,171 +4000,48 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
