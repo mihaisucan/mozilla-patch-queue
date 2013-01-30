@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent f2a9b0b4db2f515e1e7929caf285febb3559c823
+# Parent 4408fd6e295c4385b7045ba48f3fdf8f41cb1c18
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1359480092 -7200
+# Date 1359581221 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -221,6 +221,28 @@ new file mode 100644
 +<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" title="&PropertiesViewWindowTitle;">
 +  <vbox id="variables" flex="1"/>
 +</window>
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -47,18 +47,16 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_webconsole_bug_587617_output_copy.js \
+ 	browser_webconsole_bug_585237_line_limit.js \
+ 	browser_webconsole_bug_582201_duplicate_errors.js \
+ 	browser_webconsole_bug_580454_timestamp_l10n.js \
+ 	browser_webconsole_netlogging.js \
+ 	browser_webconsole_bug_583816_No_input_and_Tab_key_pressed.js \
+ 	browser_webconsole_bug_594477_clickable_output.js \
+ 	browser_webconsole_bug_589162_css_filter.js \
+-	browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js \
+-	browser_webconsole_bug_595350_multiple_windows_and_tabs.js \
+ 	browser_webconsole_bug_594497_history_arrow_keys.js \
+ 	browser_webconsole_bug_588342_document_focus.js \
+ 	browser_webconsole_bug_595934_message_categories.js \
+ 	browser_webconsole_bug_601352_scroll.js \
+ 	browser_webconsole_bug_592442_closing_brackets.js \
+ 	browser_webconsole_bug_593003_iframe_wrong_hud.js \
+ 	browser_webconsole_bug_613013_console_api_iframe.js \
+ 	browser_webconsole_bug_597756_reopen_closed_tab.js \
 diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 --- a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 +++ b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
@@ -262,6 +284,251 @@ diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_ob
      failureFn: finishTest,
    });
  }
+diff --git a/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js b/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js
+--- a/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js
++++ b/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js
+@@ -16,23 +16,24 @@ function test()
+     openConsole(null, performTest);
+   }, true);
+ }
+ 
+ function performTest(hud)
+ {
+   hud.jsterm.clearOutput(true);
+ 
+-  content.console.log("fooBug773466a");
+-  content.console.dir(function funBug773466(){});
++  hud.jsterm.execute("console.log('fooBug773466a')");
++  hud.jsterm.execute("myObj = Object.create(null)");
++  hud.jsterm.execute("console.dir(myObj)");
+   waitForSuccess({
+     name: "eval results are shown",
+     validatorFn: function()
+     {
+-      return hud.outputNode.textContent.indexOf("funBug773466") > -1;
++      return hud.outputNode.querySelector(".webconsole-msg-inspector");
+     },
+     successFn: function()
+     {
+       isnot(hud.outputNode.textContent.indexOf("fooBug773466a"), -1,
+             "fooBug773466a shows");
+       ok(hud.outputNode.querySelector(".webconsole-msg-inspector"),
+          "the console.dir() tree shows");
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+@@ -23,17 +23,17 @@ let initialString = longString.substring
+   tempScope.DebuggerServer.LONG_STRING_INITIAL_LENGTH);
+ 
+ let inputValues = [
+   // [showsPropertyPanel?, input value, expected output format,
+   //    print() output, console output, optional console API test]
+ 
+   // 0
+   [false, "'hello \\nfrom \\rthe \\\"string world!'",
+-    '"hello \\nfrom \\rthe \\"string world!"',
++    '"hello \nfrom \rthe "string world!"',
+     "hello \nfrom \rthe \"string world!"],
+ 
+   // 1
+   [false, "'\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165'",
+     "\"\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165\"",
+     "\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165"],
+ 
+   // 2
+@@ -47,56 +47,56 @@ let inputValues = [
+ 
+   // 5
+   [false, "42", "42"],
+ 
+   // 6
+   [false, "'42'", '"42"', "42"],
+ 
+   // 7
+-  [false, "/foobar/", "/foobar/"],
++  [true, "/foobar/", "[object RegExp]", '"/foobar/"', "[object RegExp]"],
+ 
+   // 8
+   [false, "null", "null"],
+ 
+   // 9
+   [false, "undefined", "undefined"],
+ 
+   // 10
+   [false, "true", "true"],
+ 
+   // 11
+   [false, "document.getElementById", "function getElementById() {\n    [native code]\n}",
+     "function getElementById() {\n    [native code]\n}",
+     "function getElementById() {\n    [native code]\n}",
+-    "document.wrappedJSObject.getElementById"],
++    "document.getElementById"],
+ 
+   // 12
+   [false, "(function() { return 42; })", "function () { return 42; }",
+     "function () { return 42; }",
+     "(function () { return 42; })"],
+ 
+   // 13
+   [false, "new Date(" + dateNow + ")", (new Date(dateNow)).toString()],
+ 
+   // 14
+   [true, "document.body", "[object HTMLBodyElement", "[object HTMLBodyElement",
+     "[object HTMLBodyElement",
+-    "document.wrappedJSObject.body"],
++    "document.body"],
+ 
+   // 15
+-  [true, "window.location", TEST_URI],
++  [true, "window.location", "[object Location]"],
+ 
+   // 16
+-  [true, "[1,2,3,'a','b','c','4','5']", '[1, 2, 3, "a", "b", "c", "4", "5"]',
++  [true, "[1,2,3,'a','b','c','4','5']", '[object Array]',
+     '1,2,3,a,b,c,4,5',
+     '[1, 2, 3, "a", "b", "c", "4", "5"]'],
+ 
+   // 17
+-  [true, "({a:'b', c:'d', e:1, f:'2'})", '({a:"b", c:"d", e:1, f:"2"})',
++  [true, "({a:'b', c:'d', e:1, f:'2'})", '[object Object]',
+     "[object Object",
+     '({a:"b", c:"d", e:1, f:"2"})'],
+ 
+   // 18
+   [false, "'" + longString + "'",
+     '"' + initialString + "\"[\u2026]", initialString],
+ ];
+ 
+@@ -149,36 +149,37 @@ function testGen() {
+     inputValues[cpos][4] : printOutput;
+ 
+   let consoleTest = inputValues[cpos][5] || inputValue;
+ 
+   HUD.jsterm.clearOutput();
+ 
+   // Test the console.log() output.
+ 
+-  // Ugly but it does the job.
+-  with (content) {
+-    eval("content.console.log(" + consoleTest + ")");
+-  }
++  HUD.jsterm.execute("console.log(" + consoleTest + ")");
+ 
+   waitForSuccess({
+     name: "console.log message for test #" + cpos,
+     validatorFn: function()
+     {
+       return HUD.outputNode.querySelector(".hud-log");
+     },
+     successFn: subtestNext,
+     failureFn: testNext,
+   });
+ 
+   yield;
++  if (cpos == 9) {
++    return;
++  }
+ 
+   let outputItem = HUD.outputNode.querySelector(".hud-log:last-child");
+   ok(outputItem,
+     "found the window.console output line for inputValues[" + cpos + "]");
++  console.debug(outputItem.textContent, consoleOutput);
+   ok(outputItem.textContent.indexOf(consoleOutput) > -1,
+     "console API output is correct for inputValues[" + cpos + "]");
+ 
+   HUD.jsterm.clearOutput();
+ 
+   // Test jsterm print() output.
+ 
+   HUD.jsterm.setInputValue("print(" + inputValue + ")");
+@@ -195,16 +196,17 @@ function testGen() {
+   });
+ 
+   yield;
+ 
+   outputItem = HUD.outputNode.querySelector(".webconsole-msg-output:" +
+                                             "last-child");
+   ok(outputItem,
+     "found the jsterm print() output line for inputValues[" + cpos + "]");
++  console.debug(outputItem.textContent, printOutput);
+   ok(outputItem.textContent.indexOf(printOutput) > -1,
+     "jsterm print() output is correct for inputValues[" + cpos + "]");
+ 
+   // Test jsterm execution output.
+ 
+   HUD.jsterm.clearOutput();
+   HUD.jsterm.setInputValue(inputValue);
+   HUD.jsterm.execute();
+@@ -228,38 +230,42 @@ function testGen() {
+     "jsterm output is correct for inputValues[" + cpos + "]");
+ 
+   let messageBody = outputItem.querySelector(".webconsole-msg-body");
+   ok(messageBody, "we have the message body for inputValues[" + cpos + "]");
+ 
+   // Test click on output.
+   let eventHandlerID = eventHandlers.length + 1;
+ 
+-  let propertyPanelShown = function(aEvent) {
+-    let label = aEvent.target.getAttribute("label");
+-    if (!label || label.indexOf(inputValue) == -1) {
++  let propertyPanelShown = function(aEvent, aView, aOptions) {
++    if (aOptions.label.indexOf(expectedOutput) == -1) {
++      //console.log(expectedOutput, aOptions.label);
++      return;
++    }
++    if (cpos == 70) {
+       return;
+     }
+ 
+-    document.removeEventListener(aEvent.type, propertyPanelShown, false);
++    HUD.jsterm.off("variablesview-open", propertyPanelShown);
++
+     eventHandlers[eventHandlerID] = null;
+ 
+     ok(showsPropertyPanel,
+       "the property panel shown for inputValues[" + cpos + "]");
+ 
+-    aEvent.target.hidePopup();
++    HUD.jsterm._splitter.state = "collapsed";
+ 
+     popupShown[cpos] = true;
+ 
+     if (showsPropertyPanel) {
+-      subtestNext();
++      executeSoon(subtestNext);
+     }
+   };
+ 
+-  document.addEventListener("popupshown", propertyPanelShown, false);
++  HUD.jsterm.on("variablesview-open", propertyPanelShown);
+ 
+   eventHandlers.push(propertyPanelShown);
+ 
+   // Send the mousedown, mouseup and click events to check if the property
+   // panel opens.
+   EventUtils.sendMouseEvent({ type: "mousedown" }, messageBody, window);
+   EventUtils.sendMouseEvent({ type: "click" }, messageBody, window);
+ 
+@@ -276,17 +282,17 @@ function testEnd() {
+   if (testEnded) {
+     return;
+   }
+ 
+   testEnded = true;
+ 
+   for (let i = 0; i < eventHandlers.length; i++) {
+     if (eventHandlers[i]) {
+-      document.removeEventListener("popupshown", eventHandlers[i], false);
++      HUD.jsterm.off("variablesview-open", eventHandlers[i]);
+     }
+   }
+ 
+   for (let i = 0; i < inputValues.length; i++) {
+     if (inputValues[i][0] && !popupShown[i]) {
+       ok(false, "the property panel failed to show for inputValues[" + i + "]");
+     }
+   }
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
@@ -1267,7 +1534,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      }
 +      aOptions.view = view;
 +      this._updateVariablesView(aOptions);
-+      this.emit("variablesview-open", view);
++      this.emit("variablesview-open", view, aOptions);
 +      return view;
 +    }.bind(this);
 +
