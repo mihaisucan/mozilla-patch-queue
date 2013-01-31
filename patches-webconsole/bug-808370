@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 4408fd6e295c4385b7045ba48f3fdf8f41cb1c18
+# Parent 2f4c30a4f7c008067240b3f00ba9208c7f3f1354
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1359581221 -7200
+# Date 1359667011 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -318,12 +318,17 @@ diff --git a/browser/devtools/webconsole/test/browser_output_breaks_after_consol
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
-@@ -23,17 +23,17 @@ let initialString = longString.substring
+@@ -19,21 +19,21 @@ let tempScope = {};
+ Cu.import("resource://gre/modules/devtools/dbg-server.jsm", tempScope);
+ 
+ let longString = (new Array(tempScope.DebuggerServer.LONG_STRING_LENGTH + 4)).join("a");
+ let initialString = longString.substring(0,
    tempScope.DebuggerServer.LONG_STRING_INITIAL_LENGTH);
  
  let inputValues = [
    // [showsPropertyPanel?, input value, expected output format,
-   //    print() output, console output, optional console API test]
+-  //    print() output, console output, optional console API test]
++  //    print() output, console API output, optional console API test]
  
    // 0
    [false, "'hello \\nfrom \\rthe \\\"string world!'",
@@ -337,7 +342,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
      "\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165"],
  
    // 2
-@@ -47,56 +47,56 @@ let inputValues = [
+@@ -47,58 +47,52 @@ let inputValues = [
  
    // 5
    [false, "42", "42"],
@@ -359,48 +364,55 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
    [false, "true", "true"],
  
    // 11
-   [false, "document.getElementById", "function getElementById() {\n    [native code]\n}",
+-  [false, "document.getElementById", "function getElementById() {\n    [native code]\n}",
++  [true, "document.getElementById", "[object Function]",
      "function getElementById() {\n    [native code]\n}",
-     "function getElementById() {\n    [native code]\n}",
+-    "function getElementById() {\n    [native code]\n}",
 -    "document.wrappedJSObject.getElementById"],
-+    "document.getElementById"],
++    "[object Function]"],
  
    // 12
-   [false, "(function() { return 42; })", "function () { return 42; }",
-     "function () { return 42; }",
-     "(function () { return 42; })"],
+-  [false, "(function() { return 42; })", "function () { return 42; }",
+-    "function () { return 42; }",
+-    "(function () { return 42; })"],
++  [true, "(function() { return 42; })", "[object Function]",
++    "function () { return 42; }", "[object Function]"],
  
    // 13
-   [false, "new Date(" + dateNow + ")", (new Date(dateNow)).toString()],
+-  [false, "new Date(" + dateNow + ")", (new Date(dateNow)).toString()],
++  [true, "new Date(" + dateNow + ")", "[object Date]", (new Date(dateNow)).toString(), "[object Date]"],
  
    // 14
-   [true, "document.body", "[object HTMLBodyElement", "[object HTMLBodyElement",
-     "[object HTMLBodyElement",
+-  [true, "document.body", "[object HTMLBodyElement", "[object HTMLBodyElement",
+-    "[object HTMLBodyElement",
 -    "document.wrappedJSObject.body"],
-+    "document.body"],
++  [true, "document.body", "[object HTMLBodyElement]"],
  
    // 15
 -  [true, "window.location", TEST_URI],
-+  [true, "window.location", "[object Location]"],
++  [true, "window.location", "[object Location]", TEST_URI, "[object Location]"],
  
    // 16
 -  [true, "[1,2,3,'a','b','c','4','5']", '[1, 2, 3, "a", "b", "c", "4", "5"]',
 +  [true, "[1,2,3,'a','b','c','4','5']", '[object Array]',
      '1,2,3,a,b,c,4,5',
-     '[1, 2, 3, "a", "b", "c", "4", "5"]'],
+-    '[1, 2, 3, "a", "b", "c", "4", "5"]'],
++    "[object Array]"],
  
    // 17
 -  [true, "({a:'b', c:'d', e:1, f:'2'})", '({a:"b", c:"d", e:1, f:"2"})',
-+  [true, "({a:'b', c:'d', e:1, f:'2'})", '[object Object]',
-     "[object Object",
-     '({a:"b", c:"d", e:1, f:"2"})'],
+-    "[object Object",
+-    '({a:"b", c:"d", e:1, f:"2"})'],
++  [true, "({a:'b', c:'d', e:1, f:'2'})", "[object Object]"],
  
    // 18
    [false, "'" + longString + "'",
      '"' + initialString + "\"[\u2026]", initialString],
  ];
  
-@@ -149,36 +149,37 @@ function testGen() {
+ longString = null;
+ initialString = null;
+@@ -149,20 +143,17 @@ function testGen() {
      inputValues[cpos][4] : printOutput;
  
    let consoleTest = inputValues[cpos][5] || inputValue;
@@ -422,45 +434,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
        return HUD.outputNode.querySelector(".hud-log");
      },
      successFn: subtestNext,
-     failureFn: testNext,
-   });
- 
-   yield;
-+  if (cpos == 9) {
-+    return;
-+  }
- 
-   let outputItem = HUD.outputNode.querySelector(".hud-log:last-child");
-   ok(outputItem,
-     "found the window.console output line for inputValues[" + cpos + "]");
-+  console.debug(outputItem.textContent, consoleOutput);
-   ok(outputItem.textContent.indexOf(consoleOutput) > -1,
-     "console API output is correct for inputValues[" + cpos + "]");
- 
-   HUD.jsterm.clearOutput();
- 
-   // Test jsterm print() output.
- 
-   HUD.jsterm.setInputValue("print(" + inputValue + ")");
-@@ -195,16 +196,17 @@ function testGen() {
-   });
- 
-   yield;
- 
-   outputItem = HUD.outputNode.querySelector(".webconsole-msg-output:" +
-                                             "last-child");
-   ok(outputItem,
-     "found the jsterm print() output line for inputValues[" + cpos + "]");
-+  console.debug(outputItem.textContent, printOutput);
-   ok(outputItem.textContent.indexOf(printOutput) > -1,
-     "jsterm print() output is correct for inputValues[" + cpos + "]");
- 
-   // Test jsterm execution output.
- 
-   HUD.jsterm.clearOutput();
-   HUD.jsterm.setInputValue(inputValue);
-   HUD.jsterm.execute();
-@@ -228,38 +230,42 @@ function testGen() {
+@@ -228,38 +219,38 @@ function testGen() {
      "jsterm output is correct for inputValues[" + cpos + "]");
  
    let messageBody = outputItem.querySelector(".webconsole-msg-body");
@@ -474,10 +448,6 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
 -    if (!label || label.indexOf(inputValue) == -1) {
 +  let propertyPanelShown = function(aEvent, aView, aOptions) {
 +    if (aOptions.label.indexOf(expectedOutput) == -1) {
-+      //console.log(expectedOutput, aOptions.label);
-+      return;
-+    }
-+    if (cpos == 70) {
        return;
      }
  
@@ -510,7 +480,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
    EventUtils.sendMouseEvent({ type: "mousedown" }, messageBody, window);
    EventUtils.sendMouseEvent({ type: "click" }, messageBody, window);
  
-@@ -276,17 +282,17 @@ function testEnd() {
+@@ -276,17 +267,17 @@ function testEnd() {
    if (testEnded) {
      return;
    }
@@ -529,6 +499,205 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
        ok(false, "the property panel failed to show for inputValues[" + i + "]");
      }
    }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+@@ -25,86 +25,66 @@ function test() {
+     });
+   }, true);
+ }
+ 
+ function performTest() {
+   let hudId = HUDService.getHudIdByWindow(content);
+   let HUD = HUDService.hudReferences[hudId];
+ 
+-  HUD.jsterm.execute("document");
+-
+   let networkMessage = HUD.outputNode.querySelector(".webconsole-msg-network");
+   ok(networkMessage, "found network message");
+ 
+   let networkLink = networkMessage.querySelector(".webconsole-msg-link");
+   ok(networkLink, "found network message link");
+ 
+   let popupset = document.getElementById("mainPopupSet");
+   ok(popupset, "found #mainPopupSet");
+ 
+   let popupsShown = 0;
+   let hiddenPopups = 0;
+ 
+   let onpopupshown = function() {
++    document.removeEventListener("popupshown", onpopupshown, false);
+     popupsShown++;
+-    if (popupsShown == 2) {
+-      document.removeEventListener("popupshown", onpopupshown, false);
+ 
+-      executeSoon(function() {
+-        let popups = popupset.querySelectorAll("panel[hudId=" + hudId + "]");
+-        is(popups.length, 2, "found two popups");
++    executeSoon(function() {
++      let popups = popupset.querySelectorAll("panel[hudId=" + hudId + "]");
++      is(popups.length, 1, "found one popup");
+ 
+-        document.addEventListener("popuphidden", onpopuphidden, false);
++      document.addEventListener("popuphidden", onpopuphidden, false);
+ 
+-        registerCleanupFunction(function() {
+-          is(hiddenPopups, 2, "correct number of popups hidden");
+-          if (hiddenPopups != 2) {
+-            document.removeEventListener("popuphidden", onpopuphidden, false);
+-          }
+-        });
++      registerCleanupFunction(function() {
++        is(hiddenPopups, 1, "correct number of popups hidden");
++        if (hiddenPopups != 1) {
++          document.removeEventListener("popuphidden", onpopuphidden, false);
++        }
++      });
+ 
+-        executeSoon(closeConsole);
+-      });
+-    }
++      executeSoon(closeConsole);
++    });
+   };
+ 
+   let onpopuphidden = function() {
++    document.removeEventListener("popuphidden", onpopuphidden, false);
+     hiddenPopups++;
+-    if (hiddenPopups == 2) {
+-      document.removeEventListener("popuphidden", onpopuphidden, false);
+ 
+-      executeSoon(function() {
+-        let popups = popupset.querySelectorAll("panel[hudId=" + hudId + "]");
+-        is(popups.length, 0, "no popups found");
++    executeSoon(function() {
++      let popups = popupset.querySelectorAll("panel[hudId=" + hudId + "]");
++      is(popups.length, 0, "no popups found");
+ 
+-        executeSoon(finishTest);
+-      });
+-    }
++      executeSoon(finishTest);
++    });
+   };
+ 
+   document.addEventListener("popupshown", onpopupshown, false);
+ 
+   registerCleanupFunction(function() {
+-    is(popupsShown, 2, "correct number of popups shown");
+-    if (popupsShown != 2) {
++    is(popupsShown, 1, "correct number of popups shown");
++    if (popupsShown != 1) {
+       document.removeEventListener("popupshown", onpopupshown, false);
+     }
+   });
+ 
+-  waitForSuccess({
+-    name: "jsterm output message",
+-    validatorFn: function()
+-    {
+-      return HUD.outputNode.querySelector(".webconsole-msg-output");
+-    },
+-    successFn: function()
+-    {
+-      let jstermMessage = HUD.outputNode.querySelector(".webconsole-msg-output");
+-      EventUtils.sendMouseEvent({ type: "mousedown" }, jstermMessage, HUD.iframeWindow);
+-      EventUtils.sendMouseEvent({ type: "click" }, jstermMessage, HUD.iframeWindow);
+-      EventUtils.sendMouseEvent({ type: "mousedown" }, networkLink, HUD.iframeWindow);
+-      EventUtils.sendMouseEvent({ type: "mouseup" }, networkLink, HUD.iframeWindow);
+-      EventUtils.sendMouseEvent({ type: "click" }, networkLink, HUD.iframeWindow);
+-    },
+-    failureFn: finishTest,
+-  });
++  EventUtils.sendMouseEvent({ type: "mousedown" }, networkLink, HUD.iframeWindow);
++  EventUtils.sendMouseEvent({ type: "mouseup" }, networkLink, HUD.iframeWindow);
++  EventUtils.sendMouseEvent({ type: "click" }, networkLink, HUD.iframeWindow);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
+@@ -6,54 +6,46 @@ const TEST_URI = "http://example.com/bro
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+ }
+ 
+-function consoleOpened(HUD) {
+-  let jsterm = HUD.jsterm;
++function consoleOpened(hud) {
++  let doc = content.wrappedJSObject.document;
++
++  hud.jsterm.once("variablesview-updated", onViewUpdated.bind(null, hud));
++  hud.jsterm.openVariablesView({ rawObject: doc });
++}
++
++function onViewUpdated(hud, event, view)
++{
++  findVariableViewProperties(view, [{ name: /^(width|height)$/, dontMatch: 1 }]);
+ 
+   let doc = content.wrappedJSObject.document;
+-
+-  let panel = jsterm.openPropertyPanel({ data: { object: doc }});
+-
+-  let view = panel.treeView;
+-  let find = function(regex) {
+-    for (let i = 0; i < view.rowCount; i++) {
+-      if (regex.test(view.getCellText(i))) {
+-        return true;
+-      }
+-    }
+-    return false;
+-  };
+-
+-  ok(!find(/^(width|height):/), "no document.width/height");
+-
+-  panel.destroy();
+-
+   let getterValue = doc.foobar._val;
+ 
+-  panel = jsterm.openPropertyPanel({ data: { object: doc.foobar }});
+-  view = panel.treeView;
++  function onSecondUpdate(event, view) {
++    is(getterValue, doc.foobar._val, "getter did not execute");
++    is(getterValue+1, doc.foobar.val, "getter executed");
++    is(getterValue+1, doc.foobar._val, "getter executed (recheck)");
+ 
+-  is(getterValue, doc.foobar._val, "getter did not execute");
+-  is(getterValue+1, doc.foobar.val, "getter executed");
+-  is(getterValue+1, doc.foobar._val, "getter executed (recheck)");
++    findVariableViewProperties(view, [
++      { name: "_val", value: getterValue },
++      { name: "val", isGetter: true },
++    ]);
+ 
+-  ok(find(/^val: Getter$/),
+-     "getter is properly displayed");
++    executeSoon(function() {
++      let textContent = hud.outputNode.textContent;
++      is(textContent.indexOf("document.body.client"), -1,
++         "no document.width/height warning displayed");
+ 
+-  ok(find(new RegExp("^_val: " + getterValue + "$")),
+-     "getter _val is properly displayed");
+-
+-  panel.destroy();
++      finishTest();
++    });
++  }
+ 
+   executeSoon(function() {
+-    let textContent = HUD.outputNode.textContent;
+-    is(textContent.indexOf("document.body.client"), -1,
+-       "no document.width/height warning displayed");
+-
+-    finishTest();
++    hud.jsterm.once("variablesview-updated", onSecondUpdate);
++    hud.jsterm.openVariablesView({ rawObject: doc.foobar });
+   });
+ }
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
@@ -553,7 +722,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *
   * @param nsIDOMElement [aTab]
   *        Optional tab element for which you want close the Web Console. The
-@@ -310,8 +312,41 @@ function waitForSuccess(aOptions)
+@@ -310,8 +312,82 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -563,36 +732,77 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
    });
  }
 +
-+function findVariableViewProperties(aView, aProperties)
++function findVariableViewProperties(aView, aRules)
 +{
++  function matchRule(aProp, aRule) {
++    let nameMatched = true;
++    if (aRule.name) {
++      let match = aRule.name instanceof RegExp ?
++                  aRule.name.test(aProp._nameString) :
++                  aProp._nameString == aRule.name;
++      if (!match) {
++        return false;
++      }
++    }
++
++    if (aRule.value) {
++      let valueString = aProp._valueString;
++      if (aProp._valueClassName == "token-string") {
++        valueString = valueString.substring(1, valueString.length - 1);
++      }
++
++      let match = aRule.value instanceof RegExp ?
++                  aRule.value.test(valueString) :
++                  valueString == aRule.value;
++      if (!match) {
++        return false;
++      }
++    }
++
++    if (aRule.isGetter && (!aProp.getter || !aProp.get("get"))) {
++      return false;
++    }
++
++    return true;
++  }
++
 +  function finder(aVar) {
 +    //console.debug("finder", aVar);
-+    for (let [id, item] of aVar._store) {
-+      for (let prop of aProperties) {
++    for (let [id, prop] of aVar._store) {
++      for (let rule of aRules) {
 +        //console.debug(item._nameString, item._valueString, prop);
 +        //console.debug(item._nameString == prop.name, item._valueString == prop.value);
-+        let valueString = item._valueString;
-+        if (item._valueClassName == "token-string") {
-+          valueString = valueString.substring(1, valueString.length - 1);
-+        }
-+        if (item._nameString == prop.name &&
-+            valueString == prop.value) {
-+          aProperties.splice(aProperties.indexOf(prop), 1);
-+          ok(true, "found property " + prop.name);
++        let matched = matchRule(prop, rule);
++        if (matched) {
++          if (!rule.dontMatch) {
++            aRules.splice(aRules.indexOf(rule), 1);
++            ok(true, "rule " + rule.name + " matched for property " + prop.name);
++          }
++          else if (rule.dontMatch) {
++            ok(false, "rule " + rule.name + " should not match property " +
++                      prop.name);
++          }
 +        }
 +      }
-+      if (aProperties.length > 0) {
-+        finder(item);
++
++      if (aRules.length > 0) {
++        finder(prop);
 +      }
 +    }
 +  }
++
 +  finder(aView);
-+  is(aProperties.length, 0, "all properties found");
-+  if (aProperties.length) {
-+    let notFound = aProperties.map(function(aProp) {
-+      return aProp.name;
-+    });
-+    info("properties not found: " + notFound.join(", "));
++
++  let notFound = [];
++  aRules.forEach(function(aRule) {
++    if (!aRule.dontMatch) {
++      notFound.push(aRule.name);
++    }
++  });
++
++  is(notFound.length, 0, "all variables view rules matched");
++  if (notFound.length) {
++    info("rules that did not match: " + notFound.join(", "));
 +  }
 +}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
@@ -657,7 +867,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -983,55 +991,42 @@ WebConsoleFrame.prototype = {
+@@ -945,55 +953,42 @@ WebConsoleFrame.prototype = {
    logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
    {
      let body = null;
@@ -721,7 +931,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let functionName = aMessage.functionName ||
                             l10n.getStr("stacktrace.anonymousFunction");
  
-@@ -1051,16 +1046,22 @@ WebConsoleFrame.prototype = {
+@@ -1013,16 +1008,22 @@ WebConsoleFrame.prototype = {
        }
  
        case "group":
@@ -744,7 +954,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          if (timer.error) {
            Cu.reportError(l10n.getStr(timer.error));
            return;
-@@ -1089,64 +1090,44 @@ WebConsoleFrame.prototype = {
+@@ -1051,64 +1052,44 @@ WebConsoleFrame.prototype = {
      // we ignore their arguments.
      switch (level) {
        case "group":
@@ -815,7 +1025,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * the window.console API call.
     *
     * @param object aMessage
-@@ -1157,59 +1138,29 @@ WebConsoleFrame.prototype = {
+@@ -1119,59 +1100,29 @@ WebConsoleFrame.prototype = {
      this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage]);
    },
  
@@ -879,7 +1089,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1948,19 +1899,21 @@ WebConsoleFrame.prototype = {
+@@ -1899,19 +1850,21 @@ WebConsoleFrame.prototype = {
     *
     * @private
     * @param array aItem
@@ -904,7 +1114,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          connectionId = args[0];
        }
        else if (typeof methodOrNode != "function") {
-@@ -1968,40 +1921,23 @@ WebConsoleFrame.prototype = {
+@@ -1919,40 +1872,23 @@ WebConsoleFrame.prototype = {
        }
        if (connectionId && connectionId in this._networkRequests) {
          delete this._networkRequests[connectionId];
@@ -947,7 +1157,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * category's line limit by removing old messages as needed.
     *
     * @param integer aCategory
-@@ -2019,64 +1955,51 @@ WebConsoleFrame.prototype = {
+@@ -1970,60 +1906,47 @@ WebConsoleFrame.prototype = {
      let n = Math.max(0, messageNodes.length - logLimit);
      let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
      toRemove.forEach(this.removeOutputMessage, this);
@@ -994,12 +1204,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
  
      if (aNode.classList.contains("webconsole-msg-cssparser")) {
-       let desc = aNode.childNodes[2].textContent;
-       let location = "";
-       if (aNode.childNodes[4]) {
-         location = aNode.childNodes[4].getAttribute("title");
-       }
-       delete this._cssNodes[desc + location];
+       let repeatNode = aNode.getElementsByClassName("webconsole-msg-repeat")[0];
+       delete this._cssNodes[repeatNode._uid];
      }
      else if (aNode._connectionId &&
               aNode.classList.contains("webconsole-msg-network")) {
@@ -1024,7 +1230,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2175,17 +2098,17 @@ WebConsoleFrame.prototype = {
+@@ -2122,17 +2045,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -1043,7 +1249,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2220,52 +2143,37 @@ WebConsoleFrame.prototype = {
+@@ -2169,52 +2092,37 @@ WebConsoleFrame.prototype = {
      node.clipboardText = aClipboardText;
      node.classList.add("hud-msg-node");
  
@@ -1111,7 +1317,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2303,53 +2211,46 @@ WebConsoleFrame.prototype = {
+@@ -2252,53 +2160,46 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -1173,7 +1379,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Click event handler for the ellipsis shown immediately after a long string.
     * This method retrieves the full string and updates the console output to
-@@ -2720,26 +2621,62 @@ function JSTerm(aWebConsoleFrame)
+@@ -2669,26 +2570,62 @@ function JSTerm(aWebConsoleFrame)
    this.hudId = this.hud.hudId;
  
    this.lastCompletion = { value: null };
@@ -1236,7 +1442,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * History of code that was executed.
     * @type array
-@@ -2778,16 +2715,18 @@ JSTerm.prototype = {
+@@ -2727,16 +2664,18 @@ JSTerm.prototype = {
  
      let doc = this.hud.document;
      this.completeNode = doc.querySelector(".jsterm-complete-node");
@@ -1255,7 +1461,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement [aAfterNode]
-@@ -2800,33 +2739,47 @@ JSTerm.prototype = {
+@@ -2749,33 +2688,47 @@ JSTerm.prototype = {
     *        The message received from the server.
     */
    _executeResultCallback:
@@ -1310,7 +1516,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            catch (ex) {
              errorMessage = helperResult.message;
            }
-@@ -2865,48 +2818,40 @@ JSTerm.prototype = {
+@@ -2814,48 +2767,40 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -1375,7 +1581,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2927,81 +2872,519 @@ JSTerm.prototype = {
+@@ -2876,81 +2821,519 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -1943,7 +2149,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3617,171 +4000,48 @@ JSTerm.prototype = {
+@@ -3566,171 +3949,48 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces

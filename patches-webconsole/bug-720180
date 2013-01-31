@@ -1,0 +1,433 @@
+# HG changeset patch
+# Parent d93c0bfbe74376daf6b04e16fecfe679f01acc62
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1359652746 -7200
+Bug 720180 - console.log('foo'); console.error('foo'); should not be considered as a repeat
+
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -109,16 +109,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_bug664688_sandbox_update_after_navigation.js \
+ 	browser_result_format_as_string.js \
+ 	browser_webconsole_bug_737873_mixedcontent.js \
+ 	browser_output_breaks_after_console_dir_uninspectable.js \
+ 	browser_console_log_inspectable_object.js \
+ 	browser_bug_638949_copy_link_location.js \
+ 	browser_output_longstring_expand.js \
+ 	browser_netpanel_longstring_expand.js \
++	browser_repeated_messages_accuracy.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+         browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+@@ -197,11 +198,12 @@ MOCHITEST_BROWSER_FILES += \
+ 	test-webconsole-error-observer.html \
+ 	test-for-of.html \
+ 	test_bug_770099_violation.html \
+ 	test_bug_770099_violation.html^headers^ \
+ 	test_bug_770099_bad_policy_uri.html \
+ 	test_bug_770099_bad_policy_uri.html^headers^ \
+ 	test-result-format-as-string.html \
+ 	test-bug-737873-mixedcontent.html \
++	test-repeated-messages.html \
+ 	$(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js b/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js
+@@ -0,0 +1,109 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Tests that makes sure messages are not considered repeated when coming from
++// different lines of code, or from different severities, etc.
++// See bugs 720180 and 800510.
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-repeated-messages.html";
++
++function test() {
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function consoleOpened(hud) {
++  // Check that css warnings are not coalesced if they come from different lines.
++  waitForSuccess({
++    name: "css warnings displayed",
++    validatorFn: function()
++    {
++      return hud.outputNode.querySelectorAll(".webconsole-msg-cssparser")
++             .length == 2;
++    },
++    successFn: testCSSRepeats.bind(null, hud),
++    failureFn: finishTest,
++  });
++}
++
++function repeatCountForNode(aNode) {
++  return aNode.querySelector(".webconsole-msg-repeat").getAttribute("value");
++}
++
++function testCSSRepeats(hud) {
++  let msgs = hud.outputNode.querySelectorAll(".webconsole-msg-cssparser");
++  is(repeatCountForNode(msgs[0]), 1, "no repeats for the first css warning");
++  is(repeatCountForNode(msgs[1]), 1, "no repeats for the second css warning");
++
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    testAfterReload(hud);
++  }, true);
++  content.location.reload();
++}
++
++function testAfterReload(hud) {
++  waitForSuccess({
++    name: "message repeats increased",
++    validatorFn: function()
++    {
++      return hud.outputNode.querySelector(".webconsole-msg-repeat")
++             .getAttribute("value") == 2;
++    },
++    successFn: testCSSRepeatsAfterReload.bind(null, hud),
++    failureFn: finishTest,
++  });
++}
++
++function testCSSRepeatsAfterReload(hud) {
++  let msgs = hud.outputNode.querySelectorAll(".webconsole-msg-cssparser");
++  is(msgs.length, 2, "two css warnings after reload");
++  is(repeatCountForNode(msgs[0]), 2, "two repeats for the first css warning");
++  is(repeatCountForNode(msgs[1]), 2, "two repeats for the second css warning");
++
++  hud.jsterm.clearOutput();
++  content.wrappedJSObject.testConsole();
++
++  waitForSuccess({
++    name: "console API messages displayed",
++    validatorFn: function()
++    {
++      return hud.outputNode.querySelectorAll(".webconsole-msg-console")
++             .length == 3;
++    },
++    successFn: testConsoleRepeats.bind(null, hud),
++    failureFn: finishTest,
++  });
++}
++
++function testConsoleRepeats(hud) {
++  let msgs = hud.outputNode.querySelectorAll(".webconsole-msg-console");
++  is(repeatCountForNode(msgs[0]), 2, "repeats for the first console message");
++  is(repeatCountForNode(msgs[1]), 1,
++     "no repeats for the second console log message");
++  is(repeatCountForNode(msgs[2]), 1, "no repeats for the console.error message");
++
++  hud.jsterm.clearOutput();
++  hud.jsterm.execute("undefined");
++  content.console.log("undefined");
++
++  waitForSuccess({
++    name: "messages displayed",
++    validatorFn: function()
++    {
++      return hud.outputNode.querySelector(".webconsole-msg-console");
++    },
++    successFn: function() {
++      is(hud.outputNode.childNodes.length, 3,
++         "correct number of messages displayed");
++      executeSoon(finishTest);
++    },
++    failureFn: finishTest,
++  });
++}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js b/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
+@@ -50,28 +50,39 @@ function testCSSPruning(hudRef) {
+   let waitForNoRepeatedNodes = {
+     name:  "number of nodes is LOG_LIMIT",
+     validatorFn: function()
+     {
+       return countMessageNodes() == LOG_LIMIT;
+     },
+     successFn: function()
+     {
+-      ok(!hudRef.ui._cssNodes["css log x"],
++      is(Object.keys(hudRef.ui._cssNodes).length, LOG_LIMIT,
+          "repeated nodes pruned from cssNodes");
++
++      let msg = hudRef.outputNode.querySelector(".webconsole-msg-cssparser " +
++                                                ".webconsole-msg-repeat");
++      is(msg.getAttribute("value"), 1,
++         "repeated nodes pruned from cssNodes (confirmed)");
++
+       finishTest();
+     },
+     failureFn: finishTest,
+   };
+ 
+   waitForSuccess({
+     name: "repeated nodes in cssNodes",
+     validatorFn: function()
+     {
+-      return hudRef.ui._cssNodes["css log x"];
++      let msg = hudRef.outputNode.querySelector(".webconsole-msg-cssparser " +
++                                                ".webconsole-msg-repeat");
++      if (msg) {
++        console.debug(msg, msg.getAttribute("value"));
++      }
++      return msg && msg.getAttribute("value") == 5;
+     },
+     successFn: function()
+     {
+       populateConsole(hudRef);
+       waitForSuccess(waitForNoRepeatedNodes);
+     },
+     failureFn: finishTest,
+   });
+diff --git a/browser/devtools/webconsole/test/test-repeated-messages.html b/browser/devtools/webconsole/test/test-repeated-messages.html
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/test-repeated-messages.html
+@@ -0,0 +1,29 @@
++<!DOCTYPE HTML>
++<html dir="ltr" xml:lang="en-US" lang="en-US">
++  <head>
++    <meta charset="utf8">
++    <title>Test for bugs 720180 and 800510</title>
++    <script>
++      function testConsole() {
++        console.log("foo repeat"); console.log("foo repeat");
++        console.log("foo repeat"); console.error("foo repeat");
++      }
++    </script>
++    <style>
++      body {
++        background-image: foobarz;
++      }
++      p {
++        background-image: foobarz;
++      }
++    </style>
++    <!--
++    - Any copyright is dedicated to the Public Domain.
++    - http://creativecommons.org/publicdomain/zero/1.0/
++    -->
++  </head>
++  <body>
++    <p>Hello world!</p>
++  </body>
++</html>
++
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -862,93 +862,55 @@ WebConsoleFrame.prototype = {
+       return; // no repeat node, return early.
+     }
+ 
+     let occurrences = parseInt(repeatNode.getAttribute("value")) + 1;
+     repeatNode.setAttribute("value", occurrences);
+   },
+ 
+   /**
+-   * Filter the css node from the output node if it is a repeat. CSS messages
+-   * are merged with previous messages if they occurred in the past.
++   * Filter the message node from the output if it is a repeat.
+    *
++   * @private
+    * @param nsIDOMNode aNode
+    *        The message node to be filtered or not.
+    * @returns boolean
+    *          True if the message is filtered, false otherwise.
+    */
+-  filterRepeatedCSS: function WCF_filterRepeatedCSS(aNode)
++  _filterRepeatedMessage: function WCF__filterRepeatedMessage(aNode)
+   {
+-    // childNodes[2] is the description node containing the text of the message.
+-    let description = aNode.childNodes[2].textContent;
+-    let location;
+-
+-    // childNodes[4] represents the location (source URL) of the error message.
+-    // The full source URL is stored in the title attribute.
+-    if (aNode.childNodes[4]) {
+-      // browser_webconsole_bug_595934_message_categories.js
+-      location = aNode.childNodes[4].getAttribute("title");
++    let repeatNode = aNode.getElementsByClassName("webconsole-msg-repeat")[0];
++    let uid = repeatNode._uid;
++    let dupeNode = null;
++
++    if (aNode.classList.contains("webconsole-msg-cssparser")) {
++      dupeNode = this._cssNodes[uid];
++      if (!dupeNode) {
++        this._cssNodes[uid] = aNode;
++      }
+     }
+-    else {
+-      location = "";
++    else if (!aNode.classList.contains("webconsole-msg-network") &&
++             !aNode.classList.contains("webconsole-msg-inspector") &&
++             (aNode.classList.contains("webconsole-msg-console") ||
++              aNode.classList.contains("webconsole-msg-exception") ||
++              aNode.classList.contains("webconsole-msg-error"))) {
++      let lastMessage = this.outputNode.lastChild;
++      if (!lastMessage) {
++        return false;
++      }
++
++      let lastRepeatNode = lastMessage
++                           .getElementsByClassName("webconsole-msg-repeat")[0];
++      if (lastRepeatNode._uid == uid) {
++        dupeNode = lastMessage;
++      }
+     }
+ 
+-    let dupe = this._cssNodes[description + location];
+-    if (!dupe) {
+-      // no matching nodes
+-      this._cssNodes[description + location] = aNode;
+-      return false;
+-    }
+-
+-    this.mergeFilteredMessageNode(dupe, aNode);
+-
+-    return true;
+-  },
+-
+-  /**
+-   * Filter the console node from the output node if it is a repeat. Console
+-   * messages are filtered from the output if they match the immediately
+-   * preceding message that came from the same source. The output node's
+-   * last occurrence should have its timestamp updated.
+-   *
+-   * @param nsIDOMNode aNode
+-   *        The message node to be filtered or not.
+-   * @return boolean
+-   *         True if the message is filtered, false otherwise.
+-   */
+-  filterRepeatedConsole: function WCF_filterRepeatedConsole(aNode)
+-  {
+-    let lastMessage = this.outputNode.lastChild;
+-
+-    if (!lastMessage) {
+-      return false;
+-    }
+-
+-    let body = aNode.querySelector(".webconsole-msg-body");
+-    let lastBody = lastMessage.querySelector(".webconsole-msg-body");
+-
+-    if (aNode.classList.contains("webconsole-msg-inspector")) {
+-      return false;
+-    }
+-
+-    if (!body || !lastBody) {
+-      return false;
+-    }
+-
+-    if (body.textContent == lastBody.textContent) {
+-      let loc = aNode.querySelector(".webconsole-location");
+-      let lastLoc = lastMessage.querySelector(".webconsole-location");
+-
+-      if (loc && lastLoc) {
+-        if (loc.getAttribute("value") !== lastLoc.getAttribute("value")) {
+-          return false;
+-        }
+-      }
+-
+-      this.mergeFilteredMessageNode(lastMessage, aNode);
++    if (dupeNode) {
++      this.mergeFilteredMessageNode(dupeNode, aNode);
+       return true;
+     }
+ 
+     return false;
+   },
+ 
+   /**
+    * Display cached messages that may have been collected before the UI is
+@@ -1875,28 +1837,17 @@ WebConsoleFrame.prototype = {
+ 
+     let afterNode = node._outputAfterNode;
+     if (afterNode) {
+       delete node._outputAfterNode;
+     }
+ 
+     let isFiltered = this.filterMessageNode(node);
+ 
+-    let isRepeated = false;
+-    if (node.classList.contains("webconsole-msg-cssparser")) {
+-      isRepeated = this.filterRepeatedCSS(node);
+-    }
+-
+-    if (!isRepeated &&
+-        !node.classList.contains("webconsole-msg-network") &&
+-        (node.classList.contains("webconsole-msg-console") ||
+-         node.classList.contains("webconsole-msg-exception") ||
+-         node.classList.contains("webconsole-msg-error"))) {
+-      isRepeated = this.filterRepeatedConsole(node);
+-    }
++    let isRepeated = this._filterRepeatedMessage(node);
+ 
+     let lastVisible = !isRepeated && !isFiltered;
+     if (!isRepeated) {
+       this.outputNode.insertBefore(node,
+                                    afterNode ? afterNode.nextSibling : null);
+       this._pruneCategoriesQueue[node.category] = true;
+       if (afterNode) {
+         lastVisible = this.outputNode.lastChild == node;
+@@ -2061,22 +2012,18 @@ WebConsoleFrame.prototype = {
+    */
+   removeOutputMessage: function WCF_removeOutputMessage(aNode)
+   {
+     if (aNode._objectActors && !aNode._panelOpen) {
+       aNode._objectActors.forEach(this._releaseObject, this);
+     }
+ 
+     if (aNode.classList.contains("webconsole-msg-cssparser")) {
+-      let desc = aNode.childNodes[2].textContent;
+-      let location = "";
+-      if (aNode.childNodes[4]) {
+-        location = aNode.childNodes[4].getAttribute("title");
+-      }
+-      delete this._cssNodes[desc + location];
++      let repeatNode = aNode.getElementsByClassName("webconsole-msg-repeat")[0];
++      delete this._cssNodes[repeatNode._uid];
+     }
+     else if (aNode._connectionId &&
+              aNode.classList.contains("webconsole-msg-network")) {
+       delete this._networkRequests[aNode._connectionId];
+       this._releaseObject(aNode._connectionId);
+     }
+     else if (aNode.classList.contains("webconsole-msg-inspector")) {
+       this.pruneConsoleDirNode(aNode);
+@@ -2205,16 +2152,18 @@ WebConsoleFrame.prototype = {
+       }
+     }
+ 
+     let repeatContainer = this.document.createElementNS(XUL_NS, "hbox");
+     repeatContainer.setAttribute("align", "start");
+     let repeatNode = this.document.createElementNS(XUL_NS, "label");
+     repeatNode.setAttribute("value", "1");
+     repeatNode.classList.add("webconsole-msg-repeat");
++    repeatNode._uid = [bodyNode.textContent, aCategory, aSeverity, aLevel,
++                       aSourceURL, aSourceLine].join(":");
+     repeatContainer.appendChild(repeatNode);
+ 
+     // Create the timestamp.
+     let timestampNode = this.document.createElementNS(XUL_NS, "label");
+     timestampNode.classList.add("webconsole-timestamp");
+     let timestamp = aTimeStamp || Date.now();
+     let timestampString = l10n.timestampString(timestamp);
+     timestampNode.setAttribute("value", timestampString);
