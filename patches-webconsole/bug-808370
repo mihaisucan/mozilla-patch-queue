@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent 2f4c30a4f7c008067240b3f00ba9208c7f3f1354
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1359667011 -7200
+# Date 1359753598 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -157,7 +157,30 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
   *        The view to contain this scope.
   * @param string aName
   *        The scope's name.
-@@ -1589,16 +1601,21 @@ create({ constructor: Variable, proto: S
+@@ -928,16 +940,22 @@ Scope.prototype = {
+ 
+   /**
+    * Gets the name associated with this item.
+    * @return string
+    */
+   get name() this._nameString,
+ 
+   /**
++   * Gets the displayed value for this item.
++   * @return string
++   */
++  get displayValue() this._valueString,
++
++  /**
+    * Gets the element associated with this item.
+    * @return nsIDOMNode
+    */
+   get target() this._target,
+ 
+   /**
+    * Initializes this scope's id, view and binds event listeners.
+    *
+@@ -1589,16 +1607,21 @@ create({ constructor: Variable, proto: S
      let isUndefined = VariablesView.isUndefined(descriptor);
  
      if (isPrimitive || isUndefined) {
@@ -224,7 +247,35 @@ new file mode 100644
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
 +++ b/browser/devtools/webconsole/test/Makefile.in
-@@ -47,18 +47,16 @@ MOCHITEST_BROWSER_FILES = \
+@@ -6,17 +6,16 @@ DEPTH			= @DEPTH@
+ topsrcdir	= @top_srcdir@
+ srcdir		= @srcdir@
+ VPATH			= @srcdir@
+ relativesrcdir  = @relativesrcdir@
+ 
+ include $(DEPTH)/config/autoconf.mk
+ 
+ MOCHITEST_BROWSER_FILES = \
+-	browser_webconsole_notifications.js \
+ 	browser_webconsole_message_node_id.js \
+ 	browser_webconsole_bug_580030_errors_after_page_reload.js \
+ 	browser_webconsole_basic_net_logging.js \
+ 	browser_webconsole_bug_579412_input_focus.js \
+ 	browser_webconsole_bug_580001_closing_after_completion.js \
+ 	browser_webconsole_bug_580400_groups.js \
+ 	browser_webconsole_bug_588730_text_node_insertion.js \
+ 	browser_webconsole_bug_601667_filter_buttons.js \
+@@ -37,28 +36,25 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js \
+ 	browser_webconsole_bug_586388_select_all.js  \
+ 	browser_webconsole_bug_588967_input_expansion.js \
+ 	browser_webconsole_log_node_classes.js \
+ 	browser_webconsole_network_panel.js \
+ 	browser_webconsole_jsterm.js \
+ 	browser_webconsole_null_and_undefined_output.js \
+ 	browser_webconsole_output_order.js \
+-	browser_webconsole_property_panel.js \
+ 	browser_webconsole_property_provider.js \
  	browser_webconsole_bug_587617_output_copy.js \
  	browser_webconsole_bug_585237_line_limit.js \
  	browser_webconsole_bug_582201_duplicate_errors.js \
@@ -246,7 +297,7 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
 diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 --- a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 +++ b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
-@@ -31,27 +31,30 @@ function performTest(hud)
+@@ -31,27 +31,28 @@ function performTest(hud)
      },
      successFn: function()
      {
@@ -267,14 +318,13 @@ diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_ob
  
 -        isnot(aEvent.target.label.indexOf("omgBug676722"), -1,
 -           "object inspector opened on click");
+-
+-        executeSoon(finishTest);
+-      });
 +          findVariableViewProperties(aVar, [{
 +            name: "abba",
 +            value: "omgBug676722",
-+          }]);
- 
--        executeSoon(finishTest);
--      });
-+          executeSoon(finishTest);
++          }], { webconsole: hud }).then(finishTest);
 +        });
  
        executeSoon(function() {
@@ -315,6 +365,30 @@ diff --git a/browser/devtools/webconsole/test/browser_output_breaks_after_consol
        ok(hud.outputNode.querySelector(".webconsole-msg-inspector"),
           "the console.dir() tree shows");
  
+diff --git a/browser/devtools/webconsole/test/browser_result_format_as_string.js b/browser/devtools/webconsole/test/browser_result_format_as_string.js
+--- a/browser/devtools/webconsole/test/browser_result_format_as_string.js
++++ b/browser/devtools/webconsole/test/browser_result_format_as_string.js
+@@ -32,18 +32,18 @@ function performTest(hud)
+     successFn: function()
+     {
+       is(hud.outputNode.textContent.indexOf("bug772506_content"), -1,
+             "no content element found");
+       ok(!hud.outputNode.querySelector("div"), "no div element found");
+ 
+       let msg = hud.outputNode.querySelector(".webconsole-msg-output");
+       ok(msg, "eval output node found");
+-      isnot(msg.textContent.indexOf("HTMLDivElement"), -1,
+-            "HTMLDivElement string found");
++      is(msg.textContent.indexOf("HTMLDivElement"), -1,
++         "HTMLDivElement string not displayed");
+       EventUtils.synthesizeMouseAtCenter(msg, {type: "mousemove"});
+       ok(!gBrowser._bug772506, "no content variable");
+ 
+       finishTest();
+     },
+     failureFn: finishTest,
+   });
+ }
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
@@ -616,7 +690,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_clos
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
-@@ -6,54 +6,46 @@ const TEST_URI = "http://example.com/bro
+@@ -6,54 +6,47 @@ const TEST_URI = "http://example.com/bro
  function test() {
    addTab(TEST_URI);
    browser.addEventListener("load", function onLoad() {
@@ -627,21 +701,17 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_gett
  
 -function consoleOpened(HUD) {
 -  let jsterm = HUD.jsterm;
+-
 +function consoleOpened(hud) {
-+  let doc = content.wrappedJSObject.document;
-+
-+  hud.jsterm.once("variablesview-updated", onViewUpdated.bind(null, hud));
-+  hud.jsterm.openVariablesView({ rawObject: doc });
-+}
-+
-+function onViewUpdated(hud, event, view)
-+{
-+  findVariableViewProperties(view, [{ name: /^(width|height)$/, dontMatch: 1 }]);
- 
    let doc = content.wrappedJSObject.document;
--
+ 
 -  let panel = jsterm.openPropertyPanel({ data: { object: doc }});
--
++  executeSoon(function() {
++    let onOpen = onViewOpened.bind(null, hud);
++    hud.jsterm.openVariablesView({ rawObject: doc }).then(onOpen);
++  });
++}
+ 
 -  let view = panel.treeView;
 -  let find = function(regex) {
 -    for (let i = 0; i < view.rowCount; i++) {
@@ -656,11 +726,14 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_gett
 -
 -  panel.destroy();
 -
++function onViewOpened(hud, view)
++{
++  let doc = content.wrappedJSObject.document;
    let getterValue = doc.foobar._val;
  
 -  panel = jsterm.openPropertyPanel({ data: { object: doc.foobar }});
 -  view = panel.treeView;
-+  function onSecondUpdate(event, view) {
++  function onSecondOpen(view) {
 +    is(getterValue, doc.foobar._val, "getter did not execute");
 +    is(getterValue+1, doc.foobar.val, "getter executed");
 +    is(getterValue+1, doc.foobar._val, "getter executed (recheck)");
@@ -671,20 +744,19 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_gett
 +    findVariableViewProperties(view, [
 +      { name: "_val", value: getterValue },
 +      { name: "val", isGetter: true },
-+    ]);
- 
--  ok(find(/^val: Getter$/),
--     "getter is properly displayed");
-+    executeSoon(function() {
++    ], { webconsole: hud }).then(function() {
 +      let textContent = hud.outputNode.textContent;
 +      is(textContent.indexOf("document.body.client"), -1,
 +         "no document.width/height warning displayed");
  
+-  ok(find(/^val: Getter$/),
+-     "getter is properly displayed");
+-
 -  ok(find(new RegExp("^_val: " + getterValue + "$")),
 -     "getter _val is properly displayed");
 -
 -  panel.destroy();
-+      finishTest();
++      executeSoon(finishTest);
 +    });
 +  }
  
@@ -694,14 +766,402 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_gett
 -       "no document.width/height warning displayed");
 -
 -    finishTest();
-+    hud.jsterm.once("variablesview-updated", onSecondUpdate);
-+    hud.jsterm.openVariablesView({ rawObject: doc.foobar });
++    findVariableViewProperties(view, [
++      { name: /^(width|height)$/, dontMatch: 1 }
++    ], { webconsole: hud }).then(function() {
++      hud.jsterm.openVariablesView({ rawObject: doc.foobar }).then(onSecondOpen);
++    });
    });
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+@@ -21,104 +21,78 @@ function consoleOpened(HUD) {
+   tmp = null;
+ 
+   let jsterm = HUD.jsterm;
+   let win = content.wrappedJSObject;
+ 
+   // Make sure autocomplete does not walk through iterators and generators.
+   let result = win.gen1.next();
+   let completion = JSPropertyProvider(win, "gen1.");
+-  is(completion, null, "no matchees for gen1");
++  is(completion, null, "no matches for gen1");
+   ok(!WCU.isObjectInspectable(win.gen1),
+      "gen1 is not inspectable");
+ 
+   is(result+1, win.gen1.next(), "gen1.next() did not execute");
+ 
+   result = win.gen2.next();
+ 
+   completion = JSPropertyProvider(win, "gen2.");
+-  is(completion, null, "no matchees for gen2");
++  is(completion, null, "no matches for gen2");
+   ok(!WCU.isObjectInspectable(win.gen2),
+      "gen2 is not inspectable");
+ 
+   is((result/2+1)*2, win.gen2.next(),
+      "gen2.next() did not execute");
+ 
+   result = win.iter1.next();
+   is(result[0], "foo", "iter1.next() [0] is correct");
+   is(result[1], "bar", "iter1.next() [1] is correct");
+ 
+   completion = JSPropertyProvider(win, "iter1.");
+-  is(completion, null, "no matchees for iter1");
++  is(completion, null, "no matches for iter1");
+   ok(!WCU.isObjectInspectable(win.iter1),
+      "iter1 is not inspectable");
+ 
+   result = win.iter1.next();
+   is(result[0], "baz", "iter1.next() [0] is correct");
+   is(result[1], "baaz", "iter1.next() [1] is correct");
+ 
+   completion = JSPropertyProvider(content, "iter2.");
+-  is(completion, null, "no matchees for iter2");
++  is(completion, null, "no matches for iter2");
+   ok(!WCU.isObjectInspectable(win.iter2),
+      "iter2 is not inspectable");
+ 
+   completion = JSPropertyProvider(win, "window.");
+   ok(completion, "matches available for window");
+   ok(completion.matches.length, "matches available for window (length)");
+   ok(WCU.isObjectInspectable(win),
+      "window is inspectable");
+ 
+   jsterm.clearOutput();
+ 
+-  jsterm.setInputValue("window");
+-  jsterm.execute();
++  jsterm.execute("window");
+ 
+   waitForSuccess({
+     name: "jsterm window object output",
+     validatorFn: function()
+     {
+       return HUD.outputNode.querySelector(".webconsole-msg-output");
+     },
+     successFn: function()
+     {
+-      document.addEventListener("popupshown", function onShown(aEvent) {
+-        document.removeEventListener("popupshown", onShown, false);
+-        executeSoon(testPropertyPanel.bind(null, aEvent.target));
+-      }, false);
+-
++      jsterm.once("variablesview-fetched", testVariablesView.bind(null, HUD));
+       let node = HUD.outputNode.querySelector(".webconsole-msg-output");
+       EventUtils.synthesizeMouse(node, 2, 2, {}, HUD.iframeWindow);
+     },
+     failureFn: finishTest,
+   });
+ }
+ 
+-function testPropertyPanel(aPanel) {
+-  let tree = aPanel.querySelector("tree");
+-  let view = tree.view;
+-  let col = tree.columns[0];
+-  ok(view.rowCount, "Property Panel rowCount");
+-
+-  let find = function(display, children) {
+-    for (let i = 0; i < view.rowCount; i++) {
+-      if (view.isContainer(i) == children &&
+-          view.getCellText(i, col) == display) {
+-        return true;
+-      }
+-    }
+-
+-    return false;
+-  };
+-
+-  ok(find("gen1: Generator", false),
+-     "gen1 is correctly displayed in the Property Panel");
+-
+-  ok(find("gen2: Generator", false),
+-     "gen2 is correctly displayed in the Property Panel");
+-
+-  ok(find("iter1: Iterator", false),
+-     "iter1 is correctly displayed in the Property Panel");
+-
+-  ok(find("iter2: Object", false),
+-     "iter2 is correctly displayed in the Property Panel");
+-
+-  executeSoon(finishTest);
++function testVariablesView(aWebconsole, aEvent, aView) {
++  findVariableViewProperties(aView, [
++    { name: "gen1", isGenerator: true },
++    { name: "gen2", isGenerator: true },
++    { name: "iter1", isIterator: true },
++    { name: "iter2", isIterator: true },
++  ], { webconsole: aWebconsole }).then(function() {
++    executeSoon(finishTest);
++  });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+@@ -9,17 +9,17 @@
+ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console autocompletion bug in document.body");
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+ }
+ 
+-var gHUD;
++let gHUD;
+ 
+ function consoleOpened(aHud) {
+   gHUD = aHud;
+   let jsterm = gHUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+ 
+   let tmp = {};
+@@ -76,62 +76,33 @@ function autocompletePopupHidden()
+     failureFn: finishTest,
+   });
+ }
+ 
+ function testPropertyPanel()
+ {
+   let jsterm = gHUD.jsterm;
+   jsterm.clearOutput();
+-  jsterm.setInputValue("document");
+-  jsterm.execute();
++  jsterm.execute("document");
+ 
+   waitForSuccess({
+     name: "jsterm document object output",
+     validatorFn: function()
+     {
+       return gHUD.outputNode.querySelector(".webconsole-msg-output");
+     },
+     successFn: function()
+     {
+-      document.addEventListener("popupshown", function onShown(aEvent) {
+-        document.removeEventListener("popupshown", onShown, false);
+-        executeSoon(propertyPanelShown.bind(null, aEvent.target));
+-      }, false);
+-
++      jsterm.once("variablesview-fetched", onVariablesViewReady);
+       let node = gHUD.outputNode.querySelector(".webconsole-msg-output");
+       EventUtils.synthesizeMouse(node, 2, 2, {}, gHUD.iframeWindow);
+     },
+     failureFn: finishTest,
+   });
+ }
+ 
+-function propertyPanelShown(aPanel)
++function onVariablesViewReady(aEvent, aView)
+ {
+-  let tree = aPanel.querySelector("tree");
+-  let view = tree.view;
+-  let col = tree.columns[0];
+-  ok(view.rowCount, "Property Panel rowCount");
+-
+-  let foundBody = false;
+-  let propPanelProps = [];
+-  for (let idx = 0; idx < view.rowCount; ++idx) {
+-    let text = view.getCellText(idx, col);
+-    if (text == "body: HTMLBodyElement" || text == "body: Object")
+-      foundBody = true;
+-    propPanelProps.push(text.split(":")[0]);
+-  }
+-
+-  // NB: We pull the properties off the prototype, rather than off object itself,
+-  // so that expandos like |constructor|, which the propPanel can't see, are not
+-  // included.
+-  for (let prop in Object.getPrototypeOf(content.document)) {
+-    if (prop == "inputEncoding") {
+-      continue;
+-    }
+-    ok(propPanelProps.indexOf(prop) != -1, "Property |" + prop + "| should be reflected in propertyPanel");
+-  }
+-
+-  ok(foundBody, "found document.body");
+-
+-  executeSoon(finishTest);
++  findVariableViewProperties(aView, [
++    { name: "body", value: "[object HTMLBodyElement]" },
++  ], { webconsole: gHUD }).then(finishTest);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
+@@ -11,46 +11,19 @@ function test() {
+          "object with a dir method");
+   browser.addEventListener("load", function onLoad(aEvent) {
+     browser.removeEventListener(aEvent.type, onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+ }
+ 
+ function consoleOpened(hud) {
+-  outputNode = hud.outputNode;
+-  content.console.dir(content.document);
+-  waitForSuccess({
+-    name: "console.dir displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.textContent.indexOf("[object HTMLDocument") > -1;
+-    },
+-    successFn: testConsoleDir.bind(null, outputNode),
+-    failureFn: finishTest,
+-  });
++  hud.jsterm.execute("console.dir(document)");
++  hud.jsterm.once("variablesview-fetched", testConsoleDir.bind(null, hud));
+ }
+ 
+-function testConsoleDir(outputNode) {
+-  let msg = outputNode.querySelectorAll(".webconsole-msg-inspector");
+-  is(msg.length, 1, "one message node displayed");
+-  let view = msg[0].propertyTreeView;
+-  let foundQSA = false;
+-  let foundLocation = false;
+-  let foundWrite = false;
+-  for (let i = 0; i < view.rowCount; i++) {
+-    let text = view.getCellText(i);
+-    if (text == "querySelectorAll: function querySelectorAll()") {
+-      foundQSA = true;
+-    }
+-    else if (text  == "location: Location") {
+-      foundLocation = true;
+-    }
+-    else if (text  == "write: function write()") {
+-      foundWrite = true;
+-    }
+-  }
+-  ok(foundQSA, "found document.querySelectorAll");
+-  ok(foundLocation, "found document.location");
+-  ok(foundWrite, "found document.write");
+-  msg = view = outputNode = null;
+-  executeSoon(finishTest);
++function testConsoleDir(hud, ev, view) {
++  findVariableViewProperties(view, [
++    { name: "querySelectorAll", value: "[object Function]" },
++    { name: "location", value: "[object Location]" },
++    { name: "write", value: "[object Function]" },
++  ], { webconsole: hud }).then(finishTest);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js b/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
+@@ -123,17 +123,17 @@ function testConsoleLoggingAPI(aMethod) 
+   // test for multiple arguments.
+   console[aMethod]("foo", "bar");
+ 
+   waitForSuccess({
+     name: "show both console arguments for " + aMethod,
+     validatorFn: function()
+     {
+       let node = outputNode.querySelector(".hud-msg-node");
+-      return node && /foo bar/.test(node.textContent);
++      return node && /"foo" "bar"/.test(node.textContent);
+     },
+     successFn: nextTest,
+     failureFn: nextTest,
+   });
+ 
+   yield;
+   testDriver.next();
+   yield;
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js b/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
+deleted file mode 100644
+--- a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
++++ /dev/null
+@@ -1,68 +0,0 @@
+-/* vim:set ts=2 sw=2 sts=2 et: */
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-// Tests the functionality of the "property panel", which allows JavaScript
+-// objects and DOM nodes to be inspected.
+-
+-const TEST_URI = "data:text/html;charset=utf8,<p>property panel test";
+-
+-function test() {
+-  addTab(TEST_URI);
+-  browser.addEventListener("load", function onLoad() {
+-    browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, testPropertyPanel);
+-  }, true);
+-}
+-
+-function testPropertyPanel(hud) {
+-  let jsterm = hud.jsterm;
+-
+-  let propPanel = jsterm.openPropertyPanel({
+-    data: {
+-      object: [
+-        1,
+-        /abc/,
+-        null,
+-        undefined,
+-        function test() {},
+-        {}
+-      ]
+-    }
+-  });
+-  is (propPanel.treeView.rowCount, 6, "six elements shown in propertyPanel");
+-  propPanel.destroy();
+-
+-  propPanel = jsterm.openPropertyPanel({
+-    data: {
+-      object: {
+-        "0.02": 0,
+-        "0.01": 1,
+-        "02":   2,
+-        "1":    3,
+-        "11":   4,
+-        "1.2":  5,
+-        "1.1":  6,
+-        "foo":  7,
+-        "bar":  8
+-      }
+-    }
+-  });
+-  is (propPanel.treeView.rowCount, 9, "nine elements shown in propertyPanel");
+-
+-  let view = propPanel.treeView;
+-  is (view.getCellText(0), "0.01: 1", "1. element is okay");
+-  is (view.getCellText(1), "0.02: 0", "2. element is okay");
+-  is (view.getCellText(2), "1: 3",    "3. element is okay");
+-  is (view.getCellText(3), "1.1: 6",  "4. element is okay");
+-  is (view.getCellText(4), "1.2: 5",  "5. element is okay");
+-  is (view.getCellText(5), "02: 2",   "6. element is okay");
+-  is (view.getCellText(6), "11: 4",   "7. element is okay");
+-  is (view.getCellText(7), "bar: 8",  "8. element is okay");
+-  is (view.getCellText(8), "foo: 7",  "9. element is okay");
+-  propPanel.destroy();
+-
+-  executeSoon(finishTest);
+-}
+-
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
-@@ -138,17 +138,19 @@ function findLogEntry(aString)
+@@ -9,16 +9,17 @@ let HUDService = tempScope.HUDService;
+ Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tempScope);
+ let WebConsoleUtils = tempScope.WebConsoleUtils;
+ Cu.import("resource:///modules/devtools/gDevTools.jsm", tempScope);
+ let gDevTools = tempScope.gDevTools;
+ Cu.import("resource:///modules/devtools/Target.jsm", tempScope);
+ let TargetFactory = tempScope.TargetFactory;
+ Components.utils.import("resource://gre/modules/devtools/Console.jsm", tempScope);
+ let console = tempScope.console;
++let Promise = Cu.import("resource://gre/modules/commonjs/promise/core.js", {}).Promise;
+ 
+ const WEBCONSOLE_STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let WCU_l10n = new WebConsoleUtils.l10n(WEBCONSOLE_STRINGS_URI);
+ 
+ function log(aMsg)
+ {
+   dump("*** WebConsoleTest: " + aMsg + "\n");
+ }
+@@ -138,17 +139,19 @@ function findLogEntry(aString)
   * @param function [aCallback]
   *        Optional function to invoke after the Web Console completes
   *        initialization (web-console-created).
@@ -722,7 +1182,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *
   * @param nsIDOMElement [aTab]
   *        Optional tab element for which you want close the Web Console. The
-@@ -310,8 +312,82 @@ function waitForSuccess(aOptions)
+@@ -310,8 +313,149 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -732,57 +1192,28 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
    });
  }
 +
-+function findVariableViewProperties(aView, aRules)
++function findVariableViewProperties(aView, aRules, aOptions)
 +{
-+  function matchRule(aProp, aRule) {
-+    let nameMatched = true;
-+    if (aRule.name) {
-+      let match = aRule.name instanceof RegExp ?
-+                  aRule.name.test(aProp._nameString) :
-+                  aProp._nameString == aRule.name;
-+      if (!match) {
-+        return false;
-+      }
++  let outstanding = [];
++  let rules = [].concat(aRules); // keep a copy of the rules array
++
++  function onMatch(aProp, aRule, aMatched) {
++    if (!aMatched || aRule.matchedProp) {
++      return;
 +    }
 +
-+    if (aRule.value) {
-+      let valueString = aProp._valueString;
-+      if (aProp._valueClassName == "token-string") {
-+        valueString = valueString.substring(1, valueString.length - 1);
-+      }
++    aRule.matchedProp = aProp;
 +
-+      let match = aRule.value instanceof RegExp ?
-+                  aRule.value.test(valueString) :
-+                  valueString == aRule.value;
-+      if (!match) {
-+        return false;
-+      }
++    if (!aRule.dontMatch) {
++      aRules.splice(aRules.indexOf(aRule), 1);
 +    }
-+
-+    if (aRule.isGetter && (!aProp.getter || !aProp.get("get"))) {
-+      return false;
-+    }
-+
-+    return true;
 +  }
 +
 +  function finder(aVar) {
-+    //console.debug("finder", aVar);
-+    for (let [id, prop] of aVar._store) {
++    for (let [id, prop] in aVar) {
 +      for (let rule of aRules) {
-+        //console.debug(item._nameString, item._valueString, prop);
-+        //console.debug(item._nameString == prop.name, item._valueString == prop.value);
-+        let matched = matchRule(prop, rule);
-+        if (matched) {
-+          if (!rule.dontMatch) {
-+            aRules.splice(aRules.indexOf(rule), 1);
-+            ok(true, "rule " + rule.name + " matched for property " + prop.name);
-+          }
-+          else if (rule.dontMatch) {
-+            ok(false, "rule " + rule.name + " should not match property " +
-+                      prop.name);
-+          }
-+        }
++        let matched = matchVariablesViewProperty(prop, rule, aOptions);
++        outstanding.push(matched.then(onMatch.bind(null, prop, rule)));
 +      }
 +
 +      if (aRules.length > 0) {
@@ -793,17 +1224,113 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +
 +  finder(aView);
 +
-+  let notFound = [];
-+  aRules.forEach(function(aRule) {
-+    if (!aRule.dontMatch) {
-+      notFound.push(aRule.name);
++  return Promise.all(outstanding).then(function _onAllRulesMatched() {
++    for (let rule of rules) {
++      let matched = rule.matchedProp;
++      if (matched && !rule.dontMatch) {
++        ok(true, "rule " + rule.name + " matched for property " + matched.name);
++      }
++      else if (matched && rule.dontMatch) {
++        ok(false, "rule " + rule.name + " should not match property " +
++           aProp.name);
++      }
++      else {
++        ok(rule.dontMatch, "rule " + rule.name + " did not match any property");
++      }
 +    }
++    return rules;
++  });
++}
++
++function matchVariablesViewProperty(aProp, aRule, aOptions)
++{
++  function resolve(aResult) {
++    return Promise.resolve(aResult);
++  }
++
++  if (aRule.name) {
++    let match = aRule.name instanceof RegExp ?
++                aRule.name.test(aProp.name) :
++                aProp.name == aRule.name;
++    if (!match) {
++      return resolve(false);
++    }
++  }
++
++  if (aRule.value) {
++    let displayValue = aProp.displayValue;
++    if (aProp._valueClassName == "token-string") {
++      displayValue = displayValue.substring(1, displayValue.length - 1);
++    }
++
++    let match = aRule.value instanceof RegExp ?
++                aRule.value.test(displayValue) :
++                displayValue == aRule.value;
++    if (!match) {
++      return resolve(false);
++    }
++  }
++
++  if ("isGetter" in aRule) {
++    let isGetter = !!(aProp.getter && aProp.get("get"));
++    if (aRule.isGetter != isGetter) {
++      console.debug("isGetter blaaa", aRule.isGetter, isGetter);
++      return resolve(false);
++    }
++  }
++
++  if ("isGenerator" in aRule) {
++    let isGenerator = aProp.displayValue == "[object Generator]";
++    if (aRule.isGenerator != isGenerator) {
++      return resolve(false);
++    }
++  }
++
++  let outstanding = [];
++
++  if ("isIterator" in aRule) {
++    let isIterator = isVariableViewPropertyIterator(aProp, aOptions.webconsole);
++    outstanding.push(isIterator.then(function(aResult) {
++      return aResult == aRule.isIterator;
++    }));
++  }
++
++  outstanding.push(Promise.resolve(true));
++
++  return Promise.all(outstanding).then(function _onMatchDone(aResults) {
++    let ruleMatched = aResults.indexOf(false) == -1;
++    return resolve(ruleMatched);
++  });
++}
++
++function isVariableViewPropertyIterator(aProp, aWebConsole) {
++  if (aProp.displayValue == "[object Iterator]") {
++    return Promise.resolve(true);
++  }
++  if (!aProp.onexpand) {
++    return Promise.resolve(false);
++  }
++
++  let deferred = Promise.defer();
++  let jsterm = aWebConsole.jsterm;
++  jsterm.once("variablesview-fetched", function _onFetchProp() {
++    let proto = aProp.get("__proto__");
++    if (!proto) {
++      deferred.resolve(false);
++      return;
++    }
++
++    executeSoon(function() {
++      jsterm.once("variablesview-fetched", function _onFetchProto() {
++        deferred.resolve(!!proto.get("__iterator__"));
++      });
++      proto.expand();
++    });
 +  });
 +
-+  is(notFound.length, 0, "all variables view rules matched");
-+  if (notFound.length) {
-+    info("rules that did not match: " + notFound.join(", "));
-+  }
++  aProp.expand();
++
++  return deferred.promise;
 +}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
@@ -2090,7 +2617,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      if (ownProperties) {
 +        aVar.addProperties(ownProperties, { sorted: sortable });
 +
-+        for (let name in ownProperties) {
++        for (let name of Object.keys(ownProperties)) {
 +          onNewProperty(name);
 +        }
 +      }
