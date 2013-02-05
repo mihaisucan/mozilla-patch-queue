@@ -1,12 +1,12 @@
 # HG changeset patch
-# Parent 2bc4b1b4cc4059a076ebbe155614986a0cdc41da
+# Parent cb07ba024a1600398f263e93312bf3053ee3e20d
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1359634146 -7200
+# Date 1360068495 -7200
 Bug 833877 - Add a way to report exceptions in promises; r=dtownsend
 
-diff --git a/toolkit/addon-sdk/promise/core.js b/toolkit/addon-sdk/promise/core.js
---- a/toolkit/addon-sdk/promise/core.js
-+++ b/toolkit/addon-sdk/promise/core.js
+diff --git a/addon-sdk/source/lib/sdk/core/promise.js b/addon-sdk/source/lib/sdk/core/promise.js
+--- a/addon-sdk/source/lib/sdk/core/promise.js
++++ b/addon-sdk/source/lib/sdk/core/promise.js
 @@ -4,20 +4,21 @@
  /*global define: true, Cu: true, __URI__: true */
  ;(function(id, factory) { // Module boilerplate :(
@@ -14,7 +14,7 @@ diff --git a/toolkit/addon-sdk/promise/core.js b/toolkit/addon-sdk/promise/core.
      define(factory);
    } else if (typeof(require) === 'function') { // CommonJS
      factory.call(this, require, exports, module);
-   } else if (String(this).indexOf('BackstagePass') >= 0) { // JSM
+   } else if (~String(this).indexOf('BackstagePass')) { // JSM
      this[factory.name] = {};
 +    var Cu = this.Components.utils;
 +    this.console = Cu.import("resource://gre/modules/devtools/Console.jsm", {})
@@ -27,28 +27,32 @@ diff --git a/toolkit/addon-sdk/promise/core.js b/toolkit/addon-sdk/promise/core.
      }, this[factory.name], { uri: __URI__, id: id });
      this.EXPORTED_SYMBOLS = [factory.name];
    } else {  // Browser or alike
-     var globals = this;
+     var globals = this
      factory(function require(id) {
        return globals[id];
      }, (globals[id] = {}), { uri: document.location.href + '#' + id, id: id });
    }
-@@ -48,16 +49,19 @@ function rejected(reason) {
-  * rejected with thrown error is returned.
-  */
+@@ -48,17 +49,22 @@ function rejection(reason) {
  function attempt(f) {
-   return function effort(input) {
-     try {
-       return f(input);
-     }
-     catch(error) {
-+      if (exports._reportErrors && typeof(console) == "object") {
-+        console.error(error);
+   /**
+   Returns wrapper function that delegates to `f`. If `f` throws then captures
+   error and returns promise that rejects with a thrown error. Otherwise returns
+   return value. (Internal utility)
+   **/
+   return function effort(options) {
+     try { return f(options) }
+-    catch(error) { return rejection(error) }
++    catch(error) {
++      if (exports._reportErrors && typeof(console) == 'object') {
++        console.error(error)
 +      }
-       return rejected(error);
-     }
-   };
++      return rejection(error)
++    }
+   }
  }
  
- /**
-  * Internal utility: Returns `true` if given `value` is a promise. Value is
-  * assumed to be a promise if it implements method `then`.
+ function isPromise(value) {
+   /**
+   Returns true if given `value` is promise. Value is assumed to be promise if
+   it implements `then` method.
+   **/
