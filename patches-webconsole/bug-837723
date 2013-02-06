@@ -1,0 +1,45 @@
+Bug 837723: Implement Debugger.Object.prototype.unsafeDereference.
+
+diff --git a/js/src/jit-test/tests/debug/Object-unsafeDereference-01.js b/js/src/jit-test/tests/debug/Object-unsafeDereference-01.js
+new file mode 100644
+--- /dev/null
++++ b/js/src/jit-test/tests/debug/Object-unsafeDereference-01.js
+@@ -0,0 +1,10 @@
++// Debugger.Object.prototype.unsafeDereference returns the referent directly.
++
++var g = newGlobal();
++var dbg = new Debugger();
++var gw = dbg.addDebuggee(g);
++
++assertEq(gw.getOwnPropertyDescriptor('Math').value.unsafeDereference(), g.Math);
++
++g.eval('var obj = {}');
++assertEq(gw.getOwnPropertyDescriptor('obj').value.unsafeDereference(), g.obj);
+diff --git a/js/src/vm/Debugger.cpp b/js/src/vm/Debugger.cpp
+--- a/js/src/vm/Debugger.cpp
++++ b/js/src/vm/Debugger.cpp
+@@ -4612,6 +4612,16 @@ DebuggerObject_unwrap(JSContext *cx, uns
+     return true;
+ }
+ 
++static JSBool
++DebuggerObject_unsafeDereference(JSContext *cx, unsigned argc, Value *vp)
++{
++    THIS_DEBUGOBJECT_REFERENT(cx, argc, vp, "unsafeDereference", args, referent);
++    args.rval().setObject(*referent);
++    if (!cx->compartment->wrap(cx, args.rval().address()))
++        return false;
++    return true;
++}
++
+ static JSPropertySpec DebuggerObject_properties[] = {
+     JS_PSG("proto", DebuggerObject_getProto, 0),
+     JS_PSG("class", DebuggerObject_getClass, 0),
+@@ -4643,6 +4653,7 @@ static JSFunctionSpec DebuggerObject_met
+     JS_FN("evalInGlobal", DebuggerObject_evalInGlobal, 1, 0),
+     JS_FN("evalInGlobalWithBindings", DebuggerObject_evalInGlobalWithBindings, 2, 0),
+     JS_FN("unwrap", DebuggerObject_unwrap, 0, 0),
++    JS_FN("unsafeDereference", DebuggerObject_unsafeDereference, 0, 0),
+     JS_FS_END
+ };
+ 

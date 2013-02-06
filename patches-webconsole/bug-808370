@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 2f4c30a4f7c008067240b3f00ba9208c7f3f1354
+# Parent db547db19959aed073c77f2d2f57cb08fd0c2593
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1359753598 -7200
+# Date 1360188625 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -36,25 +36,25 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
  Cu.import("resource:///modules/source-editor.jsm");
  Cu.import("resource:///modules/devtools/LayoutHelpers.jsm");
  Cu.import("resource:///modules/devtools/VariablesView.jsm");
-@@ -899,17 +888,17 @@ StackFrames.prototype = {
-     // Fetch the properties only once.
+@@ -903,17 +892,17 @@ StackFrames.prototype = {
      if (aVar._fetched) {
        return;
      }
      aVar._fetched = true;
+     let grip = aVar._sourceGrip;
  
-     this.activeThread.pauseGrip(aGrip).getPrototypeAndProperties(function(aResponse) {
+     this.activeThread.pauseGrip(grip).getPrototypeAndProperties(function(aResponse) {
        let { ownProperties, prototype } = aResponse;
--      let sortable = VARIABLES_VIEW_NON_SORTABLE.indexOf(aGrip.class) == -1;
-+      let sortable = VariablesView.NON_SORTABLE_CLASSES.indexOf(aGrip.class) == -1;
+-      let sortable = VARIABLES_VIEW_NON_SORTABLE.indexOf(grip.class) == -1;
++      let sortable = VariablesView.NON_SORTABLE_CLASSES.indexOf(grip.class) == -1;
  
        // Add all the variable properties.
        if (ownProperties) {
-         aVar.addProperties(ownProperties, { sorted: sortable });
-         // Expansion handlers must be set after the properties are added.
-         for (let name in ownProperties) {
-           this._addVarExpander(aVar.get(name), ownProperties[name].value);
-         }
+         aVar.addProperties(ownProperties, {
+           // Not all variables need to force sorted properties.
+           sorted: sortable,
+           // Expansion handlers must be set after the properties are added.
+           callback: this._addVarExpander
 diff --git a/browser/devtools/framework/Sidebar.jsm b/browser/devtools/framework/Sidebar.jsm
 --- a/browser/devtools/framework/Sidebar.jsm
 +++ b/browser/devtools/framework/Sidebar.jsm
@@ -107,28 +107,28 @@ diff --git a/browser/devtools/framework/Sidebar.jsm b/browser/devtools/framework
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 --- a/browser/devtools/jar.mn
 +++ b/browser/devtools/jar.mn
-@@ -3,16 +3,17 @@
- # file, You can obtain one at http://mozilla.org/MPL/2.0/.
- 
- browser.jar:
+@@ -6,16 +6,17 @@ browser.jar:
      content/browser/devtools/markup-view.xhtml    (markupview/markup-view.xhtml)
      content/browser/devtools/markup-view.css      (markupview/markup-view.css)
      content/browser/NetworkPanel.xhtml            (webconsole/NetworkPanel.xhtml)
      content/browser/devtools/webconsole.js        (webconsole/webconsole.js)
      content/browser/devtools/webconsole.xul       (webconsole/webconsole.xul)
-+    content/browser/devtools/VariablesView.xul    (webconsole/VariablesView.xul)
  *   content/browser/scratchpad.xul                (scratchpad/scratchpad.xul)
      content/browser/scratchpad.js                 (scratchpad/scratchpad.js)
      content/browser/splitview.css                 (shared/splitview.css)
++    content/browser/devtools/VariablesView.xul    (shared/VariablesView.xul)
      content/browser/styleeditor.xul               (styleeditor/styleeditor.xul)
      content/browser/styleeditor.css               (styleeditor/styleeditor.css)
      content/browser/devtools/csshtmltree.xul      (styleinspector/csshtmltree.xul)
      content/browser/devtools/cssruleview.xul      (styleinspector/cssruleview.xul)
      content/browser/devtools/styleinspector.css   (styleinspector/styleinspector.css)
+     content/browser/devtools/layoutview/view.js   (layoutview/view.js)
+     content/browser/devtools/layoutview/view.xhtml  (layoutview/view.xhtml)
+     content/browser/devtools/layoutview/view.css  (layoutview/view.css)
 diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared/VariablesView.jsm
 --- a/browser/devtools/shared/VariablesView.jsm
 +++ b/browser/devtools/shared/VariablesView.jsm
-@@ -585,16 +585,28 @@ VariablesView.prototype = {
+@@ -891,16 +891,28 @@ VariablesView.prototype = {
    _list: null,
    _searchboxNode: null,
    _searchboxContainer: null,
@@ -137,7 +137,7 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
    _emptyTextValue: ""
  };
  
-+this.VariablesView.NON_SORTABLE_CLASSES = [
++VariablesView.NON_SORTABLE_CLASSES = [
 +  "Array",
 +  "Int8Array",
 +  "Uint8Array",
@@ -150,14 +150,14 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
 +];
 +
  /**
-  * A Scope is an object holding Variable instances.
-  * Iterable via "for (let [name, variable] in instance) { }".
+  * Generates the string evaluated when performing simple value changes.
   *
-  * @param VariablesView aView
-  *        The view to contain this scope.
-  * @param string aName
-  *        The scope's name.
-@@ -928,16 +940,22 @@ Scope.prototype = {
+  * @param Variable | Property aItem
+  *        The current variable or property.
+  * @param string aCurrentString
+  *        The trimmed user inputted string.
+  * @return string
+@@ -1420,16 +1432,22 @@ Scope.prototype = {
  
    /**
     * Gets the name associated with this item.
@@ -180,28 +180,26 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
    /**
     * Initializes this scope's id, view and binds event listeners.
     *
-@@ -1589,16 +1607,21 @@ create({ constructor: Variable, proto: S
-     let isUndefined = VariablesView.isUndefined(descriptor);
- 
-     if (isPrimitive || isUndefined) {
-       this.hideArrow();
-     }
-     if (!isUndefined && (descriptor.get || descriptor.set)) {
-       // FIXME: editing getters and setters is not allowed yet. Bug 831794.
-       this.eval = null;
-+      // Deleting getters and setters individually is not allowed.
-+      this.delete = null;
-+      // Changing getter/setter name is not allowed.
-+      this.switch = null;
-+
-       this.addProperty("get", { value: descriptor.get });
-       this.addProperty("set", { value: descriptor.set });
-       this.expand();
-       separatorLabel.hidden = true;
-       valueLabel.hidden = true;
-     }
-   },
- 
+diff --git a/browser/devtools/shared/VariablesView.xul b/browser/devtools/shared/VariablesView.xul
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/shared/VariablesView.xul
+@@ -0,0 +1,15 @@
++<?xml version="1.0"?>
++<!-- This Source Code Form is subject to the terms of the Mozilla Public
++   - License, v. 2.0. If a copy of the MPL was not distributed with this
++   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
++<?xml-stylesheet href="chrome://global/skin/global.css"?>
++<?xml-stylesheet href="chrome://browser/content/debugger.css" type="text/css"?>
++<?xml-stylesheet href="chrome://browser/skin/devtools/common.css" type="text/css"?>
++<?xml-stylesheet href="chrome://browser/skin/devtools/debugger.css" type="text/css"?>
++<!DOCTYPE window [
++  <!ENTITY % viewDTD SYSTEM "chrome://browser/locale/devtools/VariablesView.dtd">
++  %viewDTD;
++]>
++<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" title="&PropertiesViewWindowTitle;">
++  <vbox id="variables" flex="1"/>
++</window>
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
@@ -224,26 +222,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }.bind(this);
  
      let initUI = function() {
-diff --git a/browser/devtools/webconsole/VariablesView.xul b/browser/devtools/webconsole/VariablesView.xul
-new file mode 100644
---- /dev/null
-+++ b/browser/devtools/webconsole/VariablesView.xul
-@@ -0,0 +1,15 @@
-+<?xml version="1.0"?>
-+<!-- This Source Code Form is subject to the terms of the Mozilla Public
-+   - License, v. 2.0. If a copy of the MPL was not distributed with this
-+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
-+<?xml-stylesheet href="chrome://global/skin/global.css"?>
-+<?xml-stylesheet href="chrome://browser/content/debugger.css" type="text/css"?>
-+<?xml-stylesheet href="chrome://browser/skin/devtools/common.css" type="text/css"?>
-+<?xml-stylesheet href="chrome://browser/skin/devtools/debugger.css" type="text/css"?>
-+<!DOCTYPE window [
-+  <!ENTITY % viewDTD SYSTEM "chrome://browser/locale/devtools/VariablesView.dtd">
-+  %viewDTD;
-+]>
-+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" title="&PropertiesViewWindowTitle;">
-+  <vbox id="variables" flex="1"/>
-+</window>
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
 +++ b/browser/devtools/webconsole/test/Makefile.in
@@ -918,7 +896,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_docu
    let completeNode = jsterm.completeNode;
  
    let tmp = {};
-@@ -76,62 +76,33 @@ function autocompletePopupHidden()
+@@ -76,62 +76,34 @@ function autocompletePopupHidden()
      failureFn: finishTest,
    });
  }
@@ -982,6 +960,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_docu
 -  ok(foundBody, "found document.body");
 -
 -  executeSoon(finishTest);
++  // FIXME: known failure: |body| doesn't show when |document| is inspected.
 +  findVariableViewProperties(aView, [
 +    { name: "body", value: "[object HTMLBodyElement]" },
 +  ], { webconsole: gHUD }).then(finishTest);
@@ -990,7 +969,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_docu
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
-@@ -11,46 +11,19 @@ function test() {
+@@ -11,46 +11,21 @@ function test() {
           "object with a dir method");
    browser.addEventListener("load", function onLoad(aEvent) {
      browser.removeEventListener(aEvent.type, onLoad, true);
@@ -1039,6 +1018,8 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_cons
 -  msg = view = outputNode = null;
 -  executeSoon(finishTest);
 +function testConsoleDir(hud, ev, view) {
++  // FIXME: known failure: |querySelectorAll| and |write| do not show when
++  // |document| is inspected.
 +  findVariableViewProperties(view, [
 +    { name: "querySelectorAll", value: "[object Function]" },
 +    { name: "location", value: "[object Location]" },
@@ -1067,6 +1048,105 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging
    yield;
    testDriver.next();
    yield;
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+@@ -14,30 +14,30 @@ function test() {
+     openConsole(null, testExecutionScope);
+   }, true);
+ }
+ 
+ function testExecutionScope(hud) {
+   let jsterm = hud.jsterm;
+ 
+   jsterm.clearOutput();
+-  jsterm.execute("window.location;");
++  jsterm.execute("window.location.href;");
+ 
+   waitForSuccess({
+     name: "jsterm execution output (two nodes)",
+     validatorFn: function()
+     {
+       return jsterm.outputNode.querySelectorAll(".hud-msg-node").length == 2;
+     },
+     successFn: function()
+     {
+       let nodes = jsterm.outputNode.querySelectorAll(".hud-msg-node");
+ 
+-      is(/window.location;/.test(nodes[0].textContent), true,
+-        "'window.location;' written to output");
++      is(/window.location.href;/.test(nodes[0].textContent), true,
++        "'window.location.href;' written to output");
+ 
+       isnot(nodes[1].textContent.indexOf(TEST_URI), -1,
+         "command was executed in the window scope");
+ 
+       executeSoon(finishTest);
+     },
+     failureFn: finishTest,
+   });
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+@@ -130,17 +130,17 @@ function testJSTerm(hud)
+       nextTest();
+     },
+     failureFn: nextTest,
+   });
+   yield;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("pprint({b:2, a:1})");
+-  checkResult("a: 1\n  b: 2", "pprint()", 1);
++  checkResult('"  b: 2\n  a: 1"', "pprint()", 1);
+   yield;
+ 
+   // check instanceof correctness, bug 599940
+   jsterm.clearOutput();
+   jsterm.execute("[] instanceof Array");
+   checkResult("true", "[] instanceof Array == true", 1);
+   yield;
+ 
+@@ -166,17 +166,17 @@ function testJSTerm(hud)
+   jsterm.clearOutput();
+   jsterm.execute("keys(window)");
+   checkResult(null, "keys(window)", 1);
+   yield;
+ 
+   // bug 614561
+   jsterm.clearOutput();
+   jsterm.execute("pprint('hi')");
+-  checkResult('0: "h"\n  1: "i"', "pprint('hi')", 1);
++  checkResult('"  0: "h"\n  1: "i""', "pprint('hi')", 1);
+   yield;
+ 
+   // check that pprint(function) shows function source, bug 618344
+   jsterm.clearOutput();
+   jsterm.execute("pprint(print)");
+   checkResult(function(nodes) {
+     return nodes[0].textContent.indexOf("aOwner.helperResult") > -1;
+   }, "pprint(function) shows source", 1);
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_order.js b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_order.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+@@ -29,16 +29,16 @@ function testOutputOrder(hud) {
+     {
+       return outputNode.querySelectorAll(".hud-msg-node").length == 3;
+     },
+     successFn: function()
+     {
+       let nodes = outputNode.querySelectorAll(".hud-msg-node");
+       let executedStringFirst =
+         /console\.log\('foo', 'bar'\);/.test(nodes[0].textContent);
+-      let outputSecond = /foo bar/.test(nodes[2].textContent);
++      let outputSecond = /"foo" "bar"/.test(nodes[2].textContent);
+       ok(executedStringFirst && outputSecond, "executed string comes first");
+ 
+       finishTest();
+     },
+     failureFn: finishTest,
+   });
+ }
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js b/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
 deleted file mode 100644
 --- a/browser/devtools/webconsole/test/browser_webconsole_property_panel.js
@@ -1152,7 +1232,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  let TargetFactory = tempScope.TargetFactory;
  Components.utils.import("resource://gre/modules/devtools/Console.jsm", tempScope);
  let console = tempScope.console;
-+let Promise = Cu.import("resource://gre/modules/commonjs/promise/core.js", {}).Promise;
++let Promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
  
  const WEBCONSOLE_STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
  let WCU_l10n = new WebConsoleUtils.l10n(WEBCONSOLE_STRINGS_URI);
@@ -1335,7 +1415,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -14,45 +14,53 @@ Cu.import("resource://gre/modules/XPCOMU
+@@ -14,45 +14,56 @@ Cu.import("resource://gre/modules/XPCOMU
  
  XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                    "resource://gre/modules/Services.jsm");
@@ -1362,7 +1442,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                                    "resource://gre/modules/devtools/WebConsoleUtils.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                   "resource://gre/modules/commonjs/promise/core.js");
+                                   "resource://gre/modules/commonjs/sdk/core/promise.js");
  
 +XPCOMUtils.defineLazyModuleGetter(this, "VariablesView",
 +                                  "resource:///modules/devtools/VariablesView.jsm");
@@ -1372,6 +1452,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
 +                                  "resource:///modules/devtools/EventEmitter.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "console",
++                                  "resource://gre/modules/devtools/Console.jsm");
 +
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
  let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
@@ -1394,7 +1477,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -945,55 +953,42 @@ WebConsoleFrame.prototype = {
+@@ -949,55 +960,42 @@ WebConsoleFrame.prototype = {
    logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
    {
      let body = null;
@@ -1458,7 +1541,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let functionName = aMessage.functionName ||
                             l10n.getStr("stacktrace.anonymousFunction");
  
-@@ -1013,16 +1008,22 @@ WebConsoleFrame.prototype = {
+@@ -1017,16 +1015,22 @@ WebConsoleFrame.prototype = {
        }
  
        case "group":
@@ -1481,7 +1564,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          if (timer.error) {
            Cu.reportError(l10n.getStr(timer.error));
            return;
-@@ -1051,64 +1052,44 @@ WebConsoleFrame.prototype = {
+@@ -1055,64 +1059,44 @@ WebConsoleFrame.prototype = {
      // we ignore their arguments.
      switch (level) {
        case "group":
@@ -1552,7 +1635,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * the window.console API call.
     *
     * @param object aMessage
-@@ -1119,59 +1100,29 @@ WebConsoleFrame.prototype = {
+@@ -1123,59 +1107,29 @@ WebConsoleFrame.prototype = {
      this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage]);
    },
  
@@ -1616,7 +1699,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1899,19 +1850,21 @@ WebConsoleFrame.prototype = {
+@@ -1903,19 +1857,21 @@ WebConsoleFrame.prototype = {
     *
     * @private
     * @param array aItem
@@ -1641,7 +1724,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          connectionId = args[0];
        }
        else if (typeof methodOrNode != "function") {
-@@ -1919,40 +1872,23 @@ WebConsoleFrame.prototype = {
+@@ -1923,40 +1879,23 @@ WebConsoleFrame.prototype = {
        }
        if (connectionId && connectionId in this._networkRequests) {
          delete this._networkRequests[connectionId];
@@ -1684,7 +1767,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * category's line limit by removing old messages as needed.
     *
     * @param integer aCategory
-@@ -1970,60 +1906,47 @@ WebConsoleFrame.prototype = {
+@@ -1974,62 +1913,49 @@ WebConsoleFrame.prototype = {
      let n = Math.max(0, messageNodes.length - logLimit);
      let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
      toRemove.forEach(this.removeOutputMessage, this);
@@ -1732,7 +1815,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      if (aNode.classList.contains("webconsole-msg-cssparser")) {
        let repeatNode = aNode.getElementsByClassName("webconsole-msg-repeat")[0];
-       delete this._cssNodes[repeatNode._uid];
+       if (repeatNode && repeatNode._uid) {
+         delete this._cssNodes[repeatNode._uid];
+       }
      }
      else if (aNode._connectionId &&
               aNode.classList.contains("webconsole-msg-network")) {
@@ -1757,7 +1842,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2122,17 +2045,17 @@ WebConsoleFrame.prototype = {
+@@ -2128,17 +2054,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -1776,7 +1861,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2169,52 +2092,37 @@ WebConsoleFrame.prototype = {
+@@ -2175,52 +2101,37 @@ WebConsoleFrame.prototype = {
      node.clipboardText = aClipboardText;
      node.classList.add("hud-msg-node");
  
@@ -1844,7 +1929,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2252,53 +2160,46 @@ WebConsoleFrame.prototype = {
+@@ -2258,53 +2169,46 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -1906,7 +1991,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Click event handler for the ellipsis shown immediately after a long string.
     * This method retrieves the full string and updates the console output to
-@@ -2669,26 +2570,62 @@ function JSTerm(aWebConsoleFrame)
+@@ -2675,26 +2579,62 @@ function JSTerm(aWebConsoleFrame)
    this.hudId = this.hud.hudId;
  
    this.lastCompletion = { value: null };
@@ -1969,7 +2054,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * History of code that was executed.
     * @type array
-@@ -2727,16 +2664,18 @@ JSTerm.prototype = {
+@@ -2733,16 +2673,18 @@ JSTerm.prototype = {
  
      let doc = this.hud.document;
      this.completeNode = doc.querySelector(".jsterm-complete-node");
@@ -1988,7 +2073,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement [aAfterNode]
-@@ -2749,33 +2688,47 @@ JSTerm.prototype = {
+@@ -2755,33 +2697,47 @@ JSTerm.prototype = {
     *        The message received from the server.
     */
    _executeResultCallback:
@@ -2043,7 +2128,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            catch (ex) {
              errorMessage = helperResult.message;
            }
-@@ -2814,48 +2767,40 @@ JSTerm.prototype = {
+@@ -2820,48 +2776,40 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -2108,7 +2193,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2876,81 +2821,519 @@ JSTerm.prototype = {
+@@ -2882,81 +2830,519 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -2676,7 +2761,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3566,171 +3949,48 @@ JSTerm.prototype = {
+@@ -3572,171 +3958,48 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
@@ -2954,12 +3039,12 @@ diff --git a/browser/locales/jar.mn b/browser/locales/jar.mn
 +    locale/browser/devtools/VariablesView.dtd         (%chrome/browser/devtools/VariablesView.dtd)
      locale/browser/devtools/sourceeditor.properties   (%chrome/browser/devtools/sourceeditor.properties)
      locale/browser/devtools/sourceeditor.dtd          (%chrome/browser/devtools/sourceeditor.dtd)
+     locale/browser/devtools/profiler.dtd              (%chrome/browser/devtools/profiler.dtd)
      locale/browser/devtools/profiler.properties       (%chrome/browser/devtools/profiler.properties)
      locale/browser/devtools/layoutview.dtd            (%chrome/browser/devtools/layoutview.dtd)
      locale/browser/devtools/responsiveUI.properties   (%chrome/browser/devtools/responsiveUI.properties)
      locale/browser/devtools/toolbox.dtd            (%chrome/browser/devtools/toolbox.dtd)
      locale/browser/devtools/toolbox.properties     (%chrome/browser/devtools/toolbox.properties)
-     locale/browser/devtools/inspector.dtd          (%chrome/browser/devtools/inspector.dtd)
 diff --git a/browser/themes/gnomestripe/devtools/webconsole.css b/browser/themes/gnomestripe/devtools/webconsole.css
 --- a/browser/themes/gnomestripe/devtools/webconsole.css
 +++ b/browser/themes/gnomestripe/devtools/webconsole.css

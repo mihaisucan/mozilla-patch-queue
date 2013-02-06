@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 60e07dfb9514b5077c1f749b6b8997485ae71a84
+# Parent b64789edaa06b4c6d476be10d97dc41a66d90b86
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1359404775 -7200
 
@@ -645,7 +645,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     *
     * @param object aObject
     *        Object to print to the output.
-@@ -1685,23 +1684,36 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1685,23 +1684,33 @@ this.JSTermHelpers = function JSTermHelp
  
      aOwner.helperResult = { rawOutput: true };
  
@@ -663,10 +663,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 -                  WebConsoleUtils.getPropertyPanelValue(aProp));
 -    });
 +    for (let name in obj) {
-+      let desc = WebConsoleUtils.getPropertyDescriptor(obj, name);
-+      if (!desc) {
-+        continue;
-+      }
++      let desc = WebConsoleUtils.getPropertyDescriptor(obj, name) || {};
 +      if (desc.get || desc.set) {
 +        let getGrip = VariablesView.getGrip(desc.get);
 +        let setGrip = VariablesView.getGrip(desc.set);
@@ -884,7 +881,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     */
    getActorByID: function WCA_getActorByID(aActorID)
    {
-@@ -447,54 +481,73 @@ WebConsoleActor.prototype =
+@@ -447,54 +481,69 @@ WebConsoleActor.prototype =
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
     * @return object
@@ -902,17 +899,13 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 -    try {
 -      timestamp = Date.now();
 -      result = this.evalInSandbox(input);
-+    this._jstermHelpers.helperResult = null;
-+    this._jstermHelpers.evalInput = input;
 +    let evalOptions = {
 +      bindObjectActor: aRequest.bindObjectActor,
 +      frameActor: aRequest.frameActor,
 +    };
 +    let evalResult = this.evalWithDebugger(input, evalOptions);
-+
 +    let helperResult = this._jstermHelpers.helperResult;
 +    delete this._jstermHelpers.helperResult;
-+    delete this._jstermHelpers.evalInput;
 +
 +    let result, error, errorMessage;
 +    if (evalResult) {
@@ -974,7 +967,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      };
    },
  
-@@ -524,75 +577,190 @@ WebConsoleActor.prototype =
+@@ -524,75 +573,191 @@ WebConsoleActor.prototype =
      return { updated: Object.keys(aRequest.preferences) };
    },
  
@@ -1066,15 +1059,6 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 -    if (this._sandboxWindowId !== WebConsoleUtils.getInnerWindowId(this.window)) {
 -      this._createSandbox();
 -    }
-+    this._createGlobal();
- 
-     // The help function needs to be easy to guess, so we make the () optional
-     if (aString.trim() == "help" || aString.trim() == "?") {
-       aString = "help()";
-     }
- 
--    let window = WebConsoleUtils.unwrap(this.sandbox.window);
--    let $ = null, $$ = null;
 +    // To allow the variables view to update properties from the web console we
 +    // provide the "bindObjectActor" mechanism: the Web Console tells the
 +    // ObjectActor ID for which it desires to evaluate an expression. The
@@ -1085,25 +1069,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +    //   _self['foobar'] = 'test'
 +    // where |_self| refers to the desired object.
  
--    // We prefer to execute the page-provided implementations for the $() and
--    // $$() functions.
--    if (typeof window.$ == "function") {
--      $ = this.sandbox.$;
--      delete this.sandbox.$;
--    }
--    if (typeof window.$$ == "function") {
--      $$ = this.sandbox.$$;
--      delete this.sandbox.$$;
-+    let result, bindSelf = null, bindings = null;
-+    if (aOptions.bindObjectActor) {
-+      let objActor = this.getActorByID(aOptions.bindObjectActor);
-+      if (objActor) {
-+        bindSelf = objActor.obj;
-+      }
-     }
- 
--    let result = Cu.evalInSandbox(aString, this.sandbox, "1.8",
--                                  "Web Console", 1);
+-    // The help function needs to be easy to guess, so we make the () optional
 +    // The |frameActor| property allow the Web Console to provide the frame
 +    // actor ID, such that the expression can evaluate in the user-selected
 +    // stack frame.
@@ -1117,77 +1083,104 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +    // for evaluation to work, we need to reinstance the jsterm helpers - they
 +    // need to be Debugger.Objects coming from the jsdebugger's Debugger
 +    // instance.
++
++    this._createGlobal();
++
++    // The help function needs to be easy to guess, so we make the () optional.
+     if (aString.trim() == "help" || aString.trim() == "?") {
+       aString = "help()";
+     }
  
--    if ($) {
--      this.sandbox.$ = $;
-+    let frameActor = null;
+-    let window = WebConsoleUtils.unwrap(this.sandbox.window);
+-    let $ = null, $$ = null;
++    let bindSelf = null;
+ 
+-    // We prefer to execute the page-provided implementations for the $() and
+-    // $$() functions.
+-    if (typeof window.$ == "function") {
+-      $ = this.sandbox.$;
+-      delete this.sandbox.$;
+-    }
+-    if (typeof window.$$ == "function") {
+-      $$ = this.sandbox.$$;
+-      delete this.sandbox.$$;
++    if (aOptions.bindObjectActor) {
++      let objActor = this.getActorByID(aOptions.bindObjectActor);
++      if (objActor) {
++        bindSelf = objActor.obj;
++      }
+     }
+ 
+-    let result = Cu.evalInSandbox(aString, this.sandbox, "1.8",
+-                                  "Web Console", 1);
++    let helpers = this._jstermHelpers;
++    let found$ = false, found$$ = false;
++    let frame = null;
 +    if (aOptions.frameActor) {
-+      frameActor = this.conn.getActor(aOptions.frameActor);
++      let frameActor = this.conn.getActor(aOptions.frameActor);
 +      if (!frameActor) {
 +        Cu.reportError("Web Console Actor: the frame actor was not found: " +
 +                       aOptions.frameActor);
 +      }
-     }
--    if ($$) {
--      this.sandbox.$$ = $$;
++      frame = frameActor.frame;
 +
-+    let evalInGlobal = function() {
-+      bindings = this._jstermHelpers.sandbox;
-+      if (bindSelf) {
-+        bindings._self = bindSelf;
-+      }
-+      //try {
-+        result = this._dbgWindow.evalInGlobalWithBindings(aString, bindings);
-+      /*}
-+      catch (ex) {
-+        // The above can fail if bindSelf refers to a Debugger.Object coming
-+        // from the jsdebugger's Debugger instance. This can happen if you
-+        // evaluate on a stackframe while the debugger is paused:
-+        // the result is a D.O belonging to the jsdebugger. After you stop
-+        // debugging the Web Console does eval in the window global using its
-+        // own Debugger instance.
-+        if (bindings._self) {
-+          delete bindings._self;
-+        }
++      // Avoid having bindings from a different Debugger. The Debugger.Frame
++      // comes from the jsdebugger's Debugger instance.
++      let dbg = frameActor.threadActor.dbg;
++      let dbgWindow = dbg.addDebuggee(this.window);
++      helpers = this._getJSTermHelpers(dbgWindow);
 +
-+        // FIXME: need a way to get the global for bindSelf.
-+        bindings = this._getJSTermHelpers(bindSelf).sandbox;
-+        if (bindSelf) {
-+          bindings._self = bindSelf;
-+        }
-+        result = bindSelf.evalInGlobalWithBindings(aString, bindings);
-+      }*/
-+    }.bind(this);
-+
-+    if (frameActor) {
-+      let frame = frameActor.frame;
-+      let dbgObj = frame.this;
-+      if (dbgObj && dbgObj.makeDebuggeeValue) {
-+        bindings = this._getJSTermHelpers(dbgObj).sandbox;
-+        if (bindSelf) {
-+          bindings._self = bindSelf;
-+        }
-+      }
-+
-+      if (bindings) {
-+        try {
-+          result = frame.evalWithBindings(aString, bindings);
-+        }
-+        catch (ex) {
-+          // The above can fail if you try to update a property in some
-+          // Debugger.Object created by the Web Console, during debugging.
-+          // The error is "Debugger.Object belongs to a different Debugger" and
-+          // it happens for reasons explained above.
-+          // Here we just fall back to the default behavior.
-+          evalInGlobal();
-+        }
-+      }
-+      else {
-+        result = frame.eval(aString);
++      let env = frame.environment;
++      if (env) {
++        found$ = !!env.find("$");
++        found$$ = !!env.find("$$");
 +      }
 +    }
 +    else {
-+      evalInGlobal();
++      found$ = !!this._dbgWindow.getOwnPropertyDescriptor("$");
++      found$$ = !!this._dbgWindow.getOwnPropertyDescriptor("$$");
++    }
++
++    let bindings = helpers.sandbox;
++    if (bindSelf) {
++      let jsObj = bindSelf.unsafeDereference();
++      bindings._self = helpers.makeDebuggeeValue(jsObj);
++    }
++
++    let $ = null, $$ = null;
++    if (found$) {
++      $ = bindings.$;
++      delete bindings.$;
++    }
++    if (found$$) {
++      $$ = bindings.$$;
++      delete bindings.$$;
++    }
++
++    helpers.helperResult = null;
++    helpers.evalInput = aString;
++
++    let result;
++    if (frame) {
++      result = frame.evalWithBindings(aString, bindings);
++    }
++    else {
++      result = this._dbgWindow.evalInGlobalWithBindings(aString, bindings);
++    }
++
++    delete helpers.evalInput;
++    if (helpers != this._jstermHelpers) {
++      this._jstermHelpers.helperResult = helpers.helperResult;
++      delete helpers.helperResult;
++    }
+ 
+     if ($) {
+-      this.sandbox.$ = $;
++      bindings.$ = $;
+     }
+     if ($$) {
+-      this.sandbox.$$ = $$;
++      bindings.$$ = $$;
 +    }
 +
 +    if (bindings._self) {
@@ -1200,7 +1193,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    //////////////////
    // Event handlers for various listeners.
    //////////////////
-@@ -721,130 +889,58 @@ WebConsoleActor.prototype =
+@@ -721,130 +886,58 @@ WebConsoleActor.prototype =
    prepareConsoleMessageForRemote:
    function WCA_prepareConsoleMessageForRemote(aMessage)
    {
@@ -1345,7 +1338,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
   * @param object aWebConsoleActor
   *        The parent WebConsoleActor instance for this object.
   */
-@@ -1078,17 +1174,17 @@ NetworkEventActor.prototype =
+@@ -1078,17 +1171,17 @@ NetworkEventActor.prototype =
     * Add network request POST data.
     *
     * @param object aPostData
@@ -1364,7 +1357,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "requestPostData",
-@@ -1173,17 +1269,17 @@ NetworkEventActor.prototype =
+@@ -1173,17 +1266,17 @@ NetworkEventActor.prototype =
     *        The response content.
     * @param boolean aDiscardedResponseBody
     *        Tells if the response content was recorded or not.
@@ -1383,7 +1376,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "responseContent",
-@@ -1223,22 +1319,40 @@ NetworkEventActor.prototype =
+@@ -1223,22 +1316,40 @@ NetworkEventActor.prototype =
     * LongStringActor for the header values, when needed.
     *
     * @private
