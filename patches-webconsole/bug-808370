@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent db547db19959aed073c77f2d2f57cb08fd0c2593
+# Parent 3298de3a04573139b0f52e6c8855ba4044c1640d
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1360188625 -7200
+# Date 1360257617 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -157,6 +157,44 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
   * @param string aCurrentString
   *        The trimmed user inputted string.
   * @return string
+@@ -956,17 +968,17 @@ VariablesView.getterOrSetterEvalMacro = 
+     case "undefined":
+       let mirrorType = type == "get" ? "set" : "get";
+       let mirrorLookup = type == "get" ? "__lookupSetter__" : "__lookupGetter__";
+ 
+       // If the parent object will end up without any getter or setter,
+       // morph it into a plain value.
+       if ((type == "set" && propertyObject.getter.type == "undefined") ||
+           (type == "get" && propertyObject.setter.type == "undefined")) {
+-        return VariablesView.overrideValueEvalMacro(propertyObject, "undefined");
++        return propertyObject.evaluationMacro(propertyObject, "undefined");
+       }
+ 
+       // Construct and return the getter/setter removal evaluation string.
+       // e.g: Object.defineProperty(foo, "bar", {
+       //   get: foo.__lookupGetter__("bar"),
+       //   set: undefined,
+       //   enumerable: true,
+       //   configurable: true
+@@ -1014,17 +1026,17 @@ VariablesView.getterOrSetterEvalMacro = 
+ /**
+  * Function invoked when a getter or setter is deleted.
+  *
+  * @param Property aItem
+  *        The current getter or setter property.
+  */
+ VariablesView.getterOrSetterDeleteCallback = function(aItem) {
+   aItem._disable();
+-  aItem.ownerView.eval(VariablesView.getterOrSetterEvalMacro(aItem, ""));
++  aItem.ownerView.eval(aItem.evaluationMacro(aItem, ""));
+   return true; // Don't hide the element.
+ };
+ 
+ /**
+  * A Scope is an object holding Variable instances.
+  * Iterable via "for (let [name, variable] in instance) { }".
+  *
+  * @param VariablesView aView
 @@ -1420,16 +1432,22 @@ Scope.prototype = {
  
    /**
@@ -180,6 +218,46 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
    /**
     * Initializes this scope's id, view and binds event listeners.
     *
+@@ -1876,17 +1894,17 @@ create({ constructor: Variable, proto: S
+    *        it will be inferred from the value.
+    *        e.g. - { someProp0: { value: 42 },
+    *                 someProp1: { value: true },
+    *                 someProp2: { value: "nasu" },
+    *                 someProp3: { value: { type: "undefined" } },
+    *                 someProp4: { value: { type: "null" } },
+    *                 someProp5: { value: { type: "object", class: "Object" } },
+    *                 someProp6: { get: { type: "object", class: "Function" },
+-   *                              set: { type: "undefined" } }
++   *                              set: { type: "undefined" } } }
+    * @param object aOptions [optional]
+    *        Additional options for adding the properties. Supported options:
+    *        - sorted: true to sort all the properties before adding them
+    *        - callback: function invoked after each property is added
+    */
+   addProperties: function V_addProperties(aProperties, aOptions = {}) {
+     let propertyNames = Object.keys(aProperties);
+ 
+@@ -2140,19 +2158,19 @@ create({ constructor: Variable, proto: S
+       separatorLabel.hidden = true;
+       valueLabel.hidden = true;
+ 
+       // Changing getter/setter names is never allowed.
+       this.switch = null;
+ 
+       // Getter/setter properties require special handling when it comes to
+       // evaluation and deletion.
++      this.evaluationMacro = VariablesView.overrideValueEvalMacro;
+       if (this.ownerView.eval) {
+         this.delete = VariablesView.getterOrSetterDeleteCallback;
+-        this.evaluationMacro = VariablesView.overrideValueEvalMacro;
+       }
+       // Deleting getters and setters individually is not allowed if no
+       // evaluation method is provided.
+       else {
+         this.delete = null;
+       }
+ 
+       let getter = this.addProperty("get", { value: descriptor.get });
 diff --git a/browser/devtools/shared/VariablesView.xul b/browser/devtools/shared/VariablesView.xul
 new file mode 100644
 --- /dev/null
@@ -222,56 +300,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      }.bind(this);
  
      let initUI = function() {
-diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
---- a/browser/devtools/webconsole/test/Makefile.in
-+++ b/browser/devtools/webconsole/test/Makefile.in
-@@ -6,17 +6,16 @@ DEPTH			= @DEPTH@
- topsrcdir	= @top_srcdir@
- srcdir		= @srcdir@
- VPATH			= @srcdir@
- relativesrcdir  = @relativesrcdir@
- 
- include $(DEPTH)/config/autoconf.mk
- 
- MOCHITEST_BROWSER_FILES = \
--	browser_webconsole_notifications.js \
- 	browser_webconsole_message_node_id.js \
- 	browser_webconsole_bug_580030_errors_after_page_reload.js \
- 	browser_webconsole_basic_net_logging.js \
- 	browser_webconsole_bug_579412_input_focus.js \
- 	browser_webconsole_bug_580001_closing_after_completion.js \
- 	browser_webconsole_bug_580400_groups.js \
- 	browser_webconsole_bug_588730_text_node_insertion.js \
- 	browser_webconsole_bug_601667_filter_buttons.js \
-@@ -37,28 +36,25 @@ MOCHITEST_BROWSER_FILES = \
- 	browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js \
- 	browser_webconsole_bug_586388_select_all.js  \
- 	browser_webconsole_bug_588967_input_expansion.js \
- 	browser_webconsole_log_node_classes.js \
- 	browser_webconsole_network_panel.js \
- 	browser_webconsole_jsterm.js \
- 	browser_webconsole_null_and_undefined_output.js \
- 	browser_webconsole_output_order.js \
--	browser_webconsole_property_panel.js \
- 	browser_webconsole_property_provider.js \
- 	browser_webconsole_bug_587617_output_copy.js \
- 	browser_webconsole_bug_585237_line_limit.js \
- 	browser_webconsole_bug_582201_duplicate_errors.js \
- 	browser_webconsole_bug_580454_timestamp_l10n.js \
- 	browser_webconsole_netlogging.js \
- 	browser_webconsole_bug_583816_No_input_and_Tab_key_pressed.js \
- 	browser_webconsole_bug_594477_clickable_output.js \
- 	browser_webconsole_bug_589162_css_filter.js \
--	browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js \
--	browser_webconsole_bug_595350_multiple_windows_and_tabs.js \
- 	browser_webconsole_bug_594497_history_arrow_keys.js \
- 	browser_webconsole_bug_588342_document_focus.js \
- 	browser_webconsole_bug_595934_message_categories.js \
- 	browser_webconsole_bug_601352_scroll.js \
- 	browser_webconsole_bug_592442_closing_brackets.js \
- 	browser_webconsole_bug_593003_iframe_wrong_hud.js \
- 	browser_webconsole_bug_613013_console_api_iframe.js \
- 	browser_webconsole_bug_597756_reopen_closed_tab.js \
 diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 --- a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 +++ b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
@@ -1262,7 +1290,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *
   * @param nsIDOMElement [aTab]
   *        Optional tab element for which you want close the Web Console. The
-@@ -310,8 +313,149 @@ function waitForSuccess(aOptions)
+@@ -310,8 +313,201 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -1272,6 +1300,29 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
    });
  }
 +
++/**
++ * Find variables or properties in a VariablesView instance.
++ *
++ * @param object aView
++ *        The VariablesView instance.
++ * @param array aRules
++ *        The array of rules you want to match. Each rule is an object with:
++ *        - name (string|regexp): property name to match.
++ *        - value (string|regexp): property value to match.
++ *        - isIterator (boolean): check if the property is an iterator.
++ *        - isGetter (boolean): check if the property is a getter.
++ *        - isGenerator (boolean): check if the property is a generator.
++ * @param object aOptions
++ *        Options for matching:
++ *        - webconsole: the WebConsole instance we work with.
++ * @return object
++ *         A Promise object that is resolved when all the rules complete
++ *         matching. The resolved callback is given an array of all the rules
++ *         you wanted to check. Each rule has a new property: |matchedProp|
++ *         which holds a reference to the Property object instance from the
++ *         VariablesView. If the rule did not match, then |matchedProp| is
++ *         undefined.
++ */
 +function findVariableViewProperties(aView, aRules, aOptions)
 +{
 +  let outstanding = [];
@@ -1322,6 +1373,22 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  });
 +}
 +
++/**
++ * Check if a given Property object from the variables view matches the given
++ * rule.
++ *
++ * @param object aProp
++ *        The variable's view Property instance.
++ * @param object aRule
++ *        Rules for matching the property. See findVariableViewProperties() for
++ *        details.
++ * @param object aOptions
++ *        Options for matching. See findVariableViewProperties().
++ * @return object
++ *         A Promise that is resolved when all the checks complete. Resolution
++ *         result is a boolean that tells your promise callback the match
++ *         result: true or false.
++ */
 +function matchVariablesViewProperty(aProp, aRule, aOptions)
 +{
 +  function resolve(aResult) {
@@ -1383,7 +1450,20 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  });
 +}
 +
-+function isVariableViewPropertyIterator(aProp, aWebConsole) {
++/**
++ * Check if the given variables view property is an iterator.
++ *
++ * @param object aProp
++ *        The Property instance you want to check.
++ * @param object aWebConsole
++ *        The WebConsole instance to work with.
++ * @return object
++ *         A Promise that is resolved when the check completes. The resolved
++ *         callback is given a boolean: true if the property is an iterator, or
++ *         false otherwise.
++ */
++function isVariableViewPropertyIterator(aProp, aWebConsole)
++{
 +  if (aProp.displayValue == "[object Iterator]") {
 +    return Promise.resolve(true);
 +  }
@@ -1491,13 +1571,14 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      // Gather the actor IDs.
      args.forEach(function(aValue) {
-       if (aValue && typeof aValue == "object" && aValue.actor) {
+-      if (aValue && typeof aValue == "object" && aValue.actor) {
 -        objectActors.push(aValue.actor);
 -        let displayStringIsLong = typeof aValue.displayString == "object" &&
 -                                  aValue.displayString.type == "longString";
 -        if (displayStringIsLong) {
 -          objectActors.push(aValue.displayString.actor);
 -        }
++      if (WebConsoleUtils.isActorGrip(aValue)) {
 +        objectActors.add(aValue.actor);
        }
 -    }, this);
@@ -1735,7 +1816,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
               methodOrNode == this.logConsoleAPIMessage) {
 -      let level = args[0].level;
        let releaseObject = function _releaseObject(aValue) {
-         if (aValue && typeof aValue == "object" && aValue.actor) {
+-        if (aValue && typeof aValue == "object" && aValue.actor) {
++        if (WebConsoleUtils.isActorGrip(aValue)) {
            this._releaseObject(aValue.actor);
          }
        }.bind(this);
@@ -2137,14 +2219,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                                aAfterNode, aResponse.timestamp);
      }
  
-+    node._objectActors = new Set();
-+
-+    let error = aResponse.exception;
-+    if (error && typeof error == "object" && error.actor) {
-+      node._objectActors.add(error.actor);
-+    }
-+
-     if (result && typeof result == "object" && result.actor) {
+-    if (result && typeof result == "object" && result.actor) {
 -      node._objectActors = [result.actor];
 -      if (typeof result.displayString == "object" &&
 -          result.displayString.type == "longString") {
@@ -2155,6 +2230,14 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      // inspectable.
 -      let longString = null;
 -      let formatter = null;
++    node._objectActors = new Set();
++
++    let error = aResponse.exception;
++    if (WebConsoleUtils.isActorGrip(error)) {
++      node._objectActors.add(error.actor);
++    }
++
++    if (WebConsoleUtils.isActorGrip(result)) {
 +      node._objectActors.add(result.actor);
 +
        if (result.type == "longString") {
@@ -2193,7 +2276,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2882,81 +2830,519 @@ JSTerm.prototype = {
+@@ -2882,81 +2830,629 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -2518,7 +2601,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    scope.locked = true;
 +
 +    let container = scope.addVar();
-+    container.allowDeletion = true;
++    container.evaluationMacro = this._variablesViewSimpleValueEvalMacro;
++
 +    if (aOptions.objectActor) {
 +      this._fetchVarProperties(container, aOptions.objectActor);
 +      view._consoleLastObjectActor = aOptions.objectActor.actor;
@@ -2556,7 +2640,81 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      bindObjectActor: aOptions.objectActor.actor,
 +    };
 +
-+    this.requestEvaluation("_self" + aString, evalOptions).then(onEval, onEval);
++    this.requestEvaluation(aString, evalOptions).then(onEval, onEval);
++  },
++
++  /**
++   * Generates the string evaluated when performing simple value changes in the
++   * variables view.
++   *
++   * @private
++   * @param Variable | Property aItem
++   *        The current variable or property.
++   * @param string aCurrentString
++   *        The trimmed user inputted string.
++   * @return string
++   *         The string to be evaluated.
++   */
++  _variablesViewSimpleValueEvalMacro:
++  function JST__variablesViewSimpleValueEvalMacro(aItem, aCurrentString)
++  {
++    return "_self" + aItem.symbolicName + "=" + aCurrentString;
++  },
++
++
++  /**
++   * Generates the string evaluated when overriding getters and setters with
++   * plain values in the variables view.
++   *
++   * @private
++   * @param Property aItem
++   *        The current getter or setter property.
++   * @param string aCurrentString
++   *        The trimmed user inputted string.
++   * @return string
++   *         The string to be evaluated.
++   */
++  _variablesViewOverrideValueEvalMacro:
++  function JST__variablesViewOverrideValueEvalMacro(aItem, aCurrentString)
++  {
++    let parent = aItem.ownerView;
++    let symbolicName = parent.symbolicName;
++    if (symbolicName.indexOf("_self") != 0) {
++      parent._symbolicName = "_self" + symbolicName;
++    }
++
++    let result = VariablesView.overrideValueEvalMacro.apply(this, arguments);
++
++    parent._symbolicName = symbolicName;
++
++    return result;
++  },
++
++  /**
++   * Generates the string evaluated when performing getters and setters changes
++   * in the variables view.
++   *
++   * @private
++   * @param Property aItem
++   *        The current getter or setter property.
++   * @param string aCurrentString
++   *        The trimmed user inputted string.
++   * @return string
++   *         The string to be evaluated.
++   */
++  _variablesViewGetterOrSetterEvalMacro:
++  function JST__variablesViewGetterOrSetterEvalMacro(aItem, aCurrentString)
++  {
++    let propertyObject = aItem.ownerView;
++    let parentObject = propertyObject.ownerView;
++    let parent = parentObject.symbolicName;
++    parentObject._symbolicName = "_self" + parent;
++
++    let result = VariablesView.getterOrSetterEvalMacro.apply(this, arguments);
++
++    parentObject._symbolicName = parent;
++
++    return result;
 +  },
 +
 +  /**
@@ -2606,6 +2764,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    };
 +
 +    let newSymbolicName = aVar.ownerView.symbolicName + '["' + aNewName + '"]';
++    if (newSymbolicName == aVar.symbolicName) {
++      return;
++    }
 +
 +    let code = "_self" + newSymbolicName + " = _self" + aVar.symbolicName + ";" +
 +               "delete _self" + aVar.symbolicName;
@@ -2615,9 +2776,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +  /**
 +   * A noop callback for JavaScript evaluation. This method releases any
-+   * result and/or exception ObjectActors that come from the server for
-+   * evaluation requests. This is used for editing, renaming and deleting
-+   * properties in the variables view.
++   * result ObjectActors that come from the server for evaluation requests. This
++   * is used for editing, renaming and deleting properties in the variables
++   * view.
++   *
++   * Exceptions are displayed in the output.
 +   *
 +   * @private
 +   * @param function aCallback
@@ -2627,15 +2790,32 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   */
 +  _silentEvalCallback: function JST__silentEvalCallback(aCallback, aResponse)
 +  {
++    if (aResponse.error) {
++      Cu.reportError("Web Console evaluation failed. " + aResponse.error + ":" +
++                     aResponse.message);
++      return;
++    }
++
++    let exception = aResponse.exception;
++    if (exception) {
++      let node = this.writeOutput(aResponse.exceptionMessage,
++                                  CATEGORY_OUTPUT, SEVERITY_ERROR,
++                                  null, aResponse.timestamp);
++      node._objectActors = new Set();
++      if (WebConsoleUtils.isActorGrip(exception)) {
++        node._objectActors.add(exception.actor);
++      }
++    }
++
 +    let helper = aResponse.helperResult || { type: null };
 +    let helperGrip = null;
 +    if (helper.type == "inspectObject") {
 +      helperGrip = helper.object;
 +    }
 +
-+    let grips = [aResponse.exception, aResponse.result, helperGrip];
++    let grips = [aResponse.result, helperGrip];
 +    for (let grip of grips) {
-+      if (grip && typeof grip == "object" && grip.actor) {
++      if (WebConsoleUtils.isActorGrip(grip)) {
 +        this.hud._releaseObject(grip.actor);
 +      }
 +    }
@@ -2650,7 +2830,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   * expanded. It does not expand the variable.
 +   *
 +   * @param object aVar
-+   *        The VariableView Variable instance where the properties get added.
++   *        The VariablseView Variable instance where the properties get added.
 +   * @param object [aGrip]
 +   *        Optional, the object actor grip of the variable. If the grip is not
 +   *        provided, then the aVar.value is used as the object actor grip.
@@ -2671,25 +2851,39 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    let actors = aVar._variablesView._consoleObjectActors;
 +
 +    function addActorForDescriptor(aGrip) {
-+      if (aGrip && typeof aGrip == "object" && aGrip.actor) {
++      if (WebConsoleUtils.isActorGrip(aGrip)) {
 +        actors.add(aGrip.actor);
 +      }
 +    }
 +
-+    let onNewProperty = function _onNewProperty(aPropertyName, aDescriptor) {
-+      let prop = aVar.get(aPropertyName);
-+      let grips = [prop.value, prop.gettter, prop.settter];
++    let onNewProperty = function _onNewProperty(aProperty) {
++      if (aProperty.getter || aProperty.setter) {
++        aProperty.evaluationMacro = this._variablesViewOverrideValueEvalMacro;
++        let getter = aProperty.get("get");
++        let setter = aProperty.get("set");
++        if (getter) {
++          getter.evaluationMacro = this._variablesViewGetterOrSetterEvalMacro;
++        }
++        if (setter) {
++          setter.evaluationMacro = this._variablesViewGetterOrSetterEvalMacro;
++        }
++      }
++      else {
++        aProperty.evaluationMacro = this._variablesViewSimpleValueEvalMacro;
++      }
++
++      let grips = [aProperty.value, aProperty.gettter, aProperty.settter];
 +      grips.forEach(addActorForDescriptor);
 +
-+      let inspectable = !VariablesView.isPrimitive({ value: prop.value });
-+      let longString = prop.value && typeof prop.value == "object" &&
-+                       prop.value.type == "longString";
++      let inspectable = !VariablesView.isPrimitive({ value: aProperty.value });
++      let longString = WebConsoleUtils.isActorGrip(aProperty.value) &&
++                       aProperty.value.type == "longString";
 +      if (inspectable) {
-+        prop.onexpand = this._fetchVarProperties;
++        aProperty.onexpand = this._fetchVarProperties;
 +      }
 +      else if (longString) {
-+        prop.onexpand = this._fetchVarLongString;
-+        prop.showArrow();
++        aProperty.onexpand = this._fetchVarLongString;
++        aProperty.showArrow();
 +      }
 +    }.bind(this);
 +
@@ -2700,17 +2894,16 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +      // Add all the variable properties.
 +      if (ownProperties) {
-+        aVar.addProperties(ownProperties, { sorted: sortable });
-+
-+        for (let name of Object.keys(ownProperties)) {
-+          onNewProperty(name);
-+        }
++        aVar.addProperties(ownProperties, {
++          sorted: sortable,
++          callback: onNewProperty,
++        });
 +      }
 +
 +      // Add the variable's __proto__.
 +      if (prototype && prototype.type != "null") {
-+        aVar.addProperty("__proto__", { value: prototype });
-+        onNewProperty("__proto__");
++        let proto = aVar.addProperty("__proto__", { value: prototype });
++        onNewProperty(proto);
 +      }
 +
 +      aVar._retrieved = true;
@@ -2725,7 +2918,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   * Fetch the full string for a given variable that displays a long string.
 +   *
 +   * @param object aVar
-+   *        The VariableView Variable instance where the properties get added.
++   *        The VariablesView Variable instance where the properties get added.
 +   */
 +  _fetchVarLongString: function JST__fetchVarLongString(aVar)
 +  {
@@ -2744,7 +2937,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      function _onSubstring(aResponse) {
 +        if (aResponse.error) {
 +          Cu.reportError("JST__fetchVarLongString substring failure: " +
-+                         aResponse.error);
++                         aResponse.error + ": " + aResponse.message);
 +          return;
 +        }
 +
@@ -2761,7 +2954,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3572,171 +3958,48 @@ JSTerm.prototype = {
+@@ -3572,171 +4068,48 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
@@ -3093,3 +3286,36 @@ diff --git a/browser/themes/winstripe/devtools/webconsole.css b/browser/themes/w
 +.webconsole-msg-inspector iframe {
 +  height: 7em;
 +}
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -862,16 +862,29 @@ this.WebConsoleUtils = {
+ 
+     if (val.displayString && typeof val.displayString == "object" &&
+         val.displayString.type == "longString") {
+       return val.displayString.initial;
+     }
+ 
+     return val.displayString || val.type;
+   },
++
++  /**
++   * Check if the given value is a grip with an actor.
++   *
++   * @param mixed aGrip
++   *        Value you want to check if it is a grip with an actor.
++   * @return boolean
++   *         True if the given value is a grip with an actor.
++   */
++  isActorGrip: function WCU_isActorGrip(aGrip)
++  {
++    return aGrip && typeof(aGrip) == "object" && aGrip.actor;
++  },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // Localization
+ //////////////////////////////////////////////////////////////////////////
+ 
+ WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
+ {
