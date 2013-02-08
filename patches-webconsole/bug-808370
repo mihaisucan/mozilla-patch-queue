@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent efea0efa84e1f2408d8744145f342494bdda493f
+# Parent 0e32750d034b4797d3b2f16b4ca430e55dd2135a
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1360343309 -7200
+# Date 1360358132 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -1870,7 +1870,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * category's line limit by removing old messages as needed.
     *
     * @param integer aCategory
-@@ -1974,62 +1913,49 @@ WebConsoleFrame.prototype = {
+@@ -1974,62 +1913,51 @@ WebConsoleFrame.prototype = {
      let n = Math.max(0, messageNodes.length - logLimit);
      let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
      toRemove.forEach(this.removeOutputMessage, this);
@@ -1931,7 +1931,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      this.pruneConsoleDirNode(aNode);
 -      return;
 +      let view = aNode._variablesView;
-+      let actors = view ? view._consoleObjectActors : new Set();
++      let actors = view ?
++                   this.jsterm._objectActorsInVariablesViews.get(view) :
++                   new Set();
 +      for (let actor of actors) {
 +        this._releaseObject(actor);
 +      }
@@ -1945,7 +1947,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2128,17 +2054,17 @@ WebConsoleFrame.prototype = {
+@@ -2128,17 +2056,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -1964,7 +1966,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2175,52 +2101,37 @@ WebConsoleFrame.prototype = {
+@@ -2175,52 +2103,37 @@ WebConsoleFrame.prototype = {
      node.clipboardText = aClipboardText;
      node.classList.add("hud-msg-node");
  
@@ -2032,7 +2034,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2258,53 +2169,46 @@ WebConsoleFrame.prototype = {
+@@ -2258,53 +2171,46 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -2094,13 +2096,17 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Click event handler for the ellipsis shown immediately after a long string.
     * This method retrieves the full string and updates the console output to
-@@ -2675,26 +2579,62 @@ function JSTerm(aWebConsoleFrame)
+@@ -2673,28 +2579,76 @@ function JSTerm(aWebConsoleFrame)
+ {
+   this.hud = aWebConsoleFrame;
    this.hudId = this.hud.hudId;
  
    this.lastCompletion = { value: null };
    this.history = [];
    this.historyIndex = 0;
    this.historyPlaceHolder = 0;  // this.history.length;
++  this._objectActorsInVariablesViews = new Map();
++
    this._keyPress = this.keyPress.bind(this);
    this._inputEventHandler = this.inputEventHandler.bind(this);
 +  this._fetchVarProperties = this._fetchVarProperties.bind(this);
@@ -2149,6 +2155,16 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  _lazyVariablesView: true,
 +
 +  /**
++   * Holds a map between VariablesView instances and sets of ObjectActor IDs
++   * that have been retrieved from the server. This allows us to release the
++   * objects when needed.
++   *
++   * @private
++   * @type Map
++   */
++  _objectActorsInVariablesViews: null,
++
++  /**
     * Last input value.
     * @type string
     */
@@ -2157,7 +2173,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * History of code that was executed.
     * @type array
-@@ -2733,16 +2673,18 @@ JSTerm.prototype = {
+@@ -2733,16 +2687,18 @@ JSTerm.prototype = {
  
      let doc = this.hud.document;
      this.completeNode = doc.querySelector(".jsterm-complete-node");
@@ -2176,7 +2192,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement [aAfterNode]
-@@ -2755,33 +2697,47 @@ JSTerm.prototype = {
+@@ -2755,33 +2711,47 @@ JSTerm.prototype = {
     *        The message received from the server.
     */
    _executeResultCallback:
@@ -2231,7 +2247,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            catch (ex) {
              errorMessage = helperResult.message;
            }
-@@ -2820,48 +2776,40 @@ JSTerm.prototype = {
+@@ -2820,48 +2790,40 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -2297,7 +2313,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2882,81 +2830,629 @@ JSTerm.prototype = {
+@@ -2882,81 +2844,628 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -2572,7 +2588,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    view.searchEnabled = !aOptions.hideFilterInput;
 +    view.lazyEmpty = this._lazyVariablesView;
 +    view.lazyAppend = this._lazyVariablesView;
-+    view._consoleObjectActors = new Set();
++    this._objectActorsInVariablesViews.set(view, new Set());
 +    return view;
 +  },
 +
@@ -2594,7 +2610,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    view.createHierarchy();
 +    view.empty();
 +
-+    let actors = view._consoleObjectActors;
++    let actors = this._objectActorsInVariablesViews.get(view);
 +    for (let actor of actors) {
 +      // We need to avoid pruning the object inspection starting point.
 +      // That one is pruned when the console message is removed.
@@ -2869,7 +2885,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      throw new Error("No object actor grip was given for the variable.");
 +    }
 +
-+    let actors = aVar._variablesView._consoleObjectActors;
++    let view = aVar._variablesView;
++    let actors = this._objectActorsInVariablesViews.get(view);
 +
 +    function addActorForDescriptor(aGrip) {
 +      if (WebConsoleUtils.isActorGrip(aGrip)) {
@@ -2928,9 +2945,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      }
 +
 +      aVar._retrieved = true;
-+
-+      aVar._variablesView.commitHierarchy();
-+
++      view.commitHierarchy();
 +      this.emit("variablesview-fetched", aVar);
 +    }.bind(this));
 +  },
@@ -2975,7 +2990,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3572,171 +4068,48 @@ JSTerm.prototype = {
+@@ -3572,171 +4081,49 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
@@ -3145,10 +3160,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    destroy: function JST_destroy()
    {
 +    if (this._variablesView) {
-+      for (let actor of this._variablesView._consoleObjectActors) {
++      let actors = this._objectActorsInVariablesViews.get(this._variablesView);
++      for (let actor of actors) {
 +        this.hud._releaseObject(actor);
 +      }
-+      this._variablesView._consoleObjectActors.clear();
++      actors.clear();
 +      this._variablesView = null;
 +    }
 +
