@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 0e32750d034b4797d3b2f16b4ca430e55dd2135a
+# Parent b4e6563db26db075237f511cda8916235510f6c8
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1360358132 -7200
+# Date 1360410660 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -157,7 +157,7 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
   * @param string aCurrentString
   *        The trimmed user inputted string.
   * @return string
-@@ -956,17 +968,17 @@ VariablesView.getterOrSetterEvalMacro = 
+@@ -956,17 +968,18 @@ VariablesView.getterOrSetterEvalMacro = 
      case "undefined":
        let mirrorType = type == "get" ? "set" : "get";
        let mirrorLookup = type == "get" ? "__lookupSetter__" : "__lookupGetter__";
@@ -167,6 +167,7 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
        if ((type == "set" && propertyObject.getter.type == "undefined") ||
            (type == "get" && propertyObject.setter.type == "undefined")) {
 -        return VariablesView.overrideValueEvalMacro(propertyObject, "undefined");
++        // Make sure the right getter/setter to value override macro is applied to the target object.
 +        return propertyObject.evaluationMacro(propertyObject, "undefined");
        }
  
@@ -176,7 +177,7 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
        //   set: undefined,
        //   enumerable: true,
        //   configurable: true
-@@ -1014,17 +1026,17 @@ VariablesView.getterOrSetterEvalMacro = 
+@@ -1014,17 +1027,20 @@ VariablesView.getterOrSetterEvalMacro = 
  /**
   * Function invoked when a getter or setter is deleted.
   *
@@ -186,7 +187,10 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
  VariablesView.getterOrSetterDeleteCallback = function(aItem) {
    aItem._disable();
 -  aItem.ownerView.eval(VariablesView.getterOrSetterEvalMacro(aItem, ""));
++
++  // Make sure the right getter/setter to value override macro is applied to the target object.
 +  aItem.ownerView.eval(aItem.evaluationMacro(aItem, ""));
++
    return true; // Don't hide the element.
  };
  
@@ -195,7 +199,7 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
   * Iterable via "for (let [name, variable] in instance) { }".
   *
   * @param VariablesView aView
-@@ -1420,16 +1432,22 @@ Scope.prototype = {
+@@ -1420,16 +1436,28 @@ Scope.prototype = {
  
    /**
     * Gets the name associated with this item.
@@ -210,6 +214,12 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
 +  get displayValue() this._valueString,
 +
 +  /**
++   * Gets the class names used for the displayed value.
++   * @return string
++   */
++  get displayValueClassName() this._valueClassName,
++
++  /**
     * Gets the element associated with this item.
     * @return nsIDOMNode
     */
@@ -218,7 +228,7 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
    /**
     * Initializes this scope's id, view and binds event listeners.
     *
-@@ -1876,17 +1894,17 @@ create({ constructor: Variable, proto: S
+@@ -1876,17 +1904,17 @@ create({ constructor: Variable, proto: S
     *        it will be inferred from the value.
     *        e.g. - { someProp0: { value: 42 },
     *                 someProp1: { value: true },
@@ -237,27 +247,24 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
    addProperties: function V_addProperties(aProperties, aOptions = {}) {
      let propertyNames = Object.keys(aProperties);
  
-@@ -2140,19 +2158,19 @@ create({ constructor: Variable, proto: S
-       separatorLabel.hidden = true;
-       valueLabel.hidden = true;
- 
-       // Changing getter/setter names is never allowed.
-       this.switch = null;
- 
-       // Getter/setter properties require special handling when it comes to
-       // evaluation and deletion.
-+      this.evaluationMacro = VariablesView.overrideValueEvalMacro;
+@@ -2148,16 +2176,17 @@ create({ constructor: Variable, proto: S
        if (this.ownerView.eval) {
          this.delete = VariablesView.getterOrSetterDeleteCallback;
--        this.evaluationMacro = VariablesView.overrideValueEvalMacro;
+         this.evaluationMacro = VariablesView.overrideValueEvalMacro;
        }
        // Deleting getters and setters individually is not allowed if no
        // evaluation method is provided.
        else {
          this.delete = null;
++        this.evaluationMacro = null;
        }
  
        let getter = this.addProperty("get", { value: descriptor.get });
+       let setter = this.addProperty("set", { value: descriptor.set });
+       getter.evaluationMacro = VariablesView.getterOrSetterEvalMacro;
+       setter.evaluationMacro = VariablesView.getterOrSetterEvalMacro;
+ 
+       getter.hideArrow();
 diff --git a/browser/devtools/shared/VariablesView.xul b/browser/devtools/shared/VariablesView.xul
 new file mode 100644
 --- /dev/null
@@ -303,7 +310,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
 +++ b/browser/devtools/webconsole/test/Makefile.in
-@@ -37,17 +37,16 @@ MOCHITEST_BROWSER_FILES = \
+@@ -36,17 +36,16 @@ MOCHITEST_BROWSER_FILES = \
  	browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js \
  	browser_webconsole_bug_586388_select_all.js  \
  	browser_webconsole_bug_588967_input_expansion.js \
@@ -1311,7 +1318,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *
   * @param nsIDOMElement [aTab]
   *        Optional tab element for which you want close the Web Console. The
-@@ -310,8 +313,201 @@ function waitForSuccess(aOptions)
+@@ -310,8 +313,200 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -1347,7 +1354,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +function findVariableViewProperties(aView, aRules, aOptions)
 +{
 +  let outstanding = [];
-+  let rules = [].concat(aRules); // keep a copy of the rules array
++  let rules = Array.slice(aRules); // keep a copy of the rules array
 +
 +  function onMatch(aProp, aRule, aMatched) {
 +    if (!aMatched || aRule.matchedProp) {
@@ -1427,7 +1434,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +
 +  if (aRule.value) {
 +    let displayValue = aProp.displayValue;
-+    if (aProp._valueClassName == "token-string") {
++    if (aProp.displayValueClassName == "token-string") {
 +      displayValue = displayValue.substring(1, displayValue.length - 1);
 +    }
 +
@@ -1442,7 +1449,6 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  if ("isGetter" in aRule) {
 +    let isGetter = !!(aProp.getter && aProp.get("get"));
 +    if (aRule.isGetter != isGetter) {
-+      console.debug("isGetter blaaa", aRule.isGetter, isGetter);
 +      return resolve(false);
 +    }
 +  }
