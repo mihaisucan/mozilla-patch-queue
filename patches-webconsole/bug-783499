@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 2deb86db03caf641269b26359c7d61bb624602a1
+# Parent ab3e4fb2f5d454dcc02e1326faf008cb128bb338
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1360257798 -7200
+# Date 1360675537 -7200
 
 Bug 783499 - Web Console should use the debugger API
 
@@ -85,7 +85,7 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
 diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-script-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
-@@ -954,17 +954,17 @@ ThreadActor.prototype = {
+@@ -966,17 +966,17 @@ ThreadActor.prototype = {
      }
  
      if (aPool.objectActors.has(aValue)) {
@@ -104,7 +104,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
    /**
     * Create a grip for the given debuggee object with a pause lifetime.
     *
-@@ -1488,20 +1488,17 @@ SourceActor.prototype.requestTypes = {
+@@ -1545,20 +1545,17 @@ SourceActor.prototype.requestTypes = {
   *        The parent thread actor for this object.
   */
  function ObjectActor(aObj, aThreadActor)
@@ -126,7 +126,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
    grip: function OA_grip() {
      let g = { "type": "object",
                "class": this.obj.class,
-@@ -1525,87 +1522,87 @@ update(ObjectActor.prototype, {
+@@ -1582,47 +1579,47 @@ update(ObjectActor.prototype, {
  
      return g;
    },
@@ -140,6 +140,11 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
 +      this.registeredPool.objectActors.delete(this.obj);
 +    }
      this.registeredPool.removeActor(this);
+     this.disconnect();
+   },
+ 
+   disconnect: function OA_disconnect() {
+     this.threadActor._removeFromProtoChain(this.obj);
    },
  
    /**
@@ -167,17 +172,19 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
 -  onPrototypeAndProperties:
 -  PauseScopedActor.withPaused(function OA_onPrototypeAndProperties(aRequest) {
 +  onPrototypeAndProperties: function OA_onPrototypeAndProperties(aRequest) {
+     if (this.obj.proto) {
+       // Store the object and its prototype to the prototype chain cache, so that
+       // we can evaluate native getter methods for WebIDL attributes that are
+       // meant to be called on the instace and not on the prototype.
+       //
+       // TODO: after bug 801084, we could restrict the cache to objects where
+       // this.obj.hostAnnotations.isWebIDLObject == true
+       let chain = this.threadActor._findProtoChain(this.obj);
+@@ -1638,45 +1635,45 @@ update(ObjectActor.prototype, {
+ 
      let ownProperties = {};
-     for each (let name in this.obj.getOwnPropertyNames()) {
-       try {
-         let desc = this.obj.getOwnPropertyDescriptor(name);
-         ownProperties[name] = this._propertyDescriptor(desc);
-       } catch (e if e.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO") {
-         // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
-         // allowed.
-         dumpn("Error while getting the property descriptor for " + name +
-               ": " + e.name);
-       }
+     for (let name of this.obj.getOwnPropertyNames()) {
+       ownProperties[name] = this._propertyDescriptor(name);
      }
      return { from: this.actorID,
               prototype: this.threadActor.createValueGrip(this.obj.proto),
@@ -212,9 +219,8 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
                 message: "no property name was specified" };
      }
  
-     let desc = this.obj.getOwnPropertyDescriptor(aRequest.name);
      return { from: this.actorID,
-              descriptor: this._propertyDescriptor(desc) };
+              descriptor: this._propertyDescriptor(aRequest.name) };
 -  }),
 +  },
  
@@ -222,10 +228,10 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
     * A helper method that creates a property descriptor for the provided object,
     * properly formatted for sending in a protocol response.
     *
-    * @param aObject object
-    *        The object that the descriptor is generated for.
+    * @param string aName
+    *        The property that the descriptor is generated for.
     */
-@@ -1624,26 +1621,94 @@ update(ObjectActor.prototype, {
+@@ -1754,26 +1751,94 @@ update(ObjectActor.prototype, {
    },
  
    /**
@@ -322,7 +328,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
     *        The protocol request object.
     */
    onScope: PauseScopedActor.withPaused(function OA_onScope(aRequest) {
-@@ -1659,32 +1724,16 @@ update(ObjectActor.prototype, {
+@@ -1789,32 +1854,16 @@ update(ObjectActor.prototype, {
        return { error: "notDebuggee",
                 message: "cannot access the environment of this function." };
      }
@@ -355,7 +361,7 @@ diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/dev
     */
    onThreadGrip: PauseScopedActor.withPaused(function OA_onThreadGrip(aRequest) {
      this.threadActor.threadObjectGrip(this);
-@@ -1703,27 +1752,20 @@ update(ObjectActor.prototype, {
+@@ -1833,27 +1882,20 @@ update(ObjectActor.prototype, {
                 message: "Only thread-lifetime actors can be released." };
      }
  
@@ -682,7 +688,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 --- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
 +++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -66,21 +66,31 @@ function WebConsoleActor(aConnection, aP
+@@ -66,21 +66,33 @@ function WebConsoleActor(aConnection, aP
      this._window = Services.wm.getMostRecentWindow("navigator:browser");
      this._isGlobalActor = true;
    }
@@ -694,6 +700,8 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +
 +  this.dbg = new Debugger();
 +  this._createGlobal();
++
++  this._protoChains = new Map();
  }
  
  WebConsoleActor.prototype =
@@ -714,7 +722,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
  
    /**
     * Actor pool for all of the actors we send to the client.
-@@ -93,28 +103,39 @@ WebConsoleActor.prototype =
+@@ -93,28 +105,49 @@ WebConsoleActor.prototype =
    /**
     * Web Console-related preferences.
     * @private
@@ -751,6 +759,16 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +   * @type object
 +   */
 +  _jstermHelpers: null,
++
++  /**
++   * A cache of prototype chains for objects that have received a
++   * prototypeAndProperties request.
++   *
++   * @private
++   * @type Map
++   * @see dbg-script-actors.js, ThreadActor._protoChains
++   */
++  _protoChains: null,
  
    /**
     * The debugger server connection instance.
@@ -759,7 +777,29 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    conn: null,
  
    /**
-@@ -180,76 +201,85 @@ WebConsoleActor.prototype =
+@@ -157,16 +190,21 @@ WebConsoleActor.prototype =
+ 
+   grip: function WCA_grip()
+   {
+     return { actor: this.actorID };
+   },
+ 
+   hasNativeConsoleAPI: BrowserTabActor.prototype.hasNativeConsoleAPI,
+ 
++  _createValueGrip: ThreadActor.prototype.createValueGrip,
++  _stringIsLong: ThreadActor.prototype._stringIsLong,
++  _findProtoChain: ThreadActor.prototype._findProtoChain,
++  _removeFromProtoChain: ThreadActor.prototype._removeFromProtoChain,
++
+   /**
+    * Destroy the current WebConsoleActor instance.
+    */
+   disconnect: function WCA_disconnect()
+   {
+     if (this.pageErrorListener) {
+       this.pageErrorListener.destroy();
+       this.pageErrorListener = null;
+@@ -180,74 +218,80 @@ WebConsoleActor.prototype =
        this.networkMonitor = null;
      }
      if (this.consoleProgressListener) {
@@ -770,6 +810,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      this._actorPool = null;
 -    this.sandbox = null;
 -    this._sandboxWindowId = 0;
++    this._protoChains.clear();
 +    this.dbg.enabled = false;
 +    this.dbg = null;
 +    this._dbgWindow = null;
@@ -777,8 +818,6 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      this.conn = this._window = null;
    },
  
-+  _createValueGrip: ThreadActor.prototype.createValueGrip,
-+
    /**
 -   * Create a grip for the given value. If the value is an object,
 -   * a WebConsoleObjectActor will be created.
@@ -863,17 +902,13 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +    return actor.grip();
    },
  
-+  _stringIsLong: ThreadActor.prototype._stringIsLong,
-+
    /**
     * Get an object actor by its ID.
     *
     * @param string aActorID
     * @return object
     */
-   getActorByID: function WCA_getActorByID(aActorID)
-   {
-@@ -447,54 +477,69 @@ WebConsoleActor.prototype =
+@@ -447,54 +491,69 @@ WebConsoleActor.prototype =
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
     * @return object
@@ -959,7 +994,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      };
    },
  
-@@ -524,75 +569,191 @@ WebConsoleActor.prototype =
+@@ -524,75 +583,191 @@ WebConsoleActor.prototype =
      return { updated: Object.keys(aRequest.preferences) };
    },
  
@@ -1185,7 +1220,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    //////////////////
    // Event handlers for various listeners.
    //////////////////
-@@ -721,130 +882,58 @@ WebConsoleActor.prototype =
+@@ -721,130 +896,58 @@ WebConsoleActor.prototype =
    prepareConsoleMessageForRemote:
    function WCA_prepareConsoleMessageForRemote(aMessage)
    {
@@ -1330,7 +1365,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
   * @param object aWebConsoleActor
   *        The parent WebConsoleActor instance for this object.
   */
-@@ -1078,17 +1167,17 @@ NetworkEventActor.prototype =
+@@ -1078,17 +1181,17 @@ NetworkEventActor.prototype =
     * Add network request POST data.
     *
     * @param object aPostData
@@ -1349,7 +1384,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "requestPostData",
-@@ -1173,17 +1262,17 @@ NetworkEventActor.prototype =
+@@ -1173,17 +1276,17 @@ NetworkEventActor.prototype =
     *        The response content.
     * @param boolean aDiscardedResponseBody
     *        Tells if the response content was recorded or not.
@@ -1368,7 +1403,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "responseContent",
-@@ -1223,22 +1312,40 @@ NetworkEventActor.prototype =
+@@ -1223,22 +1326,40 @@ NetworkEventActor.prototype =
     * LongStringActor for the header values, when needed.
     *
     * @private

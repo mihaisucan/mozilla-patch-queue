@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent b4e6563db26db075237f511cda8916235510f6c8
+# Parent ed035a57eda49c3c0061cdfb747ee572e23227e8
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1360410660 -7200
+# Date 1360704218 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -269,7 +269,7 @@ diff --git a/browser/devtools/shared/VariablesView.xul b/browser/devtools/shared
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/shared/VariablesView.xul
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,16 @@
 +<?xml version="1.0"?>
 +<!-- This Source Code Form is subject to the terms of the Mozilla Public
 +   - License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -282,7 +282,8 @@ new file mode 100644
 +  <!ENTITY % viewDTD SYSTEM "chrome://browser/locale/devtools/VariablesView.dtd">
 +  %viewDTD;
 +]>
-+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" title="&PropertiesViewWindowTitle;">
++<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
++        title="&PropertiesViewWindowTitle;">
 +  <vbox id="variables" flex="1"/>
 +</window>
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
@@ -1318,7 +1319,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *
   * @param nsIDOMElement [aTab]
   *        Optional tab element for which you want close the Web Console. The
-@@ -310,8 +313,200 @@ function waitForSuccess(aOptions)
+@@ -310,8 +313,262 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -1494,6 +1495,9 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  if (aProp.displayValue == "[object Iterator]") {
 +    return Promise.resolve(true);
 +  }
++
++
++
 +  if (!aProp.onexpand) {
 +    return Promise.resolve(false);
 +  }
@@ -1519,10 +1523,69 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +
 +  return deferred.promise;
 +}
++
++
++function variablesViewExpandTo(aOptions)
++{
++  let root = aOptions.rootVariable;
++  let expandTo = aOptions.expandTo.split(".");
++  let jsterm = aOptions.webconsole.jsterm;
++  let lastDeferred = Promise.defer();
++
++  function fetch(aProp)
++  {
++    if (!aProp.onexpand) {
++      ok(false, "property " + aProp.name + " cannot be expanded: !onexpand");
++      return Promise.reject(aProp);
++    }
++
++    let deferred = Promise.defer();
++
++    jsterm.once("variablesview-fetched", function _onFetchProp() {
++      executeSoon(function() {
++        deferred.resolve(aProp);
++      });
++    });
++
++    aProp.expand();
++
++    return deferred.promise;
++  }
++
++  function getNext(aProp)
++  {
++    let name = expandTo.shift();
++    let newProp = aProp.get(name);
++
++    if (expandTo.length > 0) {
++      ok(newProp, "found property " + name);
++      if (newProp) {
++        fetch(newProp).then(getNext, fetchError);
++      }
++      else {
++        lastDeferred.reject(aProp);
++      }
++    }
++    else {
++      lastDeferred.resolve(newProp);
++    }
++  }
++
++  function fetchError(aProp)
++  {
++    lastDeferred.reject(aProp);
++  }
++
++  getNext(root);
++  let prop = root.get(expandTo.shift());
++  fetch(prop).then(getNext, fetchError);
++
++  return lastDeferred.promise;
++}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -14,45 +14,56 @@ Cu.import("resource://gre/modules/XPCOMU
+@@ -14,45 +14,58 @@ Cu.import("resource://gre/modules/XPCOMU
  
  XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                    "resource://gre/modules/Services.jsm");
@@ -1576,6 +1639,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
 +const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/VariablesView.xul";
 +
++const CONSOLE_DIR_VIEW_HEIGHT = 0.6;
++
  // The amount of time in milliseconds that must pass between messages to
  // trigger the display of a new group.
  const NEW_GROUP_DELAY = 5000;
@@ -1584,7 +1649,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -949,55 +960,42 @@ WebConsoleFrame.prototype = {
+@@ -949,55 +962,42 @@ WebConsoleFrame.prototype = {
    logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
    {
      let body = null;
@@ -1649,7 +1714,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let functionName = aMessage.functionName ||
                             l10n.getStr("stacktrace.anonymousFunction");
  
-@@ -1017,16 +1015,22 @@ WebConsoleFrame.prototype = {
+@@ -1017,16 +1017,22 @@ WebConsoleFrame.prototype = {
        }
  
        case "group":
@@ -1672,7 +1737,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          if (timer.error) {
            Cu.reportError(l10n.getStr(timer.error));
            return;
-@@ -1055,64 +1059,44 @@ WebConsoleFrame.prototype = {
+@@ -1055,64 +1061,44 @@ WebConsoleFrame.prototype = {
      // we ignore their arguments.
      switch (level) {
        case "group":
@@ -1743,7 +1808,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * the window.console API call.
     *
     * @param object aMessage
-@@ -1123,59 +1107,29 @@ WebConsoleFrame.prototype = {
+@@ -1123,59 +1109,29 @@ WebConsoleFrame.prototype = {
      this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage]);
    },
  
@@ -1807,7 +1872,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1903,19 +1857,21 @@ WebConsoleFrame.prototype = {
+@@ -1903,19 +1859,21 @@ WebConsoleFrame.prototype = {
     *
     * @private
     * @param array aItem
@@ -1832,7 +1897,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          connectionId = args[0];
        }
        else if (typeof methodOrNode != "function") {
-@@ -1923,40 +1879,23 @@ WebConsoleFrame.prototype = {
+@@ -1923,40 +1881,23 @@ WebConsoleFrame.prototype = {
        }
        if (connectionId && connectionId in this._networkRequests) {
          delete this._networkRequests[connectionId];
@@ -1876,7 +1941,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * category's line limit by removing old messages as needed.
     *
     * @param integer aCategory
-@@ -1974,62 +1913,51 @@ WebConsoleFrame.prototype = {
+@@ -1974,62 +1915,51 @@ WebConsoleFrame.prototype = {
      let n = Math.max(0, messageNodes.length - logLimit);
      let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
      toRemove.forEach(this.removeOutputMessage, this);
@@ -1953,7 +2018,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2128,17 +2056,17 @@ WebConsoleFrame.prototype = {
+@@ -2128,17 +2058,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -1972,7 +2037,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2175,52 +2103,37 @@ WebConsoleFrame.prototype = {
+@@ -2175,52 +2105,39 @@ WebConsoleFrame.prototype = {
      node.clipboardText = aClipboardText;
      node.classList.add("hud-msg-node");
  
@@ -1989,6 +2054,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      // and tree widgets.
 +      let viewContainer = this.document.createElement("hbox");
 +      viewContainer.flex = 1;
++      viewContainer.height = this.outputNode.clientHeight *
++                             CONSOLE_DIR_VIEW_HEIGHT;
 +
 +      let options = {
 +        objectActor: body.arguments[0],
@@ -2040,7 +2107,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2258,53 +2171,46 @@ WebConsoleFrame.prototype = {
+@@ -2258,53 +2175,46 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -2102,7 +2169,80 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Click event handler for the ellipsis shown immediately after a long string.
     * This method retrieves the full string and updates the console output to
-@@ -2673,28 +2579,76 @@ function JSTerm(aWebConsoleFrame)
+@@ -2367,17 +2277,21 @@ WebConsoleFrame.prototype = {
+   createLocationNode: function WCF_createLocationNode(aSourceURL, aSourceLine)
+   {
+     let locationNode = this.document.createElementNS(XUL_NS, "label");
+ 
+     // Create the text, which consists of an abbreviated version of the URL
+     // plus an optional line number. Scratchpad URLs should not be abbreviated.
+     let text;
+ 
+-    if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
++    const SCRATCHPAD_RE = /^Scratchpad\/\d+$/;
++    const DEBUGGER_EVAL = "debugger eval code";
++
++    if (aSourceURL == DEBUGGER_EVAL ||
++        SCRATCHPAD_RE.test(aSourceURL)) {
+       text = aSourceURL;
+     }
+     else {
+       text = WebConsoleUtils.abbreviateSourceURL(aSourceURL);
+     }
+ 
+     if (aSourceLine) {
+       text += ":" + aSourceLine;
+@@ -2386,21 +2300,19 @@ WebConsoleFrame.prototype = {
+ 
+     locationNode.setAttribute("value", text);
+ 
+     // Style appropriately.
+     locationNode.setAttribute("crop", "center");
+     locationNode.setAttribute("title", aSourceURL);
+     locationNode.setAttribute("tooltiptext", aSourceURL);
+     locationNode.classList.add("webconsole-location");
+-    locationNode.classList.add("text-link");
+-
+-    // Make the location clickable.
+-    locationNode.addEventListener("click", function() {
+-      if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
++
++    let onClick = function JST_messageOnClick() {
++      if (SCRATCHPAD_RE.test(aSourceURL)) {
+         let wins = Services.wm.getEnumerator("devtools:scratchpad");
+ 
+         while (wins.hasMoreElements()) {
+           let win = wins.getNext();
+ 
+           if (win.Scratchpad.uniqueName === aSourceURL) {
+             win.focus();
+             return;
+@@ -2408,17 +2320,23 @@ WebConsoleFrame.prototype = {
+         }
+       }
+       else if (locationNode.parentNode.category == CATEGORY_CSS) {
+         this.owner.viewSourceInStyleEditor(aSourceURL, aSourceLine);
+       }
+       else {
+         this.owner.viewSource(aSourceURL, aSourceLine);
+       }
+-    }.bind(this), true);
++    }.bind(this);
++
++    // Make the location clickable.
++    if (aSourceURL != DEBUGGER_EVAL) {
++      locationNode.classList.add("text-link");
++      locationNode.addEventListener("click", onClick, true);
++    }
+ 
+     return locationNode;
+   },
+ 
+   /**
+    * Adjusts the category and severity of the given message, clearing the old
+    * category and severity if present.
+    *
+@@ -2673,28 +2591,76 @@ function JSTerm(aWebConsoleFrame)
  {
    this.hud = aWebConsoleFrame;
    this.hudId = this.hud.hudId;
@@ -2179,7 +2319,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * History of code that was executed.
     * @type array
-@@ -2733,16 +2687,18 @@ JSTerm.prototype = {
+@@ -2733,16 +2699,18 @@ JSTerm.prototype = {
  
      let doc = this.hud.document;
      this.completeNode = doc.querySelector(".jsterm-complete-node");
@@ -2198,7 +2338,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement [aAfterNode]
-@@ -2755,33 +2711,47 @@ JSTerm.prototype = {
+@@ -2755,33 +2723,47 @@ JSTerm.prototype = {
     *        The message received from the server.
     */
    _executeResultCallback:
@@ -2253,7 +2393,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            catch (ex) {
              errorMessage = helperResult.message;
            }
-@@ -2820,48 +2790,40 @@ JSTerm.prototype = {
+@@ -2820,48 +2802,40 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -2319,7 +2459,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2882,81 +2844,628 @@ JSTerm.prototype = {
+@@ -2882,81 +2856,628 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -2996,7 +3136,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3572,171 +4081,49 @@ JSTerm.prototype = {
+@@ -3572,171 +4093,49 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
@@ -3190,30 +3330,44 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webconsole/webconsole.xul
 --- a/browser/devtools/webconsole/webconsole.xul
 +++ b/browser/devtools/webconsole/webconsole.xul
-@@ -113,19 +113,28 @@
+@@ -55,17 +55,17 @@
+       <menuitem id="menu_copyURL" label="&copyURLCmd.label;"
+                 accesskey="&copyURLCmd.accesskey;" command="consoleCmd_copyURL"
+                 selection="network" selectionType="single"/>
+       <menuitem id="menu_copy"/>
+       <menuitem id="menu_selectAll"/>
+     </menupopup>
+   </popupset>
+ 
+-  <vbox class="hud-outer-wrapper" flex="1">
++  <hbox class="hud-outer-wrapper" flex="1">
+     <vbox class="hud-console-wrapper" flex="1">
+       <toolbar class="hud-console-filter-toolbar devtools-toolbar" mode="full">
+         <toolbarbutton label="&btnPageNet.label;" type="menu-button"
+                        category="net" class="devtools-toolbarbutton webconsole-filter-button"
+                        tooltiptext="&btnPageNet.tooltip;">
+           <menupopup>
+             <menuitem label="&btnConsoleErrors;" type="checkbox" autocheck="false"
+                       prefKey="network"/>
+@@ -109,25 +109,34 @@
+             <menuitem label="&btnConsoleLog;" type="checkbox" autocheck="false"
+                       prefKey="log"/>
+           </menupopup>
+         </toolbarbutton>
  
          <spacer flex="1"/>
  
          <textbox class="compact hud-filter-box devtools-searchinput" type="search"
-                  placeholder="&filterBox.placeholder;"/>
+-                 placeholder="&filterBox.placeholder;"/>
++                 placeholder="&filterOutput.placeholder;"/>
          <toolbarbutton class="webconsole-clear-console-button devtools-toolbarbutton"
                         label="&btnClear.label;" tooltiptext="&btnClear.tooltip;"/>
        </toolbar>
--      <richlistbox class="hud-output-node" orient="vertical" flex="1"
--                   seltype="multiple" context="output-contextmenu"
--                   style="direction:ltr;"/>
-+      <hbox flex="1">
-+        <richlistbox class="hud-output-node" orient="vertical" flex="1"
-+                     seltype="multiple" context="output-contextmenu"
-+                     style="direction:ltr;"/>
-+        <splitter class="devtools-side-splitter" collapse="after" state="collapsed">
-+          <grippy/>
-+        </splitter>
-+        <tabbox id="webconsole-sidebar" class="devtools-sidebar-tabs" hidden="true" width="300">
-+          <tabs/>
-+          <tabpanels flex="1"/>
-+        </tabbox>
-+      </hbox>
++
+       <richlistbox class="hud-output-node" orient="vertical" flex="1"
+                    seltype="multiple" context="output-contextmenu"
+                    style="direction:ltr;"/>
++
        <hbox class="jsterm-input-container" style="direction:ltr">
          <stack class="jsterm-stack-node" flex="1">
            <textbox class="jsterm-complete-node" multiline="true" rows="1"
@@ -3222,6 +3376,16 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
          </stack>
        </hbox>
      </vbox>
+-  </vbox>
++
++    <splitter class="devtools-side-splitter" collapse="after" state="collapsed" />
++
++    <tabbox id="webconsole-sidebar" class="devtools-sidebar-tabs" hidden="true" width="300">
++      <tabs/>
++      <tabpanels flex="1"/>
++    </tabbox>
++  </hbox>
+ </window>
 diff --git a/browser/locales/en-US/chrome/browser/devtools/VariablesView.dtd b/browser/locales/en-US/chrome/browser/devtools/VariablesView.dtd
 new file mode 100644
 --- /dev/null
@@ -3239,6 +3403,28 @@ new file mode 100644
 +
 +<!ENTITY PropertiesViewWindowTitle "Properties">
 +
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
+--- a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
++++ b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
+@@ -55,17 +55,17 @@
+   -  console.error(). -->
+ <!ENTITY btnPageLogging.label   "Logging">
+ <!ENTITY btnPageLogging.tooltip "Log messages sent to the window.console object">
+ <!ENTITY btnConsoleErrors       "Errors">
+ <!ENTITY btnConsoleInfo         "Info">
+ <!ENTITY btnConsoleWarnings     "Warnings">
+ <!ENTITY btnConsoleLog          "Log">
+ 
+-<!ENTITY filterBox.placeholder "Filter">
++<!ENTITY filterOutput.placeholder "Filter output">
+ <!ENTITY btnClear.label        "Clear">
+ <!ENTITY btnClear.tooltip      "Clear the Web Console output">
+ 
+ <!ENTITY fullZoomEnlargeCmd.commandkey  "+">
+ <!ENTITY fullZoomEnlargeCmd.commandkey2 "="> <!-- + is above this key on many keyboards -->
+ <!ENTITY fullZoomEnlargeCmd.commandkey3 "">
+ 
+ <!ENTITY fullZoomReduceCmd.commandkey   "-">
 diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 --- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
@@ -3254,7 +3440,7 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +
 +# LOCALIZATION NOTE (propertiesFilterPlaceholder): This is the text that
 +# appears in the filter text box for the properties view container.
-+propertiesFilterPlaceholder=Filter
++propertiesFilterPlaceholder=Filter properties
 +
 +# LOCALIZATION NOTE (emptyPropertiesList): The text that is displayed in the
 +# properties pane when there are no properties to display.
@@ -3281,10 +3467,31 @@ diff --git a/browser/locales/jar.mn b/browser/locales/jar.mn
      locale/browser/devtools/responsiveUI.properties   (%chrome/browser/devtools/responsiveUI.properties)
      locale/browser/devtools/toolbox.dtd            (%chrome/browser/devtools/toolbox.dtd)
      locale/browser/devtools/toolbox.properties     (%chrome/browser/devtools/toolbox.properties)
+diff --git a/browser/themes/gnomestripe/devtools/debugger.css b/browser/themes/gnomestripe/devtools/debugger.css
+--- a/browser/themes/gnomestripe/devtools/debugger.css
++++ b/browser/themes/gnomestripe/devtools/debugger.css
+@@ -286,16 +286,17 @@
+ }
+ 
+ /**
+  * Variables view
+  */
+ 
+ #variables {
+   min-height: 10px;
++  background: #fff;
+ }
+ 
+ .dbg-variable-delete {
+   opacity: 0;
+ }
+ 
+ .dbg-variable-delete:hover {
+   opacity: 1;
 diff --git a/browser/themes/gnomestripe/devtools/webconsole.css b/browser/themes/gnomestripe/devtools/webconsole.css
 --- a/browser/themes/gnomestripe/devtools/webconsole.css
 +++ b/browser/themes/gnomestripe/devtools/webconsole.css
-@@ -234,8 +234,12 @@
+@@ -234,8 +234,23 @@
  :-moz-any(.jsterm-input-node,
            .jsterm-complete-node) > .textbox-input-box > .textbox-textarea {
    overflow-x: hidden;
@@ -3296,11 +3503,43 @@ diff --git a/browser/themes/gnomestripe/devtools/webconsole.css b/browser/themes
 +
 +.webconsole-msg-inspector iframe {
 +  height: 7em;
++  margin-bottom: 15px;
 +}
++
++.devtools-side-splitter {
++  background: #666;
++  width: 2px;
++}
++
++#webconsole-sidebar > tabs {
++  height: 0;
++  overflow: hidden;
++}
+diff --git a/browser/themes/pinstripe/devtools/debugger.css b/browser/themes/pinstripe/devtools/debugger.css
+--- a/browser/themes/pinstripe/devtools/debugger.css
++++ b/browser/themes/pinstripe/devtools/debugger.css
+@@ -292,16 +292,17 @@
+ }
+ 
+ /**
+  * Variables view
+  */
+ 
+ #variables {
+   min-height: 10px;
++  background: #fff;
+ }
+ 
+ .dbg-variable-delete {
+   opacity: 0;
+ }
+ 
+ .dbg-variable-delete:not(:hover) {
+   -moz-image-region: rect(0, 32px, 16px, 16px);
 diff --git a/browser/themes/pinstripe/devtools/webconsole.css b/browser/themes/pinstripe/devtools/webconsole.css
 --- a/browser/themes/pinstripe/devtools/webconsole.css
 +++ b/browser/themes/pinstripe/devtools/webconsole.css
-@@ -238,8 +238,12 @@
+@@ -238,8 +238,23 @@
  :-moz-any(.jsterm-input-node,
            .jsterm-complete-node) > .textbox-input-box > .textbox-textarea {
    overflow-x: hidden;
@@ -3312,11 +3551,43 @@ diff --git a/browser/themes/pinstripe/devtools/webconsole.css b/browser/themes/p
 +
 +.webconsole-msg-inspector iframe {
 +  height: 7em;
++  margin-bottom: 15px;
 +}
++
++.devtools-side-splitter {
++  background: #666;
++  width: 2px;
++}
++
++#webconsole-sidebar > tabs {
++  height: 0;
++  overflow: hidden;
++}
+diff --git a/browser/themes/winstripe/devtools/debugger.css b/browser/themes/winstripe/devtools/debugger.css
+--- a/browser/themes/winstripe/devtools/debugger.css
++++ b/browser/themes/winstripe/devtools/debugger.css
+@@ -298,16 +298,17 @@
+ }
+ 
+ /**
+  * Variables view
+  */
+ 
+ #variables {
+   min-height: 10px;
++  background: #fff;
+ }
+ 
+ .dbg-variable-delete {
+   opacity: 0;
+ }
+ 
+ .dbg-variable-delete:not(:hover) {
+   -moz-image-region: rect(0, 32px, 16px, 16px);
 diff --git a/browser/themes/winstripe/devtools/webconsole.css b/browser/themes/winstripe/devtools/webconsole.css
 --- a/browser/themes/winstripe/devtools/webconsole.css
 +++ b/browser/themes/winstripe/devtools/webconsole.css
-@@ -242,8 +242,12 @@
+@@ -242,8 +242,23 @@
  /*
   * This hardcoded width likely due to a toolkit Windows specific bug.
   * See http://hg.mozilla.org/mozilla-central/annotate/f38d6df93cad/toolkit/themes/winstripe/global/textbox-aero.css#l7
@@ -3328,6 +3599,17 @@ diff --git a/browser/themes/winstripe/devtools/webconsole.css b/browser/themes/w
 +
 +.webconsole-msg-inspector iframe {
 +  height: 7em;
++  margin-bottom: 15px;
++}
++
++.devtools-side-splitter {
++  background: #666;
++  width: 2px;
++}
++
++#webconsole-sidebar > tabs {
++  height: 0;
++  overflow: hidden;
 +}
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
@@ -3362,3 +3644,28 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  
  WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
  {
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -718,18 +718,19 @@ WebConsoleActor.prototype =
+     }
+     else {
+       found$ = !!this._dbgWindow.getOwnPropertyDescriptor("$");
+       found$$ = !!this._dbgWindow.getOwnPropertyDescriptor("$$");
+     }
+ 
+     let bindings = helpers.sandbox;
+     if (bindSelf) {
+-      let jsObj = bindSelf.unsafeDereference();
+-      bindings._self = helpers.makeDebuggeeValue(jsObj);
++      // FIXME let jsObj = bindSelf.unsafeDereference();
++      //bindings._self = helpers.makeDebuggeeValue(jsObj);
++      bindings._self = bindSelf;
+     }
+ 
+     let $ = null, $$ = null;
+     if (found$) {
+       $ = bindings.$;
+       delete bindings.$;
+     }
+     if (found$$) {
