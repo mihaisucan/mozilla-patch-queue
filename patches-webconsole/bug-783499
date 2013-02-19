@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent ab3e4fb2f5d454dcc02e1326faf008cb128bb338
+# Parent 1cbba933325c4ae4267ce894defe90946b9a7bc0
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1360675537 -7200
+# Date 1361307593 -7200
 
 Bug 783499 - Web Console should use the debugger API
 
@@ -446,7 +446,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -23,22 +23,30 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+@@ -23,22 +23,27 @@ XPCOMUtils.defineLazyModuleGetter(this, 
  
  XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
                                    "resource://gre/modules/devtools/NetworkHelper.jsm");
@@ -455,11 +455,8 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
                                     "@mozilla.org/network/http-activity-distributor;1",
                                     "nsIHttpActivityDistributor");
  
-+// FIXME: toolkit imports from browser. Can we move vview to toolkit or...?
-+// It looks like we already import toolbox jsm's from browser/...
-+// Maybe we can recheck how strongly WCA depends on WCU. If it's not much, move
-+// this back to browser/? I wouldn't favor this kind of back and forth, but it's
-+// an option.
++// TODO: Bug 842672 - toolkit/ imports modules from browser/.
++// Note that these are only used in JSTermHelpers, see $0 and pprint().
  XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
                                    "resource:///modules/devtools/gDevTools.jsm");
  
@@ -477,7 +474,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  // Match the function name from the result of toString() or toSource().
  //
  // Examples:
-@@ -781,17 +789,17 @@ this.WebConsoleUtils = {
+@@ -781,17 +786,17 @@ this.WebConsoleUtils = {
     * Get the object class name. For example, the |window| object has the Window
     * class name (based on [object Window]).
     *
@@ -496,7 +493,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        return "undefined";
      }
  
-@@ -1537,60 +1545,53 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1537,60 +1542,53 @@ this.JSTermHelpers = function JSTermHelp
     * @param string aXPath
     *        xPath search query to execute.
     * @param [optional] nsIDOMNode aContext
@@ -573,7 +570,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    /**
     * Clears the output of the JSTerm.
     */
-@@ -1605,38 +1606,33 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1605,38 +1603,33 @@ this.JSTermHelpers = function JSTermHelp
     * Returns the result of Object.keys(aObject).
     *
     * @param object aObject
@@ -616,7 +613,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    /**
     * Opens a help window in MDN.
     */
-@@ -1648,25 +1644,22 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1648,25 +1641,22 @@ this.JSTermHelpers = function JSTermHelp
    /**
     * Inspects the passed aObject. This is done by opening the PropertyPanel.
     *
@@ -645,7 +642,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     *
     * @param object aObject
     *        Object to print to the output.
-@@ -1685,23 +1678,33 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1685,23 +1675,34 @@ this.JSTermHelpers = function JSTermHelp
  
      aOwner.helperResult = { rawOutput: true };
  
@@ -665,6 +662,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 +    for (let name in obj) {
 +      let desc = WebConsoleUtils.getPropertyDescriptor(obj, name) || {};
 +      if (desc.get || desc.set) {
++        // TODO: Bug 842672 - toolkit/ imports modules from browser/.
 +        let getGrip = VariablesView.getGrip(desc.get);
 +        let setGrip = VariablesView.getGrip(desc.set);
 +        let getString = VariablesView.getString(getGrip);
@@ -908,7 +906,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     * @param string aActorID
     * @return object
     */
-@@ -447,54 +491,69 @@ WebConsoleActor.prototype =
+@@ -447,54 +491,67 @@ WebConsoleActor.prototype =
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
     * @return object
@@ -942,8 +940,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +      else if ("yield" in evalResult) {
 +        result = evalResult.yield;
 +      }
-+
-+      if ("throw" in evalResult) {
++      else if ("throw" in evalResult) {
 +        error = evalResult.throw;
 +        let errorToString = this._dbgWindow
 +                            .evalInGlobalWithBindings("ex + ''", {ex: error});
@@ -983,9 +980,8 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     */
    onAutocomplete: function WCA_onAutocomplete(aRequest)
    {
-+    // TODO: file a bug - follow up: use the debugger API for autocomplete in
-+    // the Web Console, and provide suggestions for objects in the selected
-+    // debugger stack frame.
++    // TODO: Bug 842682 - use the debugger API for autocomplete in the Web
++    // Console, and provide suggestions from the selected debugger stack frame.
      let result = JSPropertyProvider(this.window, aRequest.text) || {};
      return {
        from: this.actorID,
@@ -994,7 +990,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      };
    },
  
-@@ -524,75 +583,191 @@ WebConsoleActor.prototype =
+@@ -524,75 +581,195 @@ WebConsoleActor.prototype =
      return { updated: Object.keys(aRequest.preferences) };
    },
  
@@ -1062,6 +1058,30 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +
 +  /**
 +   * Evaluates a string using the debugger API.
++   *
++   * To allow the variables view to update properties from the web console we
++   * provide the "bindObjectActor" mechanism: the Web Console tells the
++   * ObjectActor ID for which it desires to evaluate an expression. The
++   * Debugger.Object pointed at by the actor ID is bound such that it is
++   * available during expression evaluation (evalInGlobalWithBindings()).
++   *
++   * Example:
++   *   _self['foobar'] = 'test'
++   * where |_self| refers to the desired object.
++   *
++   * The |frameActor| property allows the Web Console client to provide the
++   * frame actor ID, such that the expression can be evaluated in the
++   * user-selected stack frame.
++   *
++   * For the above to work we need the debugger and the web console to share
++   * a connection, otherwise the Web Console actor will not find the frame
++   * actor.
++   *
++   * The Debugger.Frame comes from the jsdebugger's Debugger instance, which
++   * is different from the Web Console's Debugger instance. This means that
++   * for evaluation to work, we need to create a new instance for  the jsterm
++   * helpers - they need to be Debugger.Objects coming from the jsdebugger's
++   * Debugger instance.
     *
     * @param string aString
 -   *        String to evaluate in the sandbox.
@@ -1070,7 +1090,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +   * @param object [aOptions]
 +   *        Options for evaluation:
 +   *        - bindObjectActor: the ObjectActor ID to use for evaluation.
-+   *          evalWithBindings() will be called with one additional binding:
++   *          |evalWithBindings()| will be called with one additional binding:
 +   *          |_self| which will point to the Debugger.Object of the given
 +   *          ObjectActor.
 +   *        - frameActor: the FrameActor ID to use for evaluation. The given
@@ -1086,33 +1106,9 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 -    if (this._sandboxWindowId !== WebConsoleUtils.getInnerWindowId(this.window)) {
 -      this._createSandbox();
 -    }
-+    // To allow the variables view to update properties from the web console we
-+    // provide the "bindObjectActor" mechanism: the Web Console tells the
-+    // ObjectActor ID for which it desires to evaluate an expression. The
-+    // Debugger.Object pointed at by the actor ID is bound such that it is
-+    // available during expression evaluation (evalInGlobalWithBindings()).
-+    //
-+    // Example:
-+    //   _self['foobar'] = 'test'
-+    // where |_self| refers to the desired object.
++    this._createGlobal();
  
 -    // The help function needs to be easy to guess, so we make the () optional
-+    // The |frameActor| property allow the Web Console to provide the frame
-+    // actor ID, such that the expression can evaluate in the user-selected
-+    // stack frame.
-+    //
-+    // For the above to work we need the debugger and the web console to share
-+    // a connection, otherwise the Web Console actor will not find the frame
-+    // actor.
-+    //
-+    // The Debugger.Frame comes from the jsdebugger's Debugger instance, which
-+    // is different from the Web Console's Debugger instance. This means that
-+    // for evaluation to work, we need to reinstance the jsterm helpers - they
-+    // need to be Debugger.Objects coming from the jsdebugger's Debugger
-+    // instance.
-+
-+    this._createGlobal();
-+
 +    // The help function needs to be easy to guess, so we make the () optional.
      if (aString.trim() == "help" || aString.trim() == "?") {
        aString = "help()";
@@ -1145,12 +1141,16 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +    let frame = null;
 +    if (aOptions.frameActor) {
 +      let frameActor = this.conn.getActor(aOptions.frameActor);
-+      if (!frameActor) {
++      if (frameActor) {
++        frame = frameActor.frame;
++      }
++      else {
 +        Cu.reportError("Web Console Actor: the frame actor was not found: " +
 +                       aOptions.frameActor);
 +      }
-+      frame = frameActor.frame;
++    }
 +
++    if (frame) {
 +      // Avoid having bindings from a different Debugger. The Debugger.Frame
 +      // comes from the jsdebugger's Debugger instance.
 +      let dbg = frameActor.threadActor.dbg;
@@ -1220,7 +1220,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
    //////////////////
    // Event handlers for various listeners.
    //////////////////
-@@ -721,130 +896,58 @@ WebConsoleActor.prototype =
+@@ -721,130 +898,58 @@ WebConsoleActor.prototype =
    prepareConsoleMessageForRemote:
    function WCA_prepareConsoleMessageForRemote(aMessage)
    {
@@ -1365,7 +1365,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
   * @param object aWebConsoleActor
   *        The parent WebConsoleActor instance for this object.
   */
-@@ -1078,17 +1181,17 @@ NetworkEventActor.prototype =
+@@ -1078,17 +1183,17 @@ NetworkEventActor.prototype =
     * Add network request POST data.
     *
     * @param object aPostData
@@ -1384,7 +1384,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "requestPostData",
-@@ -1173,17 +1276,17 @@ NetworkEventActor.prototype =
+@@ -1173,17 +1278,17 @@ NetworkEventActor.prototype =
     *        The response content.
     * @param boolean aDiscardedResponseBody
     *        Tells if the response content was recorded or not.
@@ -1403,7 +1403,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "responseContent",
-@@ -1223,22 +1326,40 @@ NetworkEventActor.prototype =
+@@ -1223,22 +1328,40 @@ NetworkEventActor.prototype =
     * LongStringActor for the header values, when needed.
     *
     * @private
@@ -1448,7 +1448,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 diff --git a/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html b/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html
 --- a/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html
 +++ b/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html
-@@ -29,43 +29,47 @@ function onAttach(aState, aResponse)
+@@ -29,43 +29,48 @@ function onAttach(aState, aResponse)
  function onEvaluate(aState, aResponse)
  {
    checkObject(aResponse, {
@@ -1468,7 +1468,8 @@ diff --git a/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html 
    onInspect = onInspect.bind(null, aState);
 -  aState.client.inspectObjectProperties(aResponse.result.actor, onInspect);
 +  let client = new GripClient(aState.dbgClient, aResponse.result);
-+  // FIXME: this causes a firefox crash
++  // FIXME: Bug 842726 - Debugger crash when trying to inspect XUL
++  // document.__proto__
 +  //client.getPrototypeAndProperties(onInspect);
 +  closeDebugger(aState, function() {
 +    SimpleTest.finish();
