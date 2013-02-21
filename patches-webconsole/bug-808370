@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 15e94b26311890ba89f611a29acf016dc29015b4
+# Parent c048881d63532ae67fba3a7b47772abc57f2a583
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1361290567 -7200
+# Date 1361482827 -7200
 
 Bug 808370 - Use the VariablesView in webconsole
 
@@ -725,7 +725,14 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_clos
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632275_getters_document_width.js
-@@ -6,54 +6,47 @@ const TEST_URI = "http://example.com/bro
+@@ -1,59 +1,44 @@
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-632275-getters.html";
+ 
++let getterValue = null;
++
  function test() {
    addTab(TEST_URI);
    browser.addEventListener("load", function onLoad() {
@@ -736,16 +743,28 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_gett
  
 -function consoleOpened(HUD) {
 -  let jsterm = HUD.jsterm;
--
 +function consoleOpened(hud) {
++  let doc = content.wrappedJSObject.document;
++  getterValue = doc.foobar._val;
++  hud.jsterm.execute("console.dir(document)");
+ 
++  let onOpen = onViewOpened.bind(null, hud);
++  hud.jsterm.once("variablesview-fetched", onOpen);
++}
++
++function onViewOpened(hud, event, view)
++{
    let doc = content.wrappedJSObject.document;
  
 -  let panel = jsterm.openPropertyPanel({ data: { object: doc }});
-+  executeSoon(function() {
-+    let onOpen = onViewOpened.bind(null, hud);
-+    hud.jsterm.openVariablesView({ rawObject: doc }).then(onOpen);
-+  });
-+}
++  findVariableViewProperties(view, [
++    { name: /^(width|height)$/, dontMatch: 1 },
++    { name: "foobar._val", value: getterValue },
++    { name: "foobar.val", isGetter: true },
++  ], { webconsole: hud }).then(function() {
++    is(doc.foobar._val, getterValue, "getter did not execute");
++    is(doc.foobar.val, getterValue+1, "getter executed");
++    is(doc.foobar._val, getterValue+1, "getter executed (recheck)");
  
 -  let view = panel.treeView;
 -  let find = function(regex) {
@@ -761,29 +780,15 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_gett
 -
 -  panel.destroy();
 -
-+function onViewOpened(hud, view)
-+{
-+  let doc = content.wrappedJSObject.document;
-   let getterValue = doc.foobar._val;
- 
+-  let getterValue = doc.foobar._val;
+-
 -  panel = jsterm.openPropertyPanel({ data: { object: doc.foobar }});
 -  view = panel.treeView;
-+  function onSecondOpen(view) {
-+    is(getterValue, doc.foobar._val, "getter did not execute");
-+    is(getterValue+1, doc.foobar.val, "getter executed");
-+    is(getterValue+1, doc.foobar._val, "getter executed (recheck)");
- 
+-
 -  is(getterValue, doc.foobar._val, "getter did not execute");
 -  is(getterValue+1, doc.foobar.val, "getter executed");
 -  is(getterValue+1, doc.foobar._val, "getter executed (recheck)");
-+    findVariableViewProperties(view, [
-+      { name: "_val", value: getterValue },
-+      { name: "val", isGetter: true },
-+    ], { webconsole: hud }).then(function() {
-+      let textContent = hud.outputNode.textContent;
-+      is(textContent.indexOf("document.body.client"), -1,
-+         "no document.width/height warning displayed");
- 
+-
 -  ok(find(/^val: Getter$/),
 -     "getter is properly displayed");
 -
@@ -791,21 +796,14 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632275_gett
 -     "getter _val is properly displayed");
 -
 -  panel.destroy();
-+      executeSoon(finishTest);
-+    });
-+  }
- 
-   executeSoon(function() {
--    let textContent = HUD.outputNode.textContent;
--    is(textContent.indexOf("document.body.client"), -1,
--       "no document.width/height warning displayed");
 -
--    finishTest();
-+    findVariableViewProperties(view, [
-+      { name: /^(width|height)$/, dontMatch: 1 }
-+    ], { webconsole: hud }).then(function() {
-+      hud.jsterm.openVariablesView({ rawObject: doc.foobar }).then(onSecondOpen);
-+    });
+-  executeSoon(function() {
+-    let textContent = HUD.outputNode.textContent;
++    let textContent = hud.outputNode.textContent;
+     is(textContent.indexOf("document.body.client"), -1,
+        "no document.width/height warning displayed");
+ 
+     finishTest();
    });
  }
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
@@ -953,7 +951,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_docu
    let completeNode = jsterm.completeNode;
  
    let tmp = {};
-@@ -76,62 +76,34 @@ function autocompletePopupHidden()
+@@ -76,62 +76,33 @@ function autocompletePopupHidden()
      failureFn: finishTest,
    });
  }
@@ -1017,16 +1015,15 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_docu
 -  ok(foundBody, "found document.body");
 -
 -  executeSoon(finishTest);
-+  // FIXME: known failure: |body| doesn't show when |document| is inspected.
 +  findVariableViewProperties(aView, [
-+    { name: "body", value: "[object HTMLBodyElement]" },
++    { name: "__proto__.body", value: "[object HTMLBodyElement]" },
 +  ], { webconsole: gHUD }).then(finishTest);
  }
  
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
-@@ -11,46 +11,21 @@ function test() {
+@@ -11,46 +11,19 @@ function test() {
           "object with a dir method");
    browser.addEventListener("load", function onLoad(aEvent) {
      browser.removeEventListener(aEvent.type, onLoad, true);
@@ -1075,12 +1072,10 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_cons
 -  msg = view = outputNode = null;
 -  executeSoon(finishTest);
 +function testConsoleDir(hud, ev, view) {
-+  // FIXME: known failure: |querySelectorAll| and |write| do not show when
-+  // |document| is inspected.
 +  findVariableViewProperties(view, [
-+    { name: "querySelectorAll", value: "[object Function]" },
++    { name: "__proto__.querySelectorAll", value: "[object Function]" },
 +    { name: "location", value: "[object Location]" },
-+    { name: "write", value: "[object Function]" },
++    { name: "__proto__.write", value: "[object Function]" },
 +  ], { webconsole: hud }).then(finishTest);
  }
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js b/browser/devtools/webconsole/test/browser_webconsole_console_logging_api.js
@@ -1298,7 +1293,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  {
    dump("*** WebConsoleTest: " + aMsg + "\n");
  }
-@@ -138,18 +139,19 @@ function findLogEntry(aString)
+@@ -138,17 +139,19 @@ function findLogEntry(aString)
   * @param function [aCallback]
   *        Optional function to invoke after the Web Console completes
   *        initialization (web-console-created).
@@ -1307,7 +1302,6 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  {
    let target = TargetFactory.forTab(aTab || tab);
    gDevTools.showToolbox(target, "webconsole").then(function(toolbox) {
--  dump(">>>>>>>>>>>>>>>>>>>>>>> target: "+target+"\n");
 -    aCallback(toolbox.getCurrentPanel().hud);
 +    let hud = toolbox.getCurrentPanel().hud;
 +    hud.jsterm._lazyVariablesView = false;
@@ -1320,7 +1314,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *
   * @param nsIDOMElement [aTab]
   *        Optional tab element for which you want close the Web Console. The
-@@ -314,8 +316,260 @@ function waitForSuccess(aOptions)
+@@ -310,8 +313,330 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -1342,6 +1336,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 + *        - isIterator (boolean): check if the property is an iterator.
 + *        - isGetter (boolean): check if the property is a getter.
 + *        - isGenerator (boolean): check if the property is a generator.
++ *        - dontMatch (boolean): make sure the rule doesn't match any property.
 + * @param object aOptions
 + *        Options for matching:
 + *        - webconsole: the WebConsole instance we work with.
@@ -1358,19 +1353,17 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  let outstanding = [];
 +  let rules = Array.slice(aRules); // keep a copy of the rules array
 +
-+  function onMatch(aProp, aRule, aMatched) {
++  function onMatch(aProp, aRule, aMatched)
++  {
 +    if (!aMatched || aRule.matchedProp) {
 +      return;
 +    }
 +
 +    aRule.matchedProp = aProp;
-+
-+    if (!aRule.dontMatch) {
-+      aRules.splice(aRules.indexOf(aRule), 1);
-+    }
 +  }
 +
-+  function finder(aVar) {
++  function finder(aVar)
++  {
 +    for (let [id, prop] in aVar) {
 +      for (let rule of aRules) {
 +        let matched = matchVariablesViewProperty(prop, rule, aOptions);
@@ -1383,9 +1376,52 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +    }
 +  }
 +
++  function processExpandRules()
++  {
++    let rule = expandRules.shift();
++    if (!rule) {
++      return Promise.resolve(null);
++    }
++
++    let deferred = Promise.defer();
++    let expandOptions = {
++      rootVariable: aView,
++      expandTo: rule.name,
++      webconsole: aOptions.webconsole,
++    };
++
++    variablesViewExpandTo(expandOptions).then(function onSuccess(aProp) {
++      let name = rule.name;
++      let lastName = name.split(".").pop();
++      rule.name = lastName;
++
++      let matched = matchVariablesViewProperty(aProp, rule, aOptions);
++      return matched.then(onMatch.bind(null, aProp, rule)).then(function() {
++        rule.name = name;
++      });
++    }, function onFailure() {
++      return Promise.resolve(null);
++    }).then(processExpandRules).then(function() {
++      deferred.resolve(null);
++    });
++
++    return deferred.promise;
++  }
++
++  let expandRules = [];
++  aRules = aRules.filter(function(aRule) {
++    if (typeof aRule.name == "string" && aRule.name.indexOf(".") > -1) {
++      expandRules.push(aRule);
++      return false;
++    }
++    return true;
++  });
++
 +  finder(aView);
 +
-+  return Promise.all(outstanding).then(function _onAllRulesMatched() {
++  let promise = Promise.all(outstanding).then(processExpandRules);
++
++  return promise.then(function _onAllRulesMatched() {
 +    for (let rule of rules) {
 +      let matched = rule.matchedProp;
 +      if (matched && !rule.dontMatch) {
@@ -1444,6 +1480,8 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +                aRule.value.test(displayValue) :
 +                displayValue == aRule.value;
 +    if (!match) {
++      info("rule " + aRule.name + " did not match value, expected '" +
++           aRule.value + "', found '" + displayValue  + "'");
 +      return resolve(false);
 +    }
 +  }
@@ -1451,6 +1489,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  if ("isGetter" in aRule) {
 +    let isGetter = !!(aProp.getter && aProp.get("get"));
 +    if (aRule.isGetter != isGetter) {
++      info("rule " + aRule.name + " getter test failed");
 +      return resolve(false);
 +    }
 +  }
@@ -1458,6 +1497,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  if ("isGenerator" in aRule) {
 +    let isGenerator = aProp.displayValue == "[object Generator]";
 +    if (aRule.isGenerator != isGenerator) {
++      info("rule " + aRule.name + " generator test failed");
 +      return resolve(false);
 +    }
 +  }
@@ -1467,6 +1507,9 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  if ("isIterator" in aRule) {
 +    let isIterator = isVariableViewPropertyIterator(aProp, aOptions.webconsole);
 +    outstanding.push(isIterator.then(function(aResult) {
++      if (aResult != aRule.isIterator) {
++        info("rule " + aRule.name + " iterator test failed");
++      }
 +      return aResult == aRule.isIterator;
 +    }));
 +  }
@@ -1497,38 +1540,44 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +    return Promise.resolve(true);
 +  }
 +
-+  if (!aProp.onexpand) {
-+    return Promise.resolve(false);
-+  }
-+
 +  let deferred = Promise.defer();
-+  let jsterm = aWebConsole.jsterm;
-+  jsterm.once("variablesview-fetched", function _onFetchProp() {
-+    let proto = aProp.get("__proto__");
-+    if (!proto) {
-+      deferred.resolve(false);
-+      return;
-+    }
 +
-+    executeSoon(function() {
-+      jsterm.once("variablesview-fetched", function _onFetchProto() {
-+        deferred.resolve(!!proto.get("__iterator__"));
-+      });
-+      proto.expand();
-+    });
++  variablesViewExpandTo({
++    rootVariable: aProp,
++    expandTo: "__proto__.__iterator__",
++    webconsole: aWebConsole,
++  }).then(function onSuccess(aProp) {
++    deferred.resolve(true);
++  }, function onFailure() {
++    deferred.resolve(false);
 +  });
-+
-+  aProp.expand();
 +
 +  return deferred.promise;
 +}
 +
 +
-+/*function variablesViewExpandTo(aOptions)
++/**
++ * Recursively expand the variables view up to a given property.
++ *
++ * @param aOptions
++ *        Options for view expansion:
++ *        - rootVariable: start from the given scope/variable/property.
++ *        - expandTo: string made up of property names you want to expand.
++ *        For example: "body.firstChild.nextSibling" given |rootVariable:
++ *        document|.
++ *        - webconsole: a WebConsole instance. If this is not provided all
++ *        property expand() calls will be considered sync. Things may fail!
++ * @return object
++ *         A Promise that is resolved only when the last property in |expandTo|
++ *         is found, and rejected otherwise. Resolution reason is always the
++ *         last property - |nextSibling| in the example above. Rejection is
++ *         always the last property that was found.
++ */
++function variablesViewExpandTo(aOptions)
 +{
 +  let root = aOptions.rootVariable;
 +  let expandTo = aOptions.expandTo.split(".");
-+  let jsterm = aOptions.webconsole.jsterm;
++  let jsterm = (aOptions.webconsole || {}).jsterm;
 +  let lastDeferred = Promise.defer();
 +
 +  function fetch(aProp)
@@ -1540,11 +1589,18 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +
 +    let deferred = Promise.defer();
 +
-+    jsterm.once("variablesview-fetched", function _onFetchProp() {
++    if (aProp._fetched || !jsterm) {
 +      executeSoon(function() {
 +        deferred.resolve(aProp);
 +      });
-+    });
++    }
++    else {
++      jsterm.once("variablesview-fetched", function _onFetchProp() {
++        executeSoon(function() {
++          deferred.resolve(aProp);
++        });
++      });
++    }
 +
 +    aProp.expand();
 +
@@ -1566,7 +1622,12 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +      }
 +    }
 +    else {
-+      lastDeferred.resolve(newProp);
++      if (newProp) {
++        lastDeferred.resolve(newProp);
++      }
++      else {
++        lastDeferred.reject(aProp);
++      }
 +    }
 +  }
 +
@@ -1575,16 +1636,19 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +    lastDeferred.reject(aProp);
 +  }
 +
-+  getNext(root);
-+  let prop = root.get(expandTo.shift());
-+  fetch(prop).then(getNext, fetchError);
++  if (!root._fetched) {
++    fetch(root).then(getNext, fetchError);
++  }
++  else {
++    getNext(root);
++  }
 +
 +  return lastDeferred.promise;
-+}*/
++}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -14,45 +14,58 @@ Cu.import("resource://gre/modules/XPCOMU
+@@ -14,45 +14,60 @@ Cu.import("resource://gre/modules/XPCOMU
  
  XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                    "resource://gre/modules/Services.jsm");
@@ -1640,6 +1704,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +
 +const CONSOLE_DIR_VIEW_HEIGHT = 0.6;
 +
++const IGNORED_SOURCE_URLS = ["debugger eval code", "self-hosted"];
++
  // The amount of time in milliseconds that must pass between messages to
  // trigger the display of a new group.
  const NEW_GROUP_DELAY = 5000;
@@ -1648,7 +1714,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // search.
  const SEARCH_DELAY = 200;
  
-@@ -949,55 +962,42 @@ WebConsoleFrame.prototype = {
+@@ -949,55 +964,42 @@ WebConsoleFrame.prototype = {
    logConsoleAPIMessage: function WCF_logConsoleAPIMessage(aMessage)
    {
      let body = null;
@@ -1713,7 +1779,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let functionName = aMessage.functionName ||
                             l10n.getStr("stacktrace.anonymousFunction");
  
-@@ -1017,16 +1017,22 @@ WebConsoleFrame.prototype = {
+@@ -1017,16 +1019,22 @@ WebConsoleFrame.prototype = {
        }
  
        case "group":
@@ -1736,7 +1802,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          if (timer.error) {
            Cu.reportError(l10n.getStr(timer.error));
            return;
-@@ -1055,64 +1061,44 @@ WebConsoleFrame.prototype = {
+@@ -1055,64 +1063,44 @@ WebConsoleFrame.prototype = {
      // we ignore their arguments.
      switch (level) {
        case "group":
@@ -1807,7 +1873,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * the window.console API call.
     *
     * @param object aMessage
-@@ -1123,59 +1109,29 @@ WebConsoleFrame.prototype = {
+@@ -1123,59 +1111,29 @@ WebConsoleFrame.prototype = {
      this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage]);
    },
  
@@ -1871,7 +1937,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The error message to report.
     * @return nsIDOMElement|undefined
-@@ -1903,19 +1859,21 @@ WebConsoleFrame.prototype = {
+@@ -1903,19 +1861,21 @@ WebConsoleFrame.prototype = {
     *
     * @private
     * @param array aItem
@@ -1896,7 +1962,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          connectionId = args[0];
        }
        else if (typeof methodOrNode != "function") {
-@@ -1923,40 +1881,23 @@ WebConsoleFrame.prototype = {
+@@ -1923,40 +1883,23 @@ WebConsoleFrame.prototype = {
        }
        if (connectionId && connectionId in this._networkRequests) {
          delete this._networkRequests[connectionId];
@@ -1940,7 +2006,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * category's line limit by removing old messages as needed.
     *
     * @param integer aCategory
-@@ -1974,62 +1915,51 @@ WebConsoleFrame.prototype = {
+@@ -1974,62 +1917,51 @@ WebConsoleFrame.prototype = {
      let n = Math.max(0, messageNodes.length - logLimit);
      let toRemove = Array.prototype.slice.call(messageNodes, 0, n);
      toRemove.forEach(this.removeOutputMessage, this);
@@ -2017,7 +2083,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2128,17 +2058,17 @@ WebConsoleFrame.prototype = {
+@@ -2128,17 +2060,17 @@ WebConsoleFrame.prototype = {
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -2036,7 +2102,20 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2175,52 +2105,39 @@ WebConsoleFrame.prototype = {
+@@ -2163,64 +2095,51 @@ WebConsoleFrame.prototype = {
+     timestampNode.classList.add("webconsole-timestamp");
+     let timestamp = aTimeStamp || Date.now();
+     let timestampString = l10n.timestampString(timestamp);
+     timestampNode.setAttribute("value", timestampString);
+ 
+     // Create the source location (e.g. www.example.com:6) that sits on the
+     // right side of the message, if applicable.
+     let locationNode;
+-    if (aSourceURL) {
++    if (aSourceURL && IGNORED_SOURCE_URLS.indexOf(aSourceURL) == -1) {
+       locationNode = this.createLocationNode(aSourceURL, aSourceLine);
+     }
+ 
      node.clipboardText = aClipboardText;
      node.classList.add("hud-msg-node");
  
@@ -2106,7 +2185,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2258,53 +2175,46 @@ WebConsoleFrame.prototype = {
+@@ -2258,53 +2177,46 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -2168,80 +2247,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Click event handler for the ellipsis shown immediately after a long string.
     * This method retrieves the full string and updates the console output to
-@@ -2367,17 +2277,21 @@ WebConsoleFrame.prototype = {
-   createLocationNode: function WCF_createLocationNode(aSourceURL, aSourceLine)
-   {
-     let locationNode = this.document.createElementNS(XUL_NS, "label");
- 
-     // Create the text, which consists of an abbreviated version of the URL
-     // plus an optional line number. Scratchpad URLs should not be abbreviated.
-     let text;
- 
--    if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
-+    const SCRATCHPAD_RE = /^Scratchpad\/\d+$/;
-+    const DEBUGGER_EVAL = "debugger eval code";
-+
-+    if (aSourceURL == DEBUGGER_EVAL ||
-+        SCRATCHPAD_RE.test(aSourceURL)) {
-       text = aSourceURL;
-     }
-     else {
-       text = WebConsoleUtils.abbreviateSourceURL(aSourceURL);
-     }
- 
-     if (aSourceLine) {
-       text += ":" + aSourceLine;
-@@ -2386,21 +2300,19 @@ WebConsoleFrame.prototype = {
- 
-     locationNode.setAttribute("value", text);
- 
-     // Style appropriately.
-     locationNode.setAttribute("crop", "center");
-     locationNode.setAttribute("title", aSourceURL);
-     locationNode.setAttribute("tooltiptext", aSourceURL);
-     locationNode.classList.add("webconsole-location");
--    locationNode.classList.add("text-link");
--
--    // Make the location clickable.
--    locationNode.addEventListener("click", function() {
--      if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
-+
-+    let onClick = function JST_messageOnClick() {
-+      if (SCRATCHPAD_RE.test(aSourceURL)) {
-         let wins = Services.wm.getEnumerator("devtools:scratchpad");
- 
-         while (wins.hasMoreElements()) {
-           let win = wins.getNext();
- 
-           if (win.Scratchpad.uniqueName === aSourceURL) {
-             win.focus();
-             return;
-@@ -2408,17 +2320,23 @@ WebConsoleFrame.prototype = {
-         }
-       }
-       else if (locationNode.parentNode.category == CATEGORY_CSS) {
-         this.owner.viewSourceInStyleEditor(aSourceURL, aSourceLine);
-       }
-       else {
-         this.owner.viewSource(aSourceURL, aSourceLine);
-       }
--    }.bind(this), true);
-+    }.bind(this);
-+
-+    // Make the location clickable.
-+    if (aSourceURL != DEBUGGER_EVAL) {
-+      locationNode.classList.add("text-link");
-+      locationNode.addEventListener("click", onClick, true);
-+    }
- 
-     return locationNode;
-   },
- 
-   /**
-    * Adjusts the category and severity of the given message, clearing the old
-    * category and severity if present.
-    *
-@@ -2676,28 +2594,76 @@ function JSTerm(aWebConsoleFrame)
+@@ -2673,28 +2585,76 @@ function JSTerm(aWebConsoleFrame)
  {
    this.hud = aWebConsoleFrame;
    this.hudId = this.hud.hudId;
@@ -2318,7 +2324,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * History of code that was executed.
     * @type array
-@@ -2736,16 +2702,18 @@ JSTerm.prototype = {
+@@ -2733,16 +2693,18 @@ JSTerm.prototype = {
  
      let doc = this.hud.document;
      this.completeNode = doc.querySelector(".jsterm-complete-node");
@@ -2337,7 +2343,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement [aAfterNode]
-@@ -2758,33 +2726,47 @@ JSTerm.prototype = {
+@@ -2755,33 +2717,47 @@ JSTerm.prototype = {
     *        The message received from the server.
     */
    _executeResultCallback:
@@ -2392,7 +2398,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            catch (ex) {
              errorMessage = helperResult.message;
            }
-@@ -2823,48 +2805,40 @@ JSTerm.prototype = {
+@@ -2820,48 +2796,40 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -2458,7 +2464,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2885,81 +2859,628 @@ JSTerm.prototype = {
+@@ -2882,81 +2850,628 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -3020,10 +3026,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  _fetchVarProperties: function JST__fetchVarProperties(aVar, aGrip)
 +  {
 +    // Retrieve the properties only once.
-+    if (aVar.fetched) {
++    if (aVar._fetched) {
 +      return;
 +    }
-+    aVar.fetched = true;
++    aVar._fetched = true;
 +
 +    let grip = aGrip || aVar.value;
 +    if (!grip) {
@@ -3103,10 +3109,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   */
 +  _fetchVarLongString: function JST__fetchVarLongString(aVar)
 +  {
-+    if (aVar.fetched) {
++    if (aVar._fetched) {
 +      return;
 +    }
-+    aVar.fetched = true;
++    aVar._fetched = true;
 +
 +    let grip = aVar.value;
 +    if (!grip) {
@@ -3135,7 +3141,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3575,171 +4096,49 @@ JSTerm.prototype = {
+@@ -3572,171 +4087,49 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
@@ -3613,7 +3619,7 @@ diff --git a/browser/themes/winstripe/devtools/webconsole.css b/browser/themes/w
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -862,16 +862,29 @@ this.WebConsoleUtils = {
+@@ -859,16 +859,29 @@ this.WebConsoleUtils = {
  
      if (val.displayString && typeof val.displayString == "object" &&
          val.displayString.type == "longString") {
