@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Panos Astithas <past@mozilla.com>
-# Date 1361359434 -7200
-# Node ID c3081adf7324d6e8df3324c3d245fdd85a2d8c03
-# Parent  aee3ee75f76acdfb21699dceb3ecf90599d7725a
-Bug 820524 - Debugger and Web Console should share the debugger client even for local sessions
+# Date 1361531207 -7200
+# Node ID beb9dd528e5fd403e003936b70edab763901b007
+# Parent  6eb4635a3976b3208f2cd9e654b94bbf1b9541bb
+Bug 820524 - Debugger, Web Console and Profiler should share the debugger client even for local sessions; r=jwalker
 
 diff --git a/browser/devtools/commandline/test/browser_dbg_cmd.js b/browser/devtools/commandline/test/browser_dbg_cmd.js
 --- a/browser/devtools/commandline/test/browser_dbg_cmd.js
@@ -714,7 +714,7 @@ diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework
      selectedTool = Services.prefs.getCharPref(this._prefs.LAST_TOOL);
    }
    let definitions = gDevTools.getToolDefinitionMap();
-@@ -418,22 +418,24 @@ Toolbox.prototype = {
+@@ -418,22 +418,23 @@ Toolbox.prototype = {
  
    /**
     * Switch to the tool with the given id
@@ -728,8 +728,7 @@ diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework
      if (this._currentToolId == id) {
 -      return;
 +      // Return the existing panel in order to have a consistent return value.
-+      deferred.resolve(this._toolPanels.get(id));
-+      return deferred.promise;
++      return Promise.resolve(this._toolPanels.get(id));
      }
  
 -    let deferred = Promise.defer();
@@ -742,7 +741,7 @@ diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework
      if (!tab) {
        throw new Error("No tool found");
      }
-@@ -644,28 +646,31 @@ Toolbox.prototype = {
+@@ -644,28 +645,31 @@ Toolbox.prototype = {
     */
    destroy: function TBOX_destroy() {
      // If several things call destroy then we give them all the same
@@ -751,7 +750,7 @@ diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework
        return this._destroyer;
      }
  
-+    this._destroyer = Promise.defer().promise;
++    this._destroyer = Promise.resolve();
      let outstanding = [];
  
 -    // Remote targets need to be notified that the toolbox is being torn down.
@@ -806,40 +805,10 @@ diff --git a/browser/devtools/framework/connect/connect.js b/browser/devtools/fr
 +    window.close();
 +  });
  }
-diff --git a/browser/devtools/framework/test/browser_devtools_api.js b/browser/devtools/framework/test/browser_devtools_api.js
---- a/browser/devtools/framework/test/browser_devtools_api.js
-+++ b/browser/devtools/framework/test/browser_devtools_api.js
-@@ -61,24 +61,24 @@ function continueTests(toolbox, panel) {
-   is(gDevTools.getToolDefinitionMap().has(toolId), false,
-     "The tool is no longer registered");
- 
-   toolbox.destroy().then(function() {
-     let target = TargetFactory.forTab(gBrowser.selectedTab);
-     ok(gDevTools._toolboxes.get(target) == null, "gDevTools doesn't know about target");
-     ok(toolbox._target == null, "toolbox doesn't know about target.");
- 
--    finishUp();
-+    target.destroy().then(executeSoon(finishUp));
-   }).then(null, console.error);
- }
- 
- function finishUp() {
-   tempScope = null;
-   gBrowser.removeCurrentTab();
--  finish();
-+  executeSoon(finish);
- }
- 
- /**
- * When a Toolbox is started it creates a DevToolPanel for each of the tools
- * by calling toolDefinition.build(). The returned object should
- * at least implement these functions. They will be used by the ToolBox.
- *
- * There may be no benefit in doing this as an abstract type, but if nothing
 diff --git a/browser/devtools/framework/test/browser_new_activation_workflow.js b/browser/devtools/framework/test/browser_new_activation_workflow.js
 --- a/browser/devtools/framework/test/browser_new_activation_workflow.js
 +++ b/browser/devtools/framework/test/browser_new_activation_workflow.js
-@@ -46,19 +46,23 @@ function selectAndCheckById(id) {
+@@ -46,16 +46,18 @@ function selectAndCheckById(id) {
    return toolbox.selectTool(id).then(function() {
      let tab = doc.getElementById("toolbox-tab-" + id);
      is(tab.selected, true, "The " + id + " tab is selected");
@@ -848,28 +817,20 @@ diff --git a/browser/devtools/framework/test/browser_new_activation_workflow.js 
  
  function testToggle() {
    toolbox.once("destroyed", function() {
--    gDevTools.showToolbox(target, "styleeditor").then(function() {
--      is(toolbox.currentToolId, "styleeditor", "The style editor is selected");
--      finishUp();
-+    // Give the debugger server a chance to shut down properly.
-+    executeSoon(function() {
-+      target = TargetFactory.forTab(gBrowser.selectedTab);
-+      gDevTools.showToolbox(target, "styleeditor").then(function() {
-+        is(toolbox.currentToolId, "styleeditor", "The style editor is selected");
-+        finishUp();
-+      });
++    // Cannot reuse a target after it's destroyed.
++    target = TargetFactory.forTab(gBrowser.selectedTab);
+     gDevTools.showToolbox(target, "styleeditor").then(function() {
+       is(toolbox.currentToolId, "styleeditor", "The style editor is selected");
+       finishUp();
      });
    }.bind(this));
  
    toolbox.destroy();
  }
- 
- function finishUp() {
-   toolbox.destroy();
 diff --git a/browser/devtools/framework/test/browser_toolbox_hosts.js b/browser/devtools/framework/test/browser_toolbox_hosts.js
 --- a/browser/devtools/framework/test/browser_toolbox_hosts.js
 +++ b/browser/devtools/framework/test/browser_toolbox_hosts.js
-@@ -85,22 +85,27 @@ function testToolSelect()
+@@ -85,22 +85,24 @@ function testToolSelect()
  {
    // make sure we can load a tool after switching hosts
    toolbox.selectTool("inspector").then(testDestroy);
@@ -878,11 +839,8 @@ diff --git a/browser/devtools/framework/test/browser_toolbox_hosts.js b/browser/
  function testDestroy()
  {
    toolbox.destroy().then(function() {
--    gDevTools.showToolbox(target).then(testRememberHost);
-+    executeSoon(function() {
-+      target = TargetFactory.forTab(gBrowser.selectedTab);
-+      gDevTools.showToolbox(target).then(testRememberHost);
-+    });
++    target = TargetFactory.forTab(gBrowser.selectedTab);
+     gDevTools.showToolbox(target).then(testRememberHost);
    });
  }
  
@@ -890,7 +848,6 @@ diff --git a/browser/devtools/framework/test/browser_toolbox_hosts.js b/browser/
 +function testRememberHost(aToolbox)
  {
 +  toolbox = aToolbox;
-+
    // last host was the window - make sure it's the same when re-opening
    is(toolbox.hostType, Toolbox.HostType.WINDOW, "host remembered");
  
@@ -899,7 +856,7 @@ diff --git a/browser/devtools/framework/test/browser_toolbox_hosts.js b/browser/
  
    cleanup();
  }
-@@ -118,13 +123,16 @@ function checkToolboxLoaded(iframe)
+@@ -118,13 +120,14 @@ function checkToolboxLoaded(iframe)
    let tabs = iframe.contentDocument.getElementById("toolbox-tabs");
    ok(tabs, "toolbox UI has been loaded into iframe");
  }
@@ -912,14 +869,13 @@ diff --git a/browser/devtools/framework/test/browser_toolbox_hosts.js b/browser/
 -  DevTools = Toolbox = toolbox = target = null;
 -  gBrowser.removeCurrentTab();
 -  finish();
+-}
 +  toolbox.destroy().then(function() {
-+    executeSoon(function() {
-+      DevTools = Toolbox = toolbox = target = null;
-+      gBrowser.removeCurrentTab();
-+      finish();
-+    });
++    DevTools = Toolbox = toolbox = target = null;
++    gBrowser.removeCurrentTab();
++    finish();
 +  });
- }
++ }
 diff --git a/browser/devtools/inspector/InspectorPanel.jsm b/browser/devtools/inspector/InspectorPanel.jsm
 --- a/browser/devtools/inspector/InspectorPanel.jsm
 +++ b/browser/devtools/inspector/InspectorPanel.jsm

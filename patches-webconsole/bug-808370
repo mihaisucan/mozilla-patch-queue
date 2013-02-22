@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent c048881d63532ae67fba3a7b47772abc57f2a583
+# Parent 5bbf3f0730c1e816392b740985ade7b55bf21571
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1361482827 -7200
+# Date 1361567812 -7200
 
-Bug 808370 - Use the VariablesView in webconsole
+Bug 808370 - Use the VariablesView in webconsole; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
 
 diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools/debugger/debugger-controller.js
 --- a/browser/devtools/debugger/debugger-controller.js
@@ -286,28 +286,6 @@ new file mode 100644
 +        title="&PropertiesViewWindowTitle;">
 +  <vbox id="variables" flex="1"/>
 +</window>
-diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
---- a/browser/devtools/webconsole/HUDService.jsm
-+++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -216,16 +216,18 @@ WebConsole.prototype = {
-   /**
-    * Initialize the Web Console instance.
-    *
-    * @return object
-    *         A Promise for the initialization.
-    */
-   init: function WC_init()
-   {
-+    Promise._reportErrors = true; // FIXME: debug-only
-+
-     let deferred = Promise.defer();
- 
-     let onIframeLoad = function() {
-       this.iframe.removeEventListener("load", onIframeLoad, true);
-       initUI();
-     }.bind(this);
- 
-     let initUI = function() {
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
 +++ b/browser/devtools/webconsole/test/Makefile.in
@@ -1314,7 +1292,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *
   * @param nsIDOMElement [aTab]
   *        Optional tab element for which you want close the Web Console. The
-@@ -310,8 +313,330 @@ function waitForSuccess(aOptions)
+@@ -310,8 +313,340 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -1350,35 +1328,55 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 + */
 +function findVariableViewProperties(aView, aRules, aOptions)
 +{
-+  let outstanding = [];
-+  let rules = Array.slice(aRules); // keep a copy of the rules array
++  // Initialize the search.
++  function init()
++  {
++    // Separate out the rules that require expanding properties throughout the
++    // view.
++    let expandRules = [];
++    let rules = aRules.filter(function(aRule) {
++      if (typeof aRule.name == "string" && aRule.name.indexOf(".") > -1) {
++        expandRules.push(aRule);
++        return false;
++      }
++      return true;
++    });
++
++    // Search through the view those rules that do not require any properties to
++    // be expanded. Build the array of matchers, outstanding promises to be
++    // resolved.
++    let outstanding = [];
++    finder(rules, aView, outstanding);
++
++    // Process the rules that need to expand properties.
++    let lastStep = processExpandRules.bind(null, expandRules);
++
++    // Return the results - a Promise resolved to hold the updated aRules array.
++    let returnResults = onAllRulesMatched.bind(null, aRules);
++
++    return Promise.all(outstanding).then(lastStep).then(returnResults);
++  }
 +
 +  function onMatch(aProp, aRule, aMatched)
 +  {
-+    if (!aMatched || aRule.matchedProp) {
-+      return;
++    if (aMatched && !aRule.matchedProp) {
++      aRule.matchedProp = aProp;
 +    }
-+
-+    aRule.matchedProp = aProp;
 +  }
 +
-+  function finder(aVar)
++  function finder(aRules, aVar, aPromises)
 +  {
 +    for (let [id, prop] in aVar) {
 +      for (let rule of aRules) {
-+        let matched = matchVariablesViewProperty(prop, rule, aOptions);
-+        outstanding.push(matched.then(onMatch.bind(null, prop, rule)));
-+      }
-+
-+      if (aRules.length > 0) {
-+        finder(prop);
++        let matcher = matchVariablesViewProperty(prop, rule, aOptions);
++        aPromises.push(matcher.then(onMatch.bind(null, prop, rule)));
 +      }
 +    }
 +  }
 +
-+  function processExpandRules()
++  function processExpandRules(aRules)
 +  {
-+    let rule = expandRules.shift();
++    let rule = aRules.shift();
 +    if (!rule) {
 +      return Promise.resolve(null);
 +    }
@@ -1401,28 +1399,16 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +      });
 +    }, function onFailure() {
 +      return Promise.resolve(null);
-+    }).then(processExpandRules).then(function() {
++    }).then(processExpandRules.bind(null, aRules)).then(function() {
 +      deferred.resolve(null);
 +    });
 +
 +    return deferred.promise;
 +  }
 +
-+  let expandRules = [];
-+  aRules = aRules.filter(function(aRule) {
-+    if (typeof aRule.name == "string" && aRule.name.indexOf(".") > -1) {
-+      expandRules.push(aRule);
-+      return false;
-+    }
-+    return true;
-+  });
-+
-+  finder(aView);
-+
-+  let promise = Promise.all(outstanding).then(processExpandRules);
-+
-+  return promise.then(function _onAllRulesMatched() {
-+    for (let rule of rules) {
++  function onAllRulesMatched(aRules)
++  {
++    for (let rule of aRules) {
 +      let matched = rule.matchedProp;
 +      if (matched && !rule.dontMatch) {
 +        ok(true, "rule " + rule.name + " matched for property " + matched.name);
@@ -1435,8 +1421,10 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +        ok(rule.dontMatch, "rule " + rule.name + " did not match any property");
 +      }
 +    }
-+    return rules;
-+  });
++    return aRules;
++  }
++
++  return init();
 +}
 +
 +/**
@@ -1835,7 +1823,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        node._objectActors = objectActors;
      }
  
-     // Make the node bring up the property panel, to allow the user to inspect
+-    // Make the node bring up the property panel, to allow the user to inspect
++    // Make the node bring up the variables view, to allow the user to inspect
      // the stack trace.
      if (level == "trace") {
        node._stacktrace = aMessage.stacktrace;
@@ -2083,7 +2072,26 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2128,17 +2060,17 @@ WebConsoleFrame.prototype = {
+@@ -2110,35 +2042,34 @@ WebConsoleFrame.prototype = {
+     spacer.flex = 1;
+     iconContainer.appendChild(spacer);
+ 
+     // Create the message body, which contains the actual text of the message.
+     let bodyNode = this.document.createElementNS(XUL_NS, "description");
+     bodyNode.flex = 1;
+     bodyNode.classList.add("webconsole-msg-body");
+ 
+-    // Store the body text, since it is needed later for the property tree
+-    // case.
++    // Store the body text, since it is needed later for the variables view.
+     let body = aBody;
+     // If a string was supplied for the body, turn it into a DOM node and an
+     // associated clipboard string now.
+     aClipboardText = aClipboardText ||
+                      (aBody + (aSourceURL ? " @ " + aSourceURL : "") +
+                               (aSourceLine ? ":" + aSourceLine : ""));
+ 
+     // Create the containing node and append all its elements to it.
      let node = this.document.createElementNS(XUL_NS, "richlistitem");
  
      if (aBody instanceof Ci.nsIDOMNode) {
@@ -2102,7 +2110,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        else {
          str = aBody;
        }
-@@ -2163,64 +2095,51 @@ WebConsoleFrame.prototype = {
+@@ -2163,64 +2094,51 @@ WebConsoleFrame.prototype = {
      timestampNode.classList.add("webconsole-timestamp");
      let timestamp = aTimeStamp || Date.now();
      let timestampString = l10n.timestampString(timestamp);
@@ -2185,7 +2193,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (locationNode) {
        node.appendChild(locationNode);
      }
-@@ -2258,53 +2177,46 @@ WebConsoleFrame.prototype = {
+@@ -2258,53 +2176,46 @@ WebConsoleFrame.prototype = {
        configurable: false
      });
  
@@ -2247,7 +2255,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Click event handler for the ellipsis shown immediately after a long string.
     * This method retrieves the full string and updates the console output to
-@@ -2673,28 +2585,76 @@ function JSTerm(aWebConsoleFrame)
+@@ -2673,28 +2584,76 @@ function JSTerm(aWebConsoleFrame)
  {
    this.hud = aWebConsoleFrame;
    this.hudId = this.hud.hudId;
@@ -2324,7 +2332,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * History of code that was executed.
     * @type array
-@@ -2733,16 +2693,18 @@ JSTerm.prototype = {
+@@ -2733,16 +2692,18 @@ JSTerm.prototype = {
  
      let doc = this.hud.document;
      this.completeNode = doc.querySelector(".jsterm-complete-node");
@@ -2343,7 +2351,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement [aAfterNode]
-@@ -2755,33 +2717,47 @@ JSTerm.prototype = {
+@@ -2755,33 +2716,47 @@ JSTerm.prototype = {
     *        The message received from the server.
     */
    _executeResultCallback:
@@ -2398,7 +2406,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            catch (ex) {
              errorMessage = helperResult.message;
            }
-@@ -2820,48 +2796,40 @@ JSTerm.prototype = {
+@@ -2820,48 +2795,40 @@ JSTerm.prototype = {
                                  this._evalOutputClick.bind(this, aResponse),
                                  aAfterNode, aResponse.timestamp);
      }
@@ -2464,7 +2472,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
    },
  
-@@ -2882,81 +2850,628 @@ JSTerm.prototype = {
+@@ -2882,81 +2849,628 @@ JSTerm.prototype = {
        this.writeOutput(l10n.getStr("executeEmptyInput"), CATEGORY_OUTPUT,
                         SEVERITY_LOG);
        return;
@@ -3141,7 +3149,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aOutputMessage
     *        The message to display.
     * @param function [aCallback]
-@@ -3572,171 +4087,49 @@ JSTerm.prototype = {
+@@ -3572,171 +4086,49 @@ JSTerm.prototype = {
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces

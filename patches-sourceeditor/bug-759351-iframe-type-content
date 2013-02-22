@@ -1,0 +1,160 @@
+# HG changeset patch
+# Parent a789203f9d03235416b2f2d10c90ac8d7b978822
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1361557716 -7200
+
+diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
+--- a/browser/devtools/sourceeditor/source-editor-orion.jsm
++++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
+@@ -7,16 +7,17 @@
+ 
+ const Cu = Components.utils;
+ const Ci = Components.interfaces;
+ 
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource:///modules/source-editor-ui.jsm");
+ Cu.import("resource://gre/modules/devtools/Require.jsm");
++Cu.import("resource://gre/modules/ObjectWrapper.jsm");
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
+                                    "@mozilla.org/widget/clipboardhelper;1",
+                                    "nsIClipboardHelper");
+ 
+ const ORION_L10N = "chrome://browser/locale/devtools/orion.properties";
+ 
+ XPCOMUtils.defineLazyGetter(this, "orion_strings", function() {
+@@ -255,16 +256,17 @@ SourceEditor.prototype = {
+     });
+ 
+     let src = ORION_IFRAME.replace("</head>", links.join("\n") + "</head>");
+ 
+     let doc = aElement.ownerDocument;
+     this._iframe = doc.createElementNS(XUL_NS, "iframe");
+     this._iframe.flex = 1;
+     this._iframe.addEventListener("load", this._onIframeLoad, true);
++    this._iframe.setAttribute("type", "content");
+     this._iframe.setAttribute("src", src);
+ 
+     aElement.appendChild(this._iframe);
+     this.parentElement = aElement;
+ 
+     this._onReadyCallback = aCallback;
+     this.ui.init();
+   },
+@@ -272,18 +274,17 @@ SourceEditor.prototype = {
+   /**
+    * The editor iframe load event handler.
+    * @private
+    */
+   _onIframeLoad: function SE__onIframeLoad()
+   {
+     this._iframe.removeEventListener("load", this._onIframeLoad, true);
+ 
+-    this._iframeWindow = this._iframe.contentWindow.wrappedJSObject;
+-    let window = this._iframeWindow;
++    let window = this._iframeWindow = this._iframe.contentWindow.wrappedJSObject;
+ 
+     if (gOrionModules) {
+       unregisterModules(gOrionModules);
+     }
+ 
+     let domain = new define.Domain();
+     domain.syntax = "amd";
+ 
+@@ -321,25 +322,25 @@ SourceEditor.prototype = {
+ 
+     let TextModel = window.require("orion/textview/textModel").TextModel;
+     let TextView = window.require("orion/textview/textView").TextView;
+ 
+     this._expandTab = config.expandTab;
+     this._tabSize = config.tabSize;
+ 
+     this._model = new TextModel(config.initialText);
+-    this._view = new TextView({
++    this._view = new TextView(ObjectWrapper.wrap({
+       model: this._model,
+       parent: "editor",
+       tabSize: this._tabSize,
+       expandTab: this._expandTab,
+       readonly: config.readOnly,
+       tabMode: "tabMode" in config ? config.tabMode : !config.readOnly,
+       themeClass: "mozilla" + (config.readOnly ? " readonly" : ""),
+-    });
++    }, window));
+ 
+     if (config.highlightCurrentLine || Services.appinfo.OS == "Linux") {
+       this.addEventListener(SourceEditor.EVENTS.SELECTION,
+                             this._onOrionSelection);
+     }
+     this.addEventListener(SourceEditor.EVENTS.TEXT_CHANGED,
+                            this._onTextChanged);
+ 
+@@ -364,40 +365,41 @@ SourceEditor.prototype = {
+     let Annotations = window.require("orion/textview/annotations");
+     let AnnotationModel = Annotations.AnnotationModel;
+ 
+     this._annotationType = Annotations.AnnotationType;
+     this._annotationModel = new AnnotationModel(this._model);
+ 
+     if (config.showAnnotationRuler) {
+       this._annotationRuler = new AnnotationRuler(this._annotationModel, "left",
+-        {styleClass: "ruler annotations"});
++        ObjectWrapper.wrap({styleClass: "ruler annotations"}, window));
+       this._annotationRuler.onClick = this._annotationRulerClick.bind(this);
+       this._annotationRuler.addAnnotationType(ORION_ANNOTATION_TYPES.breakpoint);
+       this._annotationRuler.addAnnotationType(ORION_ANNOTATION_TYPES.debugLocation);
+       this._view.addRuler(this._annotationRuler);
+     }
+ 
+     if (config.showLineNumbers) {
+       let rulerClass = this._annotationRuler ?
+                        "ruler lines linesWithAnnotations" :
+                        "ruler lines";
+ 
+       this._linesRuler = new LineNumberRuler(this._annotationModel, "left",
+-        {styleClass: rulerClass}, {styleClass: "rulerLines odd"},
+-        {styleClass: "rulerLines even"});
++        ObjectWrapper.wrap({styleClass: rulerClass}, window),
++        ObjectWrapper.wrap({styleClass: "rulerLines odd"}, window),
++        ObjectWrapper.wrap({styleClass: "rulerLines even"}, window));
+ 
+       this._linesRuler.onClick = this._linesRulerClick.bind(this);
+       this._linesRuler.onDblClick = this._linesRulerDblClick.bind(this);
+       this._view.addRuler(this._linesRuler);
+     }
+ 
+     if (config.showOverviewRuler) {
+       this._overviewRuler = new OverviewRuler(this._annotationModel, "right",
+-        {styleClass: "ruler overview"});
++        ObjectWrapper.wrap({styleClass: "ruler overview"}, window));
+       this._overviewRuler.onClick = this._overviewRulerClick.bind(this);
+ 
+       this._overviewRuler.addAnnotationType(ORION_ANNOTATION_TYPES.matchingBracket);
+       this._overviewRuler.addAnnotationType(ORION_ANNOTATION_TYPES.currentBracket);
+       this._overviewRuler.addAnnotationType(ORION_ANNOTATION_TYPES.breakpoint);
+       this._overviewRuler.addAnnotationType(ORION_ANNOTATION_TYPES.debugLocation);
+       this._overviewRuler.addAnnotationType(ORION_ANNOTATION_TYPES.task);
+       this._view.addRuler(this._overviewRuler);
+@@ -454,18 +456,19 @@ SourceEditor.prototype = {
+ 
+   /**
+    * Initialize the private Orion EventTarget object. This is used for tracking
+    * our own event listeners for events outside of Orion's scope.
+    * @private
+    */
+   _initEventTarget: function SE__initEventTarget()
+   {
+-    let EventTarget =
+-      this._iframeWindow.require("orion/textview/eventTarget").EventTarget;
++    let window = this._iframeWindow;
++    this._eventTarget = ObjectWrapper.wrap({}, window);
++    let EventTarget = window.require("orion/textview/eventTarget").EventTarget;
+     EventTarget.addMixin(this._eventTarget);
+ 
+     this._eventListenersQueue.forEach(function(aRequest) {
+       if (aRequest[0] == "add") {
+         this.addEventListener(aRequest[1], aRequest[2]);
+       } else {
+         this.removeEventListener(aRequest[1], aRequest[2]);
+       }
