@@ -1,0 +1,119 @@
+# HG changeset patch
+# User Jonathan Griffin <jgriffin@mozilla.com>
+# Date 1360888003 28800
+# Node ID 643f12d6d0f1e5c276d41141b9e2e6ea6ad9352f
+# Parent  33247c135813086c49e88306c93bb330e4250a7a
+Bug 831367 - Simplify SpecialPowersAPI.bindDOMWindowUtils()
+
+diff -r 33247c135813 -r 643f12d6d0f1 dom/contacts/tests/test_contacts_blobs.html
+--- a/dom/contacts/tests/test_contacts_blobs.html	Thu Feb 14 13:42:26 2013 -0800
++++ b/dom/contacts/tests/test_contacts_blobs.html	Thu Feb 14 16:26:43 2013 -0800
+@@ -54,7 +54,7 @@
+ 
+ function getBlob(type, view)
+ {
+-  return utils.getBlob([view], {type: type});
++  return SpecialPowers.unwrap(utils.getBlob([view], {type: type}));
+ }
+ 
+ function getRandomBlob(size)
+diff -r 33247c135813 -r 643f12d6d0f1 dom/file/test/helpers.js
+--- a/dom/file/test/helpers.js	Thu Feb 14 13:42:26 2013 -0800
++++ b/dom/file/test/helpers.js	Thu Feb 14 16:26:43 2013 -0800
+@@ -179,7 +179,7 @@
+ 
+ function getBlob(type, buffer)
+ {
+-  return utils.getBlob([buffer], {type: type});
++  return SpecialPowers.unwrap(utils.getBlob([buffer], {type: type}));
+ }
+ 
+ function getRandomBlob(size)
+@@ -189,5 +189,5 @@
+ 
+ function getFileId(blob)
+ {
+-  return utils.getFileId(blob);
++  return SpecialPowers.unwrap(utils.getFileId(blob));
+ }
+diff -r 33247c135813 -r 643f12d6d0f1 dom/indexedDB/test/file.js
+--- a/dom/indexedDB/test/file.js	Thu Feb 14 13:42:26 2013 -0800
++++ b/dom/indexedDB/test/file.js	Thu Feb 14 16:26:43 2013 -0800
+@@ -49,12 +49,12 @@
+ 
+ function getBlob(type, view)
+ {
+-  return utils.getBlob([view], {type: type});
++  return SpecialPowers.unwrap(utils.getBlob([view], {type: type}));
+ }
+ 
+ function getFile(name, type, view)
+ {
+-  return utils.getFile(name, [view], {type: type});
++  return SpecialPowers.unwrap(utils.getFile(name, [view], {type: type}));
+ }
+ 
+ function getRandomBlob(size)
+diff -r 33247c135813 -r 643f12d6d0f1 dom/tests/mochitest/general/test_domWindowUtils.html
+--- a/dom/tests/mochitest/general/test_domWindowUtils.html	Thu Feb 14 13:42:26 2013 -0800
++++ b/dom/tests/mochitest/general/test_domWindowUtils.html	Thu Feb 14 16:26:43 2013 -0800
+@@ -85,7 +85,8 @@
+       moveEl.style.left = moveX + "px";
+       moveEl.style.top = moveY + "px";
+     }
+-    let found = domWindowUtils.elementFromPoint(x, y, ignoreScroll, flushLayout);
++    let found = SpecialPowers.unwrap(domWindowUtils.elementFromPoint(
++                                     x, y, ignoreScroll, flushLayout));
+     is(found, expected, "at index " + i + " for data " + testData[i][0].toSource());
+   }
+ 
+diff -r 33247c135813 -r 643f12d6d0f1 testing/specialpowers/content/specialpowersAPI.js
+--- a/testing/specialpowers/content/specialpowersAPI.js	Thu Feb 14 13:42:26 2013 -0800
++++ b/testing/specialpowers/content/specialpowersAPI.js	Thu Feb 14 16:26:43 2013 -0800
+@@ -32,43 +32,9 @@
+   if (!aWindow)
+     return
+ 
+-  var util = aWindow.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
+-                   .getInterface(Components.interfaces.nsIDOMWindowUtils);
+-  // This bit of magic brought to you by the letters
+-  // B Z, and E, S and the number 5.
+-  //
+-  // Take all of the properties on the nsIDOMWindowUtils-implementing
+-  // object, and rebind them onto a new object with a stub that uses
+-  // apply to call them from this privileged scope. This way we don't
+-  // have to explicitly stub out new methods that appear on
+-  // nsIDOMWindowUtils.
+-  //
+-  // Note that this will be a chrome object that is (possibly) exposed to
+-  // content. Make sure to define __exposedProps__ for each property to make
+-  // sure that it gets through the security membrane.
+-  var proto = Object.getPrototypeOf(util);
+-  var target = { __exposedProps__: {} };
+-  function rebind(desc, prop) {
+-    if (prop in desc && typeof(desc[prop]) == "function") {
+-      var oldval = desc[prop];
+-      try {
+-        desc[prop] = function() {
+-          return oldval.apply(util, arguments);
+-        };
+-      } catch (ex) {
+-        dump("WARNING: Special Powers failed to rebind function: " + desc + "::" + prop + "\n");
+-      }
+-    }
+-  }
+-  for (var i in proto) {
+-    var desc = Object.getOwnPropertyDescriptor(proto, i);
+-    rebind(desc, "get");
+-    rebind(desc, "set");
+-    rebind(desc, "value");
+-    Object.defineProperty(target, i, desc);
+-    target.__exposedProps__[i] = 'rw';
+-  }
+-  return target;
++   var util = aWindow.QueryInterface(Ci.nsIInterfaceRequestor)
++                     .getInterface(Ci.nsIDOMWindowUtils);
++   return wrapPrivileged(util);
+ }
+ 
+ function getRawComponents(aWindow) {

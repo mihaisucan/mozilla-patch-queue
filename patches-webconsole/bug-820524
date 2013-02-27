@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Panos Astithas <past@mozilla.com>
-# Date 1361531207 -7200
-# Node ID beb9dd528e5fd403e003936b70edab763901b007
-# Parent  6eb4635a3976b3208f2cd9e654b94bbf1b9541bb
-Bug 820524 - Debugger, Web Console and Profiler should share the debugger client even for local sessions; r=jwalker
+# Date 1361970688 -7200
+# Node ID ada856286c06b53ced0624f5e6c859236c170c16
+# Parent e7632ab657e5458571a01f705e17a5473dee2f00
+Bug 820524 - Debugger, Web Console and Profiler should share the debugger client even for local sessions; r=jwalker,vporof,msucan
 
 diff --git a/browser/devtools/commandline/test/browser_dbg_cmd.js b/browser/devtools/commandline/test/browser_dbg_cmd.js
 --- a/browser/devtools/commandline/test/browser_dbg_cmd.js
@@ -46,7 +46,30 @@ diff --git a/browser/devtools/commandline/test/browser_dbg_cmd.js b/browser/devt
 diff --git a/browser/devtools/debugger/DebuggerPanel.jsm b/browser/devtools/debugger/DebuggerPanel.jsm
 --- a/browser/devtools/debugger/DebuggerPanel.jsm
 +++ b/browser/devtools/debugger/DebuggerPanel.jsm
-@@ -32,23 +32,16 @@ DebuggerPanel.prototype = {
+@@ -5,19 +5,21 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ "use strict";
+ 
+ const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+ 
+ this.EXPORTED_SYMBOLS = ["DebuggerPanel"];
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+-Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
+ Cu.import("resource:///modules/devtools/EventEmitter.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "Promise",
++    "resource://gre/modules/commonjs/sdk/core/promise.js");
++
+ XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
+   "resource://gre/modules/devtools/dbg-server.jsm");
+ 
+ function DebuggerPanel(iframeWindow, toolbox) {
+   this.panelWin = iframeWindow;
+   this._toolbox = toolbox;
+ 
+   this._controller = this.panelWin.DebuggerController;
+@@ -32,23 +34,16 @@ DebuggerPanel.prototype = {
    /**
     * open is effectively an asynchronous constructor
     */
@@ -70,7 +93,7 @@ diff --git a/browser/devtools/debugger/DebuggerPanel.jsm b/browser/devtools/debu
        deferred.resolve(this);
      }.bind(this);
  
-@@ -57,25 +50,35 @@ DebuggerPanel.prototype = {
+@@ -57,25 +52,35 @@ DebuggerPanel.prototype = {
                                          onDebuggerConnected, true);
        this.emit("connected");
      }.bind(this);
@@ -427,7 +450,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
      this.tab.linkedBrowser.addProgressListener(this._webProgressListener);
      this.tab.addEventListener("TabClose", this);
      this.tab.parentNode.addEventListener("TabSelect", this);
-     this.tab.ownerDocument.defaultView.addEventListener("close", this);
+     this.tab.ownerDocument.defaultView.addEventListener("unload", this);
 -    this._handleThreadState = this._handleThreadState.bind(this);
 -    this.on("thread-resumed", this._handleThreadState);
 -    this.on("thread-paused", this._handleThreadState);
@@ -480,7 +503,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
 -      this.tab.linkedBrowser.removeProgressListener(this._webProgressListener)
 -      this._webProgressListener.target = null;
 -      this._webProgressListener = null;
--      this.tab.ownerDocument.defaultView.removeEventListener("close", this);
+-      this.tab.ownerDocument.defaultView.removeEventListener("unload", this);
 -      this.tab.removeEventListener("TabClose", this);
 -      this.tab.parentNode.removeEventListener("TabSelect", this);
 -      this.off("thread-resumed", this._handleThreadState);
@@ -494,7 +517,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
 +    this.off("thread-paused", this._handleThreadState);
 +
 +    if (this._tab) {
-+      this._tab.ownerDocument.defaultView.removeEventListener("close", this);
++      this._tab.ownerDocument.defaultView.removeEventListener("unload", this);
 +      this._tab.removeEventListener("TabClose", this);
 +      this._tab.parentNode.removeEventListener("TabSelect", this);
 +    }
@@ -695,7 +718,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
 diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework/Toolbox.jsm
 --- a/browser/devtools/framework/Toolbox.jsm
 +++ b/browser/devtools/framework/Toolbox.jsm
-@@ -117,17 +117,17 @@ Promise.all = Promise.promised(Array);
+@@ -121,17 +121,17 @@ Promise.all = Promise.promised(Array);
  this.Toolbox = function Toolbox(target, selectedTool, hostType) {
    this._target = target;
    this._toolPanels = new Map();
@@ -714,7 +737,7 @@ diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework
      selectedTool = Services.prefs.getCharPref(this._prefs.LAST_TOOL);
    }
    let definitions = gDevTools.getToolDefinitionMap();
-@@ -418,22 +418,23 @@ Toolbox.prototype = {
+@@ -427,22 +427,23 @@ Toolbox.prototype = {
  
    /**
     * Switch to the tool with the given id
@@ -741,44 +764,41 @@ diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework
      if (!tab) {
        throw new Error("No tool found");
      }
-@@ -644,28 +645,31 @@ Toolbox.prototype = {
-    */
-   destroy: function TBOX_destroy() {
-     // If several things call destroy then we give them all the same
-     // destruction promise so we're sure to destroy only once
-     if (this._destroyer) {
-       return this._destroyer;
-     }
+@@ -682,26 +683,28 @@ Toolbox.prototype = {
+     this._destroyer = deferred.promise;
  
-+    this._destroyer = Promise.resolve();
+     this._target.off("navigate", this._refreshHostTitle);
+     this.off("select", this._refreshHostTitle);
+     this.off("host-changed", this._refreshHostTitle);
+ 
      let outstanding = [];
  
 -    // Remote targets need to be notified that the toolbox is being torn down.
 -    if (this._target && this._target.isRemote) {
--      outstanding.push(this._target.destroy());
--    }
--    this._target = null;
--
-     for (let [id, panel] of this._toolPanels) {
-       outstanding.push(panel.destroy());
-     }
- 
++    for (let [id, panel] of this._toolPanels) {
++      outstanding.push(panel.destroy());
++    }
++
 +    // Targets need to be notified that the toolbox is being torn down, so that
 +    // remote protocol connections can be gracefully terminated.
 +    if (this._target) {
 +      this._target.off("close", this.destroy);
-+      outstanding.push(this._target.destroy());
-+    }
-+    this._target = null;
-+
+       outstanding.push(this._target.destroy());
+     }
+     this._target = null;
+ 
+-    for (let [id, panel] of this._toolPanels) {
+-      outstanding.push(panel.destroy());
+-    }
+-
      outstanding.push(this._host.destroy());
  
      gDevTools.off("tool-registered", this._toolRegistered);
      gDevTools.off("tool-unregistered", this._toolUnregistered);
  
-     this._destroyer = Promise.all(outstanding);
-     this._destroyer.then(function() {
+     Promise.all(outstanding).then(function() {
        this.emit("destroyed");
+       deferred.resolve();
 diff --git a/browser/devtools/framework/connect/connect.js b/browser/devtools/framework/connect/connect.js
 --- a/browser/devtools/framework/connect/connect.js
 +++ b/browser/devtools/framework/connect/connect.js
@@ -1023,7 +1043,33 @@ diff --git a/browser/devtools/profiler/ProfilerController.jsm b/browser/devtools
 diff --git a/browser/devtools/profiler/ProfilerPanel.jsm b/browser/devtools/profiler/ProfilerPanel.jsm
 --- a/browser/devtools/profiler/ProfilerPanel.jsm
 +++ b/browser/devtools/profiler/ProfilerPanel.jsm
-@@ -200,17 +200,16 @@ ProfileUI.prototype = {
+@@ -4,22 +4,24 @@
+ 
+ "use strict";
+ 
+ const Cu = Components.utils;
+ 
+ Cu.import("resource:///modules/devtools/gDevTools.jsm");
+ Cu.import("resource:///modules/devtools/ProfilerController.jsm");
+ Cu.import("resource:///modules/devtools/ProfilerHelpers.jsm");
+-Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
+ Cu.import("resource:///modules/devtools/EventEmitter.jsm");
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ this.EXPORTED_SYMBOLS = ["ProfilerPanel"];
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "Promise",
++    "resource://gre/modules/commonjs/sdk/core/promise.js");
++
+ XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
+   "resource://gre/modules/devtools/dbg-server.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+   "resource://gre/modules/Services.jsm");
+ 
+ /**
+  * An instance of a profile UI. Profile UI consists of
+@@ -200,17 +202,16 @@ ProfileUI.prototype = {
   *   - profileSwitched: after user switches to a different
   *                      profile.
   */
@@ -1041,7 +1087,7 @@ diff --git a/browser/devtools/profiler/ProfilerPanel.jsm b/browser/devtools/prof
  }
  
  ProfilerPanel.prototype = {
-@@ -251,33 +250,51 @@ ProfilerPanel.prototype = {
+@@ -251,33 +252,49 @@ ProfilerPanel.prototype = {
  
    /**
     * Open a debug connection and, on success, switch to the newly created
@@ -1064,7 +1110,7 @@ diff --git a/browser/devtools/profiler/ProfilerPanel.jsm b/browser/devtools/prof
 -      create.addEventListener("click", this.createProfile.bind(this), false);
 -      create.removeAttribute("disabled");
 +    return promise
-+      .then(function(aTarget) {
++      .then(function(target) {
 +        let deferred = Promise.defer();
 +        this.controller = new ProfilerController(this.target);
  
@@ -1092,11 +1138,9 @@ diff --git a/browser/devtools/profiler/ProfilerPanel.jsm b/browser/devtools/prof
 -    }.bind(this));
 -
 -    return deferred.promise;
-+      .then(null, function onError(aReason) {
-+        let msg = "ProfilerPanel open failed. " +
-+                  aReason.error + ": " + aReason.message;
-+        dump(msg + "\n");
-+        Cu.reportError(msg);
++      .then(null, function onError(reason) {
++        Cu.reportError("ProfilerPanel open failed. " +
++                       reason.error + ": " + reason.message);
 +      });
    },
  
@@ -1191,7 +1235,7 @@ diff --git a/browser/devtools/webconsole/AutocompletePopup.jsm b/browser/devtool
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -241,22 +241,21 @@ WebConsole.prototype = {
+@@ -232,22 +232,21 @@ WebConsole.prototype = {
      let onFailure = function(aReason) {
        deferred.reject(aReason);
      };
@@ -1217,7 +1261,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *
     * @return string
     *         The Web Console panel title.
-@@ -363,37 +362,35 @@ WebConsole.prototype = {
+@@ -354,37 +353,35 @@ WebConsole.prototype = {
    destroy: function WC_destroy()
    {
      if (this._destroyer) {
@@ -1260,8 +1304,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/webconsole/WebConsolePanel.jsm
 --- a/browser/devtools/webconsole/WebConsolePanel.jsm
 +++ b/browser/devtools/webconsole/WebConsolePanel.jsm
-@@ -4,16 +4,17 @@
- 
+@@ -5,16 +5,19 @@
  "use strict";
  
  this.EXPORTED_SYMBOLS = [ "WebConsolePanel" ];
@@ -1269,8 +1312,10 @@ diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/
  const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
  
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-+Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
  
++XPCOMUtils.defineLazyModuleGetter(this, "Promise",
++    "resource://gre/modules/commonjs/sdk/core/promise.js");
++
  XPCOMUtils.defineLazyModuleGetter(this, "HUDService",
      "resource:///modules/HUDService.jsm");
  
@@ -1278,7 +1323,8 @@ diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/
      "resource:///modules/devtools/EventEmitter.jsm");
  
  /**
-@@ -33,40 +34,54 @@ WebConsolePanel.prototype = {
+  * A DevToolPanel that controls the Web Console.
+@@ -33,27 +36,41 @@ WebConsolePanel.prototype = {
     *
     * @return object
     *         A Promise that is resolved when the Web Console completes opening.
@@ -1330,21 +1376,6 @@ diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/
    get isReady() this._isReady,
  
    destroy: function WCP_destroy()
-   {
-     if (this._destroyer) {
--      return this._destroyer;
-+      return this._destroyer.promise;
-     }
- 
-     this._destroyer = this.hud.destroy();
-     this._destroyer.then(function() {
-       this.emit("destroyed");
-     }.bind(this));
- 
--    return this._destroyer;
-+    return this._destroyer.promise;
-   },
- };
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -1374,7 +1405,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                                    "resource:///modules/PropertyPanel.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "PropertyTreeView",
-@@ -3976,17 +3967,16 @@ function WebConsoleConnectionProxy(aWebC
+@@ -3983,17 +3974,16 @@ function WebConsoleConnectionProxy(aWebC
    this.target = aTarget;
  
    this._onPageError = this._onPageError.bind(this);
@@ -1392,7 +1423,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
  WebConsoleConnectionProxy.prototype = {
    /**
-@@ -4061,27 +4051,16 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4068,27 +4058,16 @@ WebConsoleConnectionProxy.prototype = {
     * Tells if the window.console object of the remote web page is the native
     * object or not.
     * @private
@@ -1420,7 +1451,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    connect: function WCCP_connect()
    {
-@@ -4099,49 +4078,33 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4106,49 +4085,33 @@ WebConsoleConnectionProxy.prototype = {
      let promise = this._connectDefer.promise;
      promise.then(function _onSucess() {
        this._connectTimer.cancel();
@@ -1477,7 +1508,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Connection timeout handler.
     * @private
-@@ -4152,35 +4115,16 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4159,35 +4122,16 @@ WebConsoleConnectionProxy.prototype = {
        error: "timeout",
        message: l10n.getStr("connectionTimeout"),
      };
@@ -1513,7 +1544,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    _attachTab: function WCCP__attachTab(aTab)
    {
-@@ -4421,60 +4365,30 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4428,60 +4372,30 @@ WebConsoleConnectionProxy.prototype = {
  
      this._disconnecter = Promise.defer();
  

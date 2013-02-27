@@ -1,0 +1,93 @@
+# HG changeset patch
+# User Boris Zbarsky <bzbarsky@mit.edu>
+# Date 1361470368 18000
+# Node ID 17d359af940965a0553f54d05ede918e9fa02f91
+# Parent  046df99b88b0d9d4b6fcac2b48d0809091fde775
+Bug 832920.  Add a way for chrome iframes to opt into having a separate refresh driver (e.g. if they plan to be moved between windows) and make devtools use that opt-in.  r=tnikkel,paul
+
+diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework/Toolbox.jsm
+--- a/browser/devtools/framework/Toolbox.jsm
++++ b/browser/devtools/framework/Toolbox.jsm
+@@ -460,16 +460,17 @@ Toolbox.prototype = {
+     this._currentToolId = id;
+ 
+     let iframe = this.doc.getElementById("toolbox-panel-iframe-" + id);
+     if (!iframe) {
+       iframe = this.doc.createElement("iframe");
+       iframe.className = "toolbox-panel-iframe";
+       iframe.id = "toolbox-panel-iframe-" + id;
+       iframe.setAttribute("flex", 1);
++      iframe.setAttribute("forceSeparateRefreshDriver", "");
+ 
+       let vbox = this.doc.getElementById("toolbox-panel-" + id);
+       vbox.appendChild(iframe);
+ 
+       let boundLoad = function() {
+         iframe.removeEventListener("DOMContentLoaded", boundLoad, true);
+ 
+         definition.build(iframe.contentWindow, this).then(function(panel) {
+diff --git a/browser/devtools/framework/toolbox-window.xul b/browser/devtools/framework/toolbox-window.xul
+--- a/browser/devtools/framework/toolbox-window.xul
++++ b/browser/devtools/framework/toolbox-window.xul
+@@ -24,10 +24,10 @@
+ 
+   <keyset id="toolbox-keyset">
+     <key id="toolbox-key-close"
+          key="&closeCmd.key;"
+          command="toolbox-cmd-close"
+          modifiers="accel"/>
+   </keyset>
+ 
+-  <iframe id="toolbox-iframe" flex="1"></iframe>
++  <iframe id="toolbox-iframe" flex="1" forceSeparateRefreshDriver=""></iframe>
+ </window>
+diff --git a/content/base/src/nsGkAtomList.h b/content/base/src/nsGkAtomList.h
+--- a/content/base/src/nsGkAtomList.h
++++ b/content/base/src/nsGkAtomList.h
+@@ -366,16 +366,17 @@ GK_ATOM(focused, "focused")
+ GK_ATOM(following, "following")
+ GK_ATOM(followingSibling, "following-sibling")
+ GK_ATOM(font, "font")
+ GK_ATOM(fontWeight, "font-weight")
+ GK_ATOM(fontpicker, "fontpicker")
+ GK_ATOM(footer, "footer")
+ GK_ATOM(_for, "for")
+ GK_ATOM(forEach, "for-each")
++GK_ATOM(forceSeparateRefreshDriver, "forceSeparateRefreshDriver")
+ GK_ATOM(form, "form")
+ GK_ATOM(formaction, "formaction")
+ GK_ATOM(format, "format")
+ GK_ATOM(formatNumber, "format-number")
+ GK_ATOM(formenctype, "formenctype")
+ GK_ATOM(formmethod, "formmethod")
+ GK_ATOM(formnovalidate, "formnovalidate")
+ GK_ATOM(formtarget, "formtarget")
+diff --git a/layout/base/nsPresContext.cpp b/layout/base/nsPresContext.cpp
+--- a/layout/base/nsPresContext.cpp
++++ b/layout/base/nsPresContext.cpp
+@@ -943,17 +943,24 @@ nsPresContext::Init(nsDeviceContext* aDe
+       // We don't have our container set yet at this point
+       nsCOMPtr<nsISupports> ourContainer = mDocument->GetContainer();
+ 
+       nsCOMPtr<nsIDocShellTreeItem> ourItem = do_QueryInterface(ourContainer);
+       if (ourItem) {
+         nsCOMPtr<nsIDocShellTreeItem> parentItem;
+         ourItem->GetSameTypeParent(getter_AddRefs(parentItem));
+         if (parentItem) {
+-          mRefreshDriver = parent->GetShell()->GetPresContext()->RefreshDriver();
++          Element* containingElement =
++            parent->FindContentForSubDocument(mDocument);
++          if (!containingElement->IsXUL() ||
++              !containingElement->
++                HasAttr(kNameSpaceID_None,
++                        nsGkAtoms::forceSeparateRefreshDriver)) {
++            mRefreshDriver = parent->GetShell()->GetPresContext()->RefreshDriver();
++          }
+         }
+       }
+     }
+ 
+     if (!mRefreshDriver) {
+       mRefreshDriver = new nsRefreshDriver(this);
+     }
+   }
