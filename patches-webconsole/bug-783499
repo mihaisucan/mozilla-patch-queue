@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent cbf8790e4fba1e448cba2063520680df7e9095f4
+# Parent 7751f9fdc7921d75e80a1e186c109a8bce683f34
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1361569893 -7200
+# Date 1361984451 -7200
 
-Bug 783499 - Web Console should use the debugger API
+Bug 783499 - Web Console should use the debugger API; r=past
 
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -348,16 +348,50 @@ WebConsole.prototype = {
+@@ -339,16 +339,50 @@ WebConsole.prototype = {
          return;
        }
      }
@@ -82,6 +82,25 @@ diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugge
  XPCOMUtils.defineLazyServiceGetter(this, "socketTransportService",
                                     "@mozilla.org/network/socket-transport-service;1",
                                     "nsISocketTransportService");
+@@ -491,17 +492,17 @@ DebuggerClient.prototype = {
+       }
+       this.notify(aPacket.type, aPacket);
+ 
+       if (onResponse) {
+         onResponse(aPacket);
+       }
+     } catch(ex) {
+       dumpn("Error handling response: " + ex + " - stack:\n" + ex.stack);
+-      Cu.reportError(ex.message + "\n" + ex.stack);
++      Cu.reportError(ex + "\n" + ex.stack);
+     }
+ 
+     this._sendRequests();
+   },
+ 
+   /**
+    * Called by DebuggerTransport when the underlying stream is closed.
+    *
 diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-script-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
@@ -1448,7 +1467,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 diff --git a/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html b/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html
 --- a/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html
 +++ b/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html
-@@ -29,43 +29,48 @@ function onAttach(aState, aResponse)
+@@ -29,43 +29,43 @@ function onAttach(aState, aResponse)
  function onEvaluate(aState, aResponse)
  {
    checkObject(aResponse, {
@@ -1468,12 +1487,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html 
    onInspect = onInspect.bind(null, aState);
 -  aState.client.inspectObjectProperties(aResponse.result.actor, onInspect);
 +  let client = new GripClient(aState.dbgClient, aResponse.result);
-+  // FIXME: Bug 842726 - Debugger crash when trying to inspect XUL
-+  // document.__proto__
-+  //client.getPrototypeAndProperties(onInspect);
-+  closeDebugger(aState, function() {
-+    SimpleTest.finish();
-+  });
++  client.getPrototypeAndProperties(onInspect);
  }
  
  function onInspect(aState, aResponse)
@@ -1511,7 +1525,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_bug819670_getter_throws.html 
 diff --git a/toolkit/devtools/webconsole/test/test_consoleapi.html b/toolkit/devtools/webconsole/test/test_consoleapi.html
 --- a/toolkit/devtools/webconsole/test/test_consoleapi.html
 +++ b/toolkit/devtools/webconsole/test/test_consoleapi.html
-@@ -15,23 +15,26 @@
+@@ -15,23 +15,23 @@
  SimpleTest.waitForExplicitFinish();
  
  let expectedConsoleCalls = [];
@@ -1532,11 +1546,8 @@ diff --git a/toolkit/devtools/webconsole/test/test_consoleapi.html b/toolkit/dev
 +  top.console.warn("foobarBaz-warn", top.document.documentElement);
 +  top.console.debug(null);
 +  top.console.trace();
-+  top.console.dir(top.document, top.self);
++  top.console.dir(top.document, top.location);
 +  top.console.log("foo", longString);
-+
-+  // TODO: due to the design of the debugger all of the objects are proxies, and
-+  // the "class" checks below fail. What should we do here?
  
    expectedConsoleCalls = [
      {
@@ -1545,7 +1556,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_consoleapi.html b/toolkit/dev
        functionName: "doConsoleCalls",
        timeStamp: /^\d+$/,
        arguments: ["foobarBaz-log", { type: "undefined" }],
-@@ -77,34 +80,24 @@ function doConsoleCalls(aState)
+@@ -77,34 +77,24 @@ function doConsoleCalls(aState)
        level: "dir",
        filename: /test_consoleapi/,
        functionName: "doConsoleCalls",
@@ -1561,7 +1572,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_consoleapi.html b/toolkit/dev
            type: "object",
            actor: /[a-z]/,
 -          className: "Window",
-+          class: "Window",
++          class: "Location",
          }
        ],
 -      objectProperties: [
@@ -1582,7 +1593,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_consoleapi.html b/toolkit/dev
        timeStamp: /^\d+$/,
        arguments: [
          "foo",
-@@ -119,17 +112,17 @@ function doConsoleCalls(aState)
+@@ -119,17 +109,17 @@ function doConsoleCalls(aState)
      },
    ];
  }
@@ -1697,21 +1708,62 @@ diff --git a/toolkit/devtools/webconsole/test/test_jsterm.html b/toolkit/devtool
 diff --git a/toolkit/devtools/webconsole/test/test_object_actor.html b/toolkit/devtools/webconsole/test/test_object_actor.html
 --- a/toolkit/devtools/webconsole/test/test_object_actor.html
 +++ b/toolkit/devtools/webconsole/test/test_object_actor.html
-@@ -52,147 +52,123 @@ function onAttach(aState, aResponse)
-   foobarObject.longStringObj = {
-     toSource: function() longString,
-     toString: function() longString,
-     boom: "explode",
-   };
+@@ -25,174 +25,148 @@ function startTest()
  
-   console.log("hello", foobarObject);
+ function onAttach(aState, aResponse)
+ {
+   onConsoleCall = onConsoleCall.bind(null, aState);
+   aState.dbgClient.addListener("consoleAPICall", onConsoleCall);
+ 
+   let longString = (new Array(DebuggerServer.LONG_STRING_LENGTH + 3)).join("\u0629");
+ 
+-  window.foobarObject = Object.create(null);
++  // Here we put the objects in the correct window, to avoid having them all
++  // wrapped by proxies for cross-compartment access.
++
++  let foobarObject = top.Object.create(null);
+   foobarObject.tamarbuta = longString;
+   foobarObject.foo = 1;
+   foobarObject.foobar = "hello";
+-  foobarObject.foobaz = document;
+   foobarObject.omg = null;
+   foobarObject.testfoo = false;
+-  foobarObject.notInspectable = {};
+-  foobarObject.omgfn = function _omgfn() {
+-    return "myResult";
+-  };
+-  foobarObject.abArray = ["a", "b"];
++  foobarObject.notInspectable = top.Object.create(null);
++  foobarObject.omgfn = new top.Function("return 'myResult'");
++  foobarObject.abArray = new top.Array("a", "b");
++  foobarObject.foobaz = top.document;
+ 
+-  Object.defineProperty(foobarObject, "getterAndSetter", {
++  top.Object.defineProperty(foobarObject, "getterAndSetter", {
+     enumerable: true,
+-    get: function fooGet() { return "foo"; },
+-    set: function fooSet() { 1+2 },
++    get: new top.Function("return 'foo';"),
++    set: new top.Function("1+2"),
+   });
+ 
+-  foobarObject.longStringObj = {
+-    toSource: function() longString,
+-    toString: function() longString,
+-    boom: "explode",
+-  };
++  foobarObject.longStringObj = top.Object.create(null);
++  foobarObject.longStringObj.toSource = new top.Function("'" + longString + "'");
++  foobarObject.longStringObj.toString = new top.Function("'" + longString + "'");
++  foobarObject.longStringObj.boom = "explode";
+ 
+-  console.log("hello", foobarObject);
++  top.wrappedJSObject.foobarObject = foobarObject;
++  top.console.log("hello", top.wrappedJSObject.foobarObject);
  
 -  expectedProps = [
 -    {
 -      name: "abArray",
-+  // TODO: due to the design of the debugger all of the objects are proxies, and
-+  // the "class" checks below fail. What should we do here?
-+
 +  expectedProps = {
 +    "abArray": {
        value: {
@@ -1743,7 +1795,7 @@ diff --git a/toolkit/devtools/webconsole/test/test_object_actor.html b/toolkit/d
 -        className: "HTMLDocument",
 -        displayString: /\[object HTMLDocument/,
 -        inspectable: true,
-+        class: "HTMLDocument",
++        class: "XULDocument",
          actor: /[a-z]/,
        },
      },
