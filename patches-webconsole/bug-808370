@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 43a70dfa018435dcecc661eb246af96407e2ba43
+# Parent eba97d19e93ae340d355490b05f25bd4ccf449bf
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1361567812 -7200
+# Date 1362087007 -7200
 
 Bug 808370 - Use the VariablesView in webconsole; r=past,vporof,paul try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
 
@@ -307,6 +307,37 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
  	browser_webconsole_netlogging.js \
  	browser_webconsole_bug_583816_No_input_and_Tab_key_pressed.js \
  	browser_webconsole_bug_594477_clickable_output.js \
+@@ -110,16 +109,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_result_format_as_string.js \
+ 	browser_webconsole_bug_737873_mixedcontent.js \
+ 	browser_output_breaks_after_console_dir_uninspectable.js \
+ 	browser_console_log_inspectable_object.js \
+ 	browser_bug_638949_copy_link_location.js \
+ 	browser_output_longstring_expand.js \
+ 	browser_netpanel_longstring_expand.js \
+ 	browser_repeated_messages_accuracy.js \
++	browser_eval_in_debugger_stackframe.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+         browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+@@ -205,11 +205,12 @@ MOCHITEST_BROWSER_FILES += \
+ 	test-for-of.html \
+ 	test_bug_770099_violation.html \
+ 	test_bug_770099_violation.html^headers^ \
+ 	test_bug_770099_bad_policy_uri.html \
+ 	test_bug_770099_bad_policy_uri.html^headers^ \
+ 	test-result-format-as-string.html \
+ 	test-bug-737873-mixedcontent.html \
+ 	test-repeated-messages.html \
++	test-eval-in-stackframe.html \
+ 	$(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
 diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 --- a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
 +++ b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
@@ -347,6 +378,134 @@ diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_ob
      failureFn: finishTest,
    });
  }
+diff --git a/browser/devtools/webconsole/test/browser_eval_in_debugger_stackframe.js b/browser/devtools/webconsole/test/browser_eval_in_debugger_stackframe.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_eval_in_debugger_stackframe.js
+@@ -0,0 +1,123 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Test that makes sure web console eval happens in the user-selected stackframe
++// from the js debugger.
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-eval-in-stackframe.html";
++
++let gWebConsole, gJSTerm, gDebuggerWin, gThread, gDebuggerController, gStackframes;
++
++function test()
++{
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function consoleOpened(hud)
++{
++  gWebConsole = hud;
++  gJSTerm = hud.jsterm;
++
++  gJSTerm.execute("foo", onExecuteFoo);
++}
++
++function onExecuteFoo()
++{
++  isnot(gWebConsole.outputNode.textContent.indexOf("globalFooBug783499"), -1,
++        "|foo| value is correct");
++
++  gJSTerm.clearOutput();
++
++  // Test for Bug 690529 - Web Console and Scratchpad should evaluate
++  // expressions in the scope of the content window, not in a sandbox.
++  gJSTerm.execute("foo2 = 'newFoo'; window.foo2", onNewFoo2);
++}
++
++function onNewFoo2()
++{
++  is(gWebConsole.outputNode.textContent.indexOf("undefined"), -1,
++     "|undefined| is not displayed after adding |foo2|");
++
++  let msg = gWebConsole.outputNode.querySelector(".webconsole-msg-output");
++  ok(msg, "output result found");
++
++  isnot(msg.textContent.indexOf("newFoo"), -1,
++        "'newFoo' is displayed after adding |foo2|");
++
++  openDebugger().then(debuggerOpened);
++}
++
++function debuggerOpened(aResult)
++{
++  gDebuggerWin = aResult.panelWin;
++  gDebuggerController = gDebuggerWin.DebuggerController;
++  gThread = gDebuggerController.activeThread;
++  gStackframes = gDebuggerController.StackFrames;
++
++  openConsole(function() {
++    gJSTerm.execute("foo + foo2", onExecuteFooAndFoo2);
++  });
++}
++
++function onExecuteFooAndFoo2()
++{
++  let expected = "globalFooBug783499newFoo";
++  isnot(gWebConsole.outputNode.textContent.indexOf(expected), -1,
++        "|foo + foo2| is displayed after starting the debugger");
++
++  openDebugger().then(function() {
++    gThread.addOneTimeListener("framesadded", onFramesAdded);
++
++    content.wrappedJSObject.firstCall();
++  });
++}
++
++function onFramesAdded()
++{
++  openConsole(function() {
++    gJSTerm.execute("foo + foo2", onExecuteFooAndFoo2InSecondCall);
++  });
++}
++
++function onExecuteFooAndFoo2InSecondCall()
++{
++  let expected = "globalFooBug783499foo2SecondCall";
++  isnot(gWebConsole.outputNode.textContent.indexOf(expected), -1,
++        "|foo + foo2| from |secondCall()|");
++
++  gStackframes.selectFrame(0);
++
++  openConsole(function() {
++    gJSTerm.execute("foo + foo2 + foo3", onExecuteFoo23InFirstCall);
++  });
++}
++
++function onExecuteFoo23InFirstCall()
++{
++  let expected = "fooFirstCallnewFoofoo3FirstCall";
++  isnot(gWebConsole.outputNode.textContent.indexOf(expected), -1,
++        "|foo + foo2 + foo3| from |firstCall()|");
++
++  executeSoon(function() {
++    gJSTerm.execute("foo = 'abba'; foo3 = 'bug783499'; foo + foo3",
++                    onExecuteFooAndFoo3ChangesInFirstCall);
++  });
++}
++
++function onExecuteFooAndFoo3ChangesInFirstCall()
++{
++  let expected = "abbabug783499";
++  isnot(gWebConsole.outputNode.textContent.indexOf(expected), -1,
++        "|foo + foo3| updated in |firstCall()|");
++
++  is(content.wrappedJSObject.foo, "abba", "|foo| updated in content window");
++  ok(!content.wrappedJSObject.foo3, "|foo3| was not added to the content window");
++
++  executeSoon(finishTest);
++}
 diff --git a/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js b/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js
 --- a/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js
 +++ b/browser/devtools/webconsole/test/browser_output_breaks_after_console_dir_uninspectable.js
@@ -1292,7 +1451,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *
   * @param nsIDOMElement [aTab]
   *        Optional tab element for which you want close the Web Console. The
-@@ -310,8 +313,340 @@ function waitForSuccess(aOptions)
+@@ -310,8 +313,387 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -1633,6 +1792,88 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +
 +  return lastDeferred.promise;
 +}
++
++
++function openDebugger(aOptions = {})
++{
++  if (!aOptions.tab) {
++    aOptions.tab = gBrowser.selectedTab;
++  }
++
++  let deferred = Promise.defer();
++
++  let target = TargetFactory.forTab(aOptions.tab);
++  let toolbox = gDevTools.getToolbox(target);
++  let dbgPanelAlreadyOpen = toolbox.getPanel("jsdebugger");
++
++  gDevTools.showToolbox(target, "jsdebugger").then(function onSuccess(aToolbox) {
++    let panel = aToolbox.getCurrentPanel();
++    let panelWin = panel.panelWin;
++
++    panel._view.Variables.lazyEmpty = false;
++    panel._view.Variables.lazyAppend = false;
++
++    let resolveObject = {
++      target: target,
++      toolbox: aToolbox,
++      panel: panel,
++      panelWin: panelWin,
++    };
++
++    if (dbgPanelAlreadyOpen) {
++      deferred.resolve(resolveObject);
++    }
++    else {
++      panelWin.addEventListener("Debugger:AfterScriptsAdded",
++        function onAfterScriptsAdded() {
++          panelWin.removeEventListener("Debugger:AfterScriptsAdded",
++                                       onAfterScriptsAdded);
++          deferred.resolve(resolveObject);
++        });
++    }
++  }, function onFailure(aReason) {
++    console.debug("failed to open the toolbox for 'jsdebugger'", aReason);
++    deferred.reject(aReason);
++  });
++
++  return deferred.promise;
++}
++
+diff --git a/browser/devtools/webconsole/test/test-eval-in-stackframe.html b/browser/devtools/webconsole/test/test-eval-in-stackframe.html
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/test-eval-in-stackframe.html
+@@ -0,0 +1,30 @@
++<!DOCTYPE HTML>
++<html dir="ltr" lang="en">
++  <head>
++    <meta charset="utf8">
++    <!--
++    - Any copyright is dedicated to the Public Domain.
++    - http://creativecommons.org/publicdomain/zero/1.0/
++    -->
++    <title>Test for bug 783499 - use the debugger API in the web console</title>
++    <script>
++      var foo = 'globalFooBug783499';
++
++      function firstCall()
++      {
++        var foo = 'fooFirstCall';
++        var foo3 = 'foo3FirstCall';
++        secondCall();
++      }
++
++      function secondCall()
++      {
++        var foo2 = 'foo2SecondCall';
++        debugger;
++      }
++    </script>
++  </head>
++  <body>
++    <p>Hello world!</p>
++  </body>
++</html>
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js

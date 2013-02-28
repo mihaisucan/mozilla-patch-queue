@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Panos Astithas <past@mozilla.com>
-# Date 1361970688 -7200
-# Node ID ada856286c06b53ced0624f5e6c859236c170c16
-# Parent e7632ab657e5458571a01f705e17a5473dee2f00
-Bug 820524 - Debugger, Web Console and Profiler should share the debugger client even for local sessions; r=jwalker,vporof,msucan
+# Date 1361995877 -7200
+# Node ID 184ce97b1065f42fb8d897cee3447c8fa70c2cc5
+# Parent  70cac9a99dba7cfe7bd2a78bdf9e46d1d6dce3c0
+Bug 820524 - Debugger, Web Console and Profiler should share the debugger client even for local sessions; r=jwalker,vporof,msucan,anton
 
 diff --git a/browser/devtools/commandline/test/browser_dbg_cmd.js b/browser/devtools/commandline/test/browser_dbg_cmd.js
 --- a/browser/devtools/commandline/test/browser_dbg_cmd.js
@@ -237,8 +237,7 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
 diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/Target.jsm
 --- a/browser/devtools/framework/Target.jsm
 +++ b/browser/devtools/framework/Target.jsm
-@@ -6,28 +6,32 @@
- 
+@@ -7,27 +7,34 @@
  this.EXPORTED_SYMBOLS = [ "TargetFactory" ];
  
  const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
@@ -246,9 +245,12 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
  Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
  Cu.import("resource:///modules/devtools/EventEmitter.jsm");
-+Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
-+Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
  
++XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
++  "resource://gre/modules/devtools/dbg-server.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "DebuggerClient",
++  "resource://gre/modules/devtools/dbg-client.jsm");
  
  const targets = new WeakMap();
  
@@ -272,7 +274,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
        target = new TabTarget(tab);
        targets.set(tab, target);
      }
-@@ -56,37 +60,17 @@ this.TargetFactory = {
+@@ -56,37 +63,17 @@ this.TargetFactory = {
      if (target == null) {
        target = new WindowTarget(window);
        targets.set(window, target);
@@ -311,7 +313,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
                         .getService(Components.interfaces.nsIWindowMediator);
      let en = wm.getXULWindowEnumerator(null);
      while (en.hasMoreElements()) {
-@@ -166,66 +150,161 @@ Object.defineProperty(Target.prototype, 
+@@ -166,66 +153,161 @@ Object.defineProperty(Target.prototype, 
  
  
  /**
@@ -483,7 +485,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
    handleEvent: function (event) {
      switch (event.type) {
        case "TabClose":
-@@ -255,38 +334,75 @@ TabTarget.prototype = {
+@@ -255,38 +337,89 @@ TabTarget.prototype = {
          break;
      }
    },
@@ -510,6 +512,20 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
 -      this.off("thread-paused", this._handleThreadState);
 -      this.emit("close");
 +    this._destroyer = Promise.defer();
++
++    // In the local case, we are not finished until the debugger server shuts
++    // down, too.
++    let dbgServerDestroyer = Promise.defer();
++    if (this._tab && this._client) {
++      let win = this._tab.ownerDocument.defaultView;
++      let onServerShutdown = function() {
++        win.removeEventListener("Debugger:Shutdown", onServerShutdown, false);
++        dbgServerDestroyer.resolve(null);
++      };
++      win.addEventListener("Debugger:Shutdown", onServerShutdown, false);
++    } else {
++      dbgServerDestroyer.resolve(null);
++    }
 +
 +    // First of all, do cleanup tasks that pertain to both remoted and
 +    // non-remoted targets.
@@ -558,7 +574,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
      }
  
 -    return Promise.resolve(null);
-+    return this._destroyer.promise;
++    return Promise.all([dbgServerDestroyer.promise, this._destroyer.promise]);
    },
  
    toString: function() {
@@ -572,7 +588,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
   * WebProgressListener for TabTarget.
   *
   * @param object aTarget
-@@ -317,23 +433,34 @@ TabWebProgressListener.prototype = {
+@@ -317,23 +450,34 @@ TabWebProgressListener.prototype = {
        this.target.emit("will-navigate", request);
      }
    },
@@ -608,7 +624,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
   * these will have a chrome: URL
   */
  function WindowTarget(window) {
-@@ -407,106 +534,8 @@ WindowTarget.prototype = {
+@@ -407,106 +551,8 @@ WindowTarget.prototype = {
  
      return Promise.resolve(null);
    },
@@ -896,6 +912,68 @@ diff --git a/browser/devtools/framework/test/browser_toolbox_hosts.js b/browser/
 +    finish();
 +  });
 + }
+diff --git a/browser/devtools/framework/test/browser_toolbox_window_title_changes.js b/browser/devtools/framework/test/browser_toolbox_window_title_changes.js
+--- a/browser/devtools/framework/test/browser_toolbox_window_title_changes.js
++++ b/browser/devtools/framework/test/browser_toolbox_window_title_changes.js
+@@ -49,33 +49,42 @@ function test() {
+         target.once("navigate", function () deferred.resolve());
+         gBrowser.loadURI(URL_2);
+         return deferred.promise;
+       })
+       .then(checkTitle.bind(null, LABEL_2, URL_2, "url changed"))
+ 
+     // destroy toolbox, create new one hosted in a window (with a
+     // different tool id), and check title
+-      .then(function () toolbox.destroy())
+-      .then(function () gDevTools.showToolbox(target, null,
+-                                              Toolbox.HostType.WINDOW))
+-      .then(function (aToolbox) { toolbox = aToolbox; })
+-      .then(function () toolbox.selectTool(TOOL_ID_1))
+-      .then(checkTitle.bind(null, LABEL_1, URL_2,
+-                            "toolbox destroyed and recreated"))
++      .then(function () {
++        // Give the tools a chance to handle the navigation event before
++        // destroying the toolbox.
++        executeSoon(function() {
++          toolbox.destroy()
++            .then(function () {
++              // After destroying the toolbox, a fresh target is required.
++              target = TargetFactory.forTab(gBrowser.selectedTab);
++              return gDevTools.showToolbox(target, null, Toolbox.HostType.WINDOW);
++            })
++            .then(function (aToolbox) { toolbox = aToolbox; })
++            .then(function () toolbox.selectTool(TOOL_ID_1))
++            .then(checkTitle.bind(null, LABEL_1, URL_2,
++                                  "toolbox destroyed and recreated"))
+ 
+-    // clean up
+-      .then(function () toolbox.destroy())
+-      .then(function () {
+-        toolbox = null;
+-        gBrowser.removeCurrentTab();
+-        Services.prefs.clearUserPref("devtools.toolbox.host");
+-        Services.prefs.clearUserPref("devtools.toolbox.selectedTool");
+-        Services.prefs.clearUserPref("devtools.toolbox.sideEnabled");
+-        finish();
++            // clean up
++            .then(function () toolbox.destroy())
++            .then(function () {
++              toolbox = null;
++              gBrowser.removeCurrentTab();
++              Services.prefs.clearUserPref("devtools.toolbox.host");
++              Services.prefs.clearUserPref("devtools.toolbox.selectedTool");
++              Services.prefs.clearUserPref("devtools.toolbox.sideEnabled");
++              finish();
++            });
++        });
+       });
+   });
+ }
+ 
+ function checkTitle(toolLabel, url, context) {
+   let win = Services.wm.getMostRecentWindow("devtools:toolbox");
+   let definitions = gDevTools.getToolDefinitionMap();
+   let expectedTitle = toolLabel + " - " + url;
 diff --git a/browser/devtools/inspector/InspectorPanel.jsm b/browser/devtools/inspector/InspectorPanel.jsm
 --- a/browser/devtools/inspector/InspectorPanel.jsm
 +++ b/browser/devtools/inspector/InspectorPanel.jsm
@@ -917,6 +995,28 @@ diff --git a/browser/devtools/inspector/InspectorPanel.jsm b/browser/devtools/in
     * The command callback for the HTML search box. This function is
     * automatically invoked as the user is typing.
     */
+diff --git a/browser/devtools/markupview/MarkupView.jsm b/browser/devtools/markupview/MarkupView.jsm
+--- a/browser/devtools/markupview/MarkupView.jsm
++++ b/browser/devtools/markupview/MarkupView.jsm
+@@ -625,17 +625,17 @@ MarkupView.prototype = {
+   {
+     this.undo.destroy();
+     delete this.undo;
+ 
+     this._frame.removeEventListener("focus", this._boundFocus, false);
+     delete this._boundFocus;
+ 
+     this._frame.contentWindow.removeEventListener("scroll", this._boundUpdatePreview, true);
+-    this._frame.contentWindow.removeEventListener("resize", this._boundUpdatePreview, true);
++    this._frame.contentWindow.removeEventListener("resize", this._boundResizePreview, true);
+     this._frame.contentWindow.removeEventListener("overflow", this._boundResizePreview, true);
+     this._frame.contentWindow.removeEventListener("underflow", this._boundResizePreview, true);
+     delete this._boundUpdatePreview;
+ 
+     this._frame.contentWindow.removeEventListener("keydown", this._boundKeyDown, true);
+     delete this._boundKeyDown;
+ 
+     this._inspector.selection.off("new-node", this._boundOnNewSelection);
 diff --git a/browser/devtools/profiler/ProfilerController.jsm b/browser/devtools/profiler/ProfilerController.jsm
 --- a/browser/devtools/profiler/ProfilerController.jsm
 +++ b/browser/devtools/profiler/ProfilerController.jsm
