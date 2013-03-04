@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent c9955389cce101decf417cbe074df8a7e1bcb75c
+# Parent e71e64da43a126f01ee9540ddff62321f03445ca
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1362173757 -7200
+# Date 1362432098 -7200
 
 Bug 808370 - Use the VariablesView in webconsole; r=past,vporof,paul try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
 
@@ -407,7 +407,7 @@ diff --git a/browser/devtools/webconsole/test/browser_console_variables_view.js 
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_console_variables_view.js
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,278 @@
 +/*
 + * Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/
@@ -464,6 +464,9 @@ new file mode 100644
 +  let prop = aResults[0].matchedProp;
 +  ok(prop, "matched the |testProp| property in the variables view");
 +
++  is(content.wrappedJSObject.fooObj.testProp, aResults[0].value,
++     "|fooObj.testProp| value is correct");
++
 +  prop.focus();
 +
 +  EventUtils.synthesizeKey("VK_ENTER", {}, gVariablesView.window);
@@ -471,7 +474,7 @@ new file mode 100644
 +  executeSoon(function() {
 +    // Check that property value updates work and that jsterm functions can be
 +    // used.
-+    let str =  'document.title + window.location + $("p")';
++    let str = 'document.title + window.location + $("p")';
 +    for (let c of str) {
 +      EventUtils.synthesizeKey(c, {}, gVariablesView.window);
 +    }
@@ -484,6 +487,7 @@ new file mode 100644
 +
 +function onFooObjFetchAfterUpdate(aEvent, aVar)
 +{
++  info("onFooObjFetchAfterUpdate");
 +  let para = content.document.querySelector("p");
 +  let expectedValue = content.document.title + content.location + para;
 +
@@ -495,12 +499,12 @@ new file mode 100644
 +function onUpdatedTestPropFound(aResults)
 +{
 +  let prop = aResults[0].matchedProp;
-+  ok(prop, "matched the updated |testProp| property");
++  ok(prop, "matched the updated |testProp| property value");
 +
 +  prop.focus();
 +
 +  is(content.wrappedJSObject.fooObj.testProp, aResults[0].value,
-+     "|fooObj.testProp| has been updated");
++     "|fooObj.testProp| value has been updated");
 +
 +  EventUtils.synthesizeKey("VK_ENTER", { shiftKey: true }, gVariablesView.window);
 +
@@ -514,6 +518,65 @@ new file mode 100644
 +
 +    EventUtils.synthesizeKey("VK_ENTER", {}, gVariablesView.window);
 +  });
++}
++
++function onFooObjFetchAfterPropRename(aEvent, aVar)
++{
++  info("onFooObjFetchAfterPropRename");
++
++  let para = content.document.querySelector("p");
++  let expectedValue = content.document.title + content.location + para;
++
++  // Check that the new value is in the variables view.
++  findVariableViewProperties(aVar, [
++    { name: "testUpdatedProp", value: expectedValue },
++  ], { webconsole: gWebConsole }).then(onRenamedTestPropFound);
++}
++
++function onRenamedTestPropFound(aResults)
++{
++  let prop = aResults[0].matchedProp;
++  ok(prop, "matched the renamed |testProp| property");
++
++  prop.focus();
++
++  ok(!content.wrappedJSObject.fooObj.testProp,
++     "|fooObj.testProp| has been deleted");
++  is(content.wrappedJSObject.fooObj.testUpdatedProp, aResults[0].value,
++     "|fooObj.testUpdatedProp| is correct");
++
++  EventUtils.synthesizeKey("VK_ENTER", {}, gVariablesView.window);
++
++  executeSoon(function() {
++    // Check that property value updates that cause exceptions are reported in
++    // the web console output.
++    for (let c of "foobarzFailure()") {
++      EventUtils.synthesizeKey(c, {}, gVariablesView.window);
++    }
++
++    gJSTerm.once("variablesview-fetched", onPropUpdateError);
++
++    EventUtils.synthesizeKey("VK_ENTER", {}, gVariablesView.window);
++  });
++}
++
++function onPropUpdateError(aEvent, aVar)
++{
++  info("onPropUpdateError");
++
++  let para = content.document.querySelector("p");
++  let expectedValue = content.document.title + content.location + para;
++
++  // Make sure the property did not change.
++  findVariableViewProperties(aVar, [
++    { name: "testUpdatedProp", value: expectedValue },
++  ], { webconsole: gWebConsole }).then(onRenamedTestPropFoundAgain);
++}
++
++function onRenamedTestPropFoundAgain(aResults)
++{
++  let prop = aResults[0].matchedProp;
++  ok(prop, "matched the renamed |testProp| property again");
 +}
 +
 +function onNewFoo2()
@@ -832,6 +895,27 @@ diff --git a/browser/devtools/webconsole/test/browser_result_format_as_string.js
      failureFn: finishTest,
    });
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js b/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
+@@ -94,16 +94,17 @@ function closeConsoles() {
+   openTabs = win1 = win2 = null;
+ 
+   function onTimeout() {
+     Services.obs.removeObserver(onWebConsoleClose, "web-console-destroyed");
+     executeSoon(finishTest);
+   }
+ 
+   waitForSuccess({
++    timeout: 10000,
+     name: "4 web consoles closed",
+     validatorFn: function()
+     {
+       return consolesClosed == 4;
+     },
+     successFn: onTimeout,
+     failureFn: onTimeout,
+   });
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
@@ -3510,6 +3594,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    if (aResponse.error) {
 +      Cu.reportError("Web Console evaluation failed. " + aResponse.error + ":" +
 +                     aResponse.message);
++
++      aCallback && aCallback(aResponse);
 +      return;
 +    }
 +
@@ -3537,9 +3623,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      }
 +    }
 +
-+    if (aCallback) {
-+      aCallback(aResponse);
-+    }
++    aCallback && aCallback(aResponse);
 +  },
 +
 +  /**
