@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Panos Astithas <past@mozilla.com>
-# Date 1361995877 -7200
-# Node ID 184ce97b1065f42fb8d897cee3447c8fa70c2cc5
-# Parent  70cac9a99dba7cfe7bd2a78bdf9e46d1d6dce3c0
+# Date 1362164427 -7200
+# Node ID 861803fb41dab4bd003c2669b2fa986b274e93e2
+# Parent  6c48d72bf79047ad7d09b3e094b3e5314e458e67
 Bug 820524 - Debugger, Web Console and Profiler should share the debugger client even for local sessions; r=jwalker,vporof,msucan,anton
 
 diff --git a/browser/devtools/commandline/test/browser_dbg_cmd.js b/browser/devtools/commandline/test/browser_dbg_cmd.js
@@ -485,7 +485,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
    handleEvent: function (event) {
      switch (event.type) {
        case "TabClose":
-@@ -255,38 +337,89 @@ TabTarget.prototype = {
+@@ -255,38 +337,76 @@ TabTarget.prototype = {
          break;
      }
    },
@@ -513,19 +513,8 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
 -      this.emit("close");
 +    this._destroyer = Promise.defer();
 +
-+    // In the local case, we are not finished until the debugger server shuts
-+    // down, too.
-+    let dbgServerDestroyer = Promise.defer();
-+    if (this._tab && this._client) {
-+      let win = this._tab.ownerDocument.defaultView;
-+      let onServerShutdown = function() {
-+        win.removeEventListener("Debugger:Shutdown", onServerShutdown, false);
-+        dbgServerDestroyer.resolve(null);
-+      };
-+      win.addEventListener("Debugger:Shutdown", onServerShutdown, false);
-+    } else {
-+      dbgServerDestroyer.resolve(null);
-+    }
++    // Before taking any action, notify listeners that destruction is imminent.
++    this.emit("close");
 +
 +    // First of all, do cleanup tasks that pertain to both remoted and
 +    // non-remoted targets.
@@ -553,7 +542,6 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
 +      this._remote = null;
 +
 +      this._destroyer.resolve(null);
-+      this.emit("close");
 +    } else if (this._client) {
 +      // If, on the other hand, this target was remoted, the promise will be
 +      // resolved after the remote connection is closed.
@@ -569,12 +557,11 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
 +        this._remote = null;
 +
 +        this._destroyer.resolve(null);
-+        this.emit("close");
 +      }.bind(this));
      }
  
 -    return Promise.resolve(null);
-+    return Promise.all([dbgServerDestroyer.promise, this._destroyer.promise]);
++    return this._destroyer.promise;
    },
  
    toString: function() {
@@ -588,7 +575,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
   * WebProgressListener for TabTarget.
   *
   * @param object aTarget
-@@ -317,23 +450,34 @@ TabWebProgressListener.prototype = {
+@@ -317,23 +437,34 @@ TabWebProgressListener.prototype = {
        this.target.emit("will-navigate", request);
      }
    },
@@ -624,7 +611,7 @@ diff --git a/browser/devtools/framework/Target.jsm b/browser/devtools/framework/
   * these will have a chrome: URL
   */
  function WindowTarget(window) {
-@@ -407,106 +551,8 @@ WindowTarget.prototype = {
+@@ -407,106 +538,8 @@ WindowTarget.prototype = {
  
      return Promise.resolve(null);
    },
@@ -780,41 +767,49 @@ diff --git a/browser/devtools/framework/Toolbox.jsm b/browser/devtools/framework
      if (!tab) {
        throw new Error("No tool found");
      }
-@@ -682,26 +683,28 @@ Toolbox.prototype = {
+@@ -680,32 +681,34 @@ Toolbox.prototype = {
+     // method is only executed once.
+     let deferred = Promise.defer();
      this._destroyer = deferred.promise;
  
      this._target.off("navigate", this._refreshHostTitle);
      this.off("select", this._refreshHostTitle);
      this.off("host-changed", this._refreshHostTitle);
  
++    gDevTools.off("tool-registered", this._toolRegistered);
++    gDevTools.off("tool-unregistered", this._toolUnregistered);
++
      let outstanding = [];
  
 -    // Remote targets need to be notified that the toolbox is being torn down.
 -    if (this._target && this._target.isRemote) {
-+    for (let [id, panel] of this._toolPanels) {
-+      outstanding.push(panel.destroy());
-+    }
-+
+-      outstanding.push(this._target.destroy());
+-    }
+-    this._target = null;
+-
+     for (let [id, panel] of this._toolPanels) {
+       outstanding.push(panel.destroy());
+     }
+ 
+     outstanding.push(this._host.destroy());
+ 
+-    gDevTools.off("tool-registered", this._toolRegistered);
+-    gDevTools.off("tool-unregistered", this._toolUnregistered);
 +    // Targets need to be notified that the toolbox is being torn down, so that
 +    // remote protocol connections can be gracefully terminated.
 +    if (this._target) {
 +      this._target.off("close", this.destroy);
-       outstanding.push(this._target.destroy());
-     }
-     this._target = null;
- 
--    for (let [id, panel] of this._toolPanels) {
--      outstanding.push(panel.destroy());
--    }
--
-     outstanding.push(this._host.destroy());
- 
-     gDevTools.off("tool-registered", this._toolRegistered);
-     gDevTools.off("tool-unregistered", this._toolUnregistered);
++      outstanding.push(this._target.destroy());
++    }
++    this._target = null;
  
      Promise.all(outstanding).then(function() {
        this.emit("destroyed");
        deferred.resolve();
+     }.bind(this));
+ 
+     return this._destroyer;
+   }
 diff --git a/browser/devtools/framework/connect/connect.js b/browser/devtools/framework/connect/connect.js
 --- a/browser/devtools/framework/connect/connect.js
 +++ b/browser/devtools/framework/connect/connect.js
@@ -844,7 +839,7 @@ diff --git a/browser/devtools/framework/connect/connect.js b/browser/devtools/fr
 diff --git a/browser/devtools/framework/test/browser_new_activation_workflow.js b/browser/devtools/framework/test/browser_new_activation_workflow.js
 --- a/browser/devtools/framework/test/browser_new_activation_workflow.js
 +++ b/browser/devtools/framework/test/browser_new_activation_workflow.js
-@@ -46,16 +46,18 @@ function selectAndCheckById(id) {
+@@ -46,24 +46,28 @@ function selectAndCheckById(id) {
    return toolbox.selectTool(id).then(function() {
      let tab = doc.getElementById("toolbox-tab-" + id);
      is(tab.selected, true, "The " + id + " tab is selected");
@@ -853,9 +848,11 @@ diff --git a/browser/devtools/framework/test/browser_new_activation_workflow.js 
  
  function testToggle() {
    toolbox.once("destroyed", function() {
+-    gDevTools.showToolbox(target, "styleeditor").then(function() {
 +    // Cannot reuse a target after it's destroyed.
 +    target = TargetFactory.forTab(gBrowser.selectedTab);
-     gDevTools.showToolbox(target, "styleeditor").then(function() {
++    gDevTools.showToolbox(target, "styleeditor").then(function(aToolbox) {
++      toolbox = aToolbox;
        is(toolbox.currentToolId, "styleeditor", "The style editor is selected");
        finishUp();
      });
@@ -863,6 +860,44 @@ diff --git a/browser/devtools/framework/test/browser_new_activation_workflow.js 
  
    toolbox.destroy();
  }
+ 
+ function finishUp() {
+-  toolbox.destroy();
+-  toolbox = null;
+-  target = null;
+-  gBrowser.removeCurrentTab();
+-  finish();
++  toolbox.destroy().then(function() {
++    toolbox = null;
++    target = null;
++    gBrowser.removeCurrentTab();
++    finish();
++  });
+ }
+diff --git a/browser/devtools/framework/test/browser_target_events.js b/browser/devtools/framework/test/browser_target_events.js
+--- a/browser/devtools/framework/test/browser_target_events.js
++++ b/browser/devtools/framework/test/browser_target_events.js
+@@ -36,17 +36,19 @@ function onHidden() {
+ function onVisible() {
+   ok(true, "Visible event received");
+   target.once("will-navigate", onWillNavigate);
+   gBrowser.contentWindow.location = "data:text/html,test navigation";
+ }
+ 
+ function onWillNavigate(event, request) {
+   ok(true, "will-navigate event received");
+-  target.once("navigate", onNavigate);
++  // Wait for navigation handling to complete before removing the tab, in order
++  // to avoid triggering assertions.
++  target.once("navigate", executeSoon.bind(null, onNavigate));
+ }
+ 
+ function onNavigate() {
+   ok(true, "navigate event received");
+   target.once("close", onClose);
+   gBrowser.removeCurrentTab();
+ }
+ 
 diff --git a/browser/devtools/framework/test/browser_toolbox_hosts.js b/browser/devtools/framework/test/browser_toolbox_hosts.js
 --- a/browser/devtools/framework/test/browser_toolbox_hosts.js
 +++ b/browser/devtools/framework/test/browser_toolbox_hosts.js
@@ -912,6 +947,29 @@ diff --git a/browser/devtools/framework/test/browser_toolbox_hosts.js b/browser/
 +    finish();
 +  });
 + }
+diff --git a/browser/devtools/framework/test/browser_toolbox_window_shortcuts.js b/browser/devtools/framework/test/browser_toolbox_window_shortcuts.js
+--- a/browser/devtools/framework/test/browser_toolbox_window_shortcuts.js
++++ b/browser/devtools/framework/test/browser_toolbox_window_shortcuts.js
+@@ -61,14 +61,15 @@ function selectCB(event, id) {
+ 
+   is(toolIDs.indexOf(id), idIndex,
+      "Correct tool is selected on pressing the shortcut for " + id);
+ 
+   testShortcuts(toolbox, idIndex + 1);
+ }
+ 
+ function tidyUp() {
+-  toolbox.destroy();
+-  gBrowser.removeCurrentTab();
++  toolbox.destroy().then(function() {
++    gBrowser.removeCurrentTab();
+ 
+-  toolbox = toolIDs = idIndex = Toolbox = null;
+-  finish();
++    toolbox = toolIDs = idIndex = Toolbox = null;
++    finish();
++  });
+ }
 diff --git a/browser/devtools/framework/test/browser_toolbox_window_title_changes.js b/browser/devtools/framework/test/browser_toolbox_window_title_changes.js
 --- a/browser/devtools/framework/test/browser_toolbox_window_title_changes.js
 +++ b/browser/devtools/framework/test/browser_toolbox_window_title_changes.js
@@ -1476,6 +1534,51 @@ diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/
    get isReady() this._isReady,
  
    destroy: function WCP_destroy()
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js b/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_597103_deactivateHUDForContext_unfocused_window.js
+@@ -72,31 +72,31 @@ function tab2Loaded(aEvent) {
+     }
+   }
+ 
+   function closeConsoles() {
+     Services.obs.addObserver(onWebConsoleClose, "web-console-destroyed", false);
+ 
+     try {
+       let target1 = TargetFactory.forTab(tab1);
+-      gDevTools.closeToolbox(target1);
++      gDevTools.closeToolbox(target1).then(function() {
++        try {
++          let target2 = TargetFactory.forTab(tab2);
++          gDevTools.closeToolbox(target2);
++        }
++        catch (ex) {
++          ok(false, "gDevTools.closeToolbox(target2) exception: " + ex);
++          noErrors = false;
++        }
++      });
+     }
+     catch (ex) {
+       ok(false, "gDevTools.closeToolbox(target1) exception: " + ex);
+       noErrors = false;
+     }
+-
+-    try {
+-      let target2 = TargetFactory.forTab(tab2);
+-      gDevTools.closeToolbox(target2);
+-    }
+-    catch (ex) {
+-      ok(false, "gDevTools.closeToolbox(target2) exception: " + ex);
+-      noErrors = false;
+-    }
+   }
+ 
+   function testEnd() {
+     ok(noErrors, "there were no errors");
+ 
+     Array.forEach(win1.gBrowser.tabs, function(aTab) {
+       win1.gBrowser.removeTab(aTab);
+     });
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -1709,7 +1812,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 diff --git a/toolkit/devtools/debugger/server/dbg-browser-actors.js b/toolkit/devtools/debugger/server/dbg-browser-actors.js
 --- a/toolkit/devtools/debugger/server/dbg-browser-actors.js
 +++ b/toolkit/devtools/debugger/server/dbg-browser-actors.js
-@@ -672,17 +672,16 @@ DebuggerProgressListener.prototype = {
+@@ -674,17 +674,16 @@ DebuggerProgressListener.prototype = {
          this._tabActor.threadActor.dbg.enabled = false;
          this._tabActor._pendingNavigation = aRequest;
        }

@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent e71e64da43a126f01ee9540ddff62321f03445ca
+# Parent a99e5fd681588375ed2da1324f717a4f9c63e186
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1362432098 -7200
+# Date 1362509355 -7200
 
-Bug 808370 - Use the VariablesView in webconsole; r=past,vporof,paul try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
+Bug 808370 - Use the VariablesView in webconsole; r=past,vporof,paul try: -b do -p all -u xpcshell,mochitests -t none
 
 diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools/debugger/debugger-controller.js
 --- a/browser/devtools/debugger/debugger-controller.js
@@ -128,31 +128,7 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared/VariablesView.jsm
 --- a/browser/devtools/shared/VariablesView.jsm
 +++ b/browser/devtools/shared/VariablesView.jsm
-@@ -683,16 +683,23 @@ VariablesView.prototype = {
- 
-     let boxObject = this._list.boxObject.QueryInterface(Ci.nsIScrollBoxObject);
-     boxObject.ensureElementIsVisible(aItem._title);
-     boxObject.scrollBy(-this._list.clientWidth, 0);
-     return true;
-   },
- 
-   /**
-+   * Focus this variable.
-+   */
-+  focus: function VV_focus() {
-+    this._focusItem(this);
-+  },
-+
-+  /**
-    * Listener handling a key press event on the view.
-    */
-   _onViewKeyPress: function VV__onViewKeyPress(e) {
-     let item = this.getFocusedItem();
- 
-     switch (e.keyCode) {
-       case e.DOM_VK_UP:
-       case e.DOM_VK_DOWN:
-@@ -891,16 +898,28 @@ VariablesView.prototype = {
+@@ -891,16 +891,28 @@ VariablesView.prototype = {
    _list: null,
    _searchboxNode: null,
    _searchboxContainer: null,
@@ -181,7 +157,7 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
   * @param string aCurrentString
   *        The trimmed user inputted string.
   * @return string
-@@ -956,17 +975,18 @@ VariablesView.getterOrSetterEvalMacro = 
+@@ -956,17 +968,18 @@ VariablesView.getterOrSetterEvalMacro = 
      case "undefined":
        let mirrorType = type == "get" ? "set" : "get";
        let mirrorLookup = type == "get" ? "__lookupSetter__" : "__lookupGetter__";
@@ -201,7 +177,7 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
        //   set: undefined,
        //   enumerable: true,
        //   configurable: true
-@@ -1014,17 +1034,20 @@ VariablesView.getterOrSetterEvalMacro = 
+@@ -1014,17 +1027,20 @@ VariablesView.getterOrSetterEvalMacro = 
  /**
   * Function invoked when a getter or setter is deleted.
   *
@@ -223,6 +199,30 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
   * Iterable via "for (let [name, variable] in instance) { }".
   *
   * @param VariablesView aView
+@@ -1388,16 +1404,23 @@ Scope.prototype = {
+       if (!item._isExpanded) {
+         return false;
+       }
+     }
+     return true;
+   },
+ 
+   /**
++   * Focus this scope.
++   */
++  focus: function S_focus() {
++    this._variablesView._focusItem(this);
++  },
++
++  /**
+    * Adds an event listener for a certain event on this scope's title.
+    * @param string aName
+    * @param function aCallback
+    * @param boolean aCapture
+    */
+   addEventListener: function S_addEventListener(aName, aCallback, aCapture) {
+     this._title.addEventListener(aName, aCallback, aCapture);
+   },
 @@ -1420,16 +1443,28 @@ Scope.prototype = {
  
    /**
@@ -252,6 +252,25 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
    /**
     * Initializes this scope's id, view and binds event listeners.
     *
+@@ -1496,17 +1531,17 @@ Scope.prototype = {
+   /**
+    * The click listener for this scope's title.
+    */
+   _onClick: function S__onClick(e) {
+     if (e.target == this._inputNode) {
+       return;
+     }
+     this.toggle();
+-    this._variablesView._focusItem(this);
++    this.focus();
+   },
+ 
+   /**
+    * Lazily appends a node to this scope's enumerable or non-enumerable
+    * container. Once a certain number of nodes have been batched, they
+    * will be appended.
+    *
+    * @param boolean aImmediateFlag
 @@ -1876,17 +1911,17 @@ create({ constructor: Variable, proto: S
     *        it will be inferred from the value.
     *        e.g. - { someProp0: { value: 42 },
@@ -289,6 +308,51 @@ diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared
        setter.evaluationMacro = VariablesView.getterOrSetterEvalMacro;
  
        getter.hideArrow();
+@@ -2484,40 +2520,40 @@ create({ constructor: Variable, proto: S
+    */
+   _onNameInputKeyPress: function V__onNameInputKeyPress(e) {
+     e.stopPropagation();
+ 
+     switch(e.keyCode) {
+       case e.DOM_VK_RETURN:
+       case e.DOM_VK_ENTER:
+         this._saveNameInput(e);
+-        this._variablesView._focusItem(this);
++        this.focus();
+         return;
+       case e.DOM_VK_ESCAPE:
+         this._deactivateNameInput(e);
+-        this._variablesView._focusItem(this);
++        this.focus();
+         return;
+     }
+   },
+ 
+   /**
+    * The key press listener for this variable's editable value textbox.
+    */
+   _onValueInputKeyPress: function V__onValueInputKeyPress(e) {
+     e.stopPropagation();
+ 
+     switch(e.keyCode) {
+       case e.DOM_VK_RETURN:
+       case e.DOM_VK_ENTER:
+         this._saveValueInput(e);
+-        this._variablesView._focusItem(this);
++        this.focus();
+         return;
+       case e.DOM_VK_ESCAPE:
+         this._deactivateValueInput(e);
+-        this._variablesView._focusItem(this);
++        this.focus();
+         return;
+     }
+   },
+ 
+   /**
+    * The click listener for the edit button.
+    */
+   _onEdit: function V__onEdit(e) {
 diff --git a/browser/devtools/shared/VariablesView.xul b/browser/devtools/shared/VariablesView.xul
 new file mode 100644
 --- /dev/null
@@ -310,6 +374,28 @@ new file mode 100644
 +        title="&PropertiesViewWindowTitle;">
 +  <vbox id="variables" flex="1"/>
 +</window>
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -207,16 +207,18 @@ WebConsole.prototype = {
+   /**
+    * Initialize the Web Console instance.
+    *
+    * @return object
+    *         A Promise for the initialization.
+    */
+   init: function WC_init()
+   {
++    Promise._reportErrors = true; // FIXME: debug only
++
+     let deferred = Promise.defer();
+ 
+     let onIframeLoad = function() {
+       this.iframe.removeEventListener("load", onIframeLoad, true);
+       initUI();
+     }.bind(this);
+ 
+     let initUI = function() {
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
 +++ b/browser/devtools/webconsole/test/Makefile.in
@@ -331,7 +417,7 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
  	browser_webconsole_netlogging.js \
  	browser_webconsole_bug_583816_No_input_and_Tab_key_pressed.js \
  	browser_webconsole_bug_594477_clickable_output.js \
-@@ -110,16 +109,18 @@ MOCHITEST_BROWSER_FILES = \
+@@ -110,16 +109,19 @@ MOCHITEST_BROWSER_FILES = \
  	browser_result_format_as_string.js \
  	browser_webconsole_bug_737873_mixedcontent.js \
  	browser_output_breaks_after_console_dir_uninspectable.js \
@@ -342,6 +428,7 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
  	browser_repeated_messages_accuracy.js \
 +	browser_eval_in_debugger_stackframe.js \
 +	browser_console_variables_view.js \
++	browser_console_variables_view_while_debugging.js \
  	head.js \
  	$(NULL)
  
@@ -350,7 +437,7 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
          browser_webconsole_bug_804845_ctrl_key_nav.js \
          $(NULL)
  endif
-@@ -205,11 +206,12 @@ MOCHITEST_BROWSER_FILES += \
+@@ -205,11 +207,12 @@ MOCHITEST_BROWSER_FILES += \
  	test-for-of.html \
  	test_bug_770099_violation.html \
  	test_bug_770099_violation.html^headers^ \
@@ -407,7 +494,7 @@ diff --git a/browser/devtools/webconsole/test/browser_console_variables_view.js 
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_console_variables_view.js
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,182 @@
 +/*
 + * Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/
@@ -418,7 +505,7 @@ new file mode 100644
 +
 +const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-eval-in-stackframe.html";
 +
-+let gWebConsole, gJSTerm, gDebuggerWin, gThread, gDebuggerController, gStackframes;
++let gWebConsole, gJSTerm, gVariablesView;
 +
 +function test()
 +{
@@ -467,21 +554,14 @@ new file mode 100644
 +  is(content.wrappedJSObject.fooObj.testProp, aResults[0].value,
 +     "|fooObj.testProp| value is correct");
 +
-+  prop.focus();
-+
-+  EventUtils.synthesizeKey("VK_ENTER", {}, gVariablesView.window);
-+
-+  executeSoon(function() {
-+    // Check that property value updates work and that jsterm functions can be
-+    // used.
-+    let str = 'document.title + window.location + $("p")';
-+    for (let c of str) {
-+      EventUtils.synthesizeKey(c, {}, gVariablesView.window);
-+    }
-+
-+    gJSTerm.once("variablesview-fetched", onFooObjFetchAfterUpdate);
-+
-+    EventUtils.synthesizeKey("VK_ENTER", {}, gVariablesView.window);
++  // Check that property value updates work and that jsterm functions can be
++  // used.
++  updateVariablesViewProperty({
++    property: prop,
++    field: "value",
++    string: "document.title + window.location + $('p')",
++    webconsole: gWebConsole,
++    callback: onFooObjFetchAfterUpdate,
 +  });
 +}
 +
@@ -501,22 +581,16 @@ new file mode 100644
 +  let prop = aResults[0].matchedProp;
 +  ok(prop, "matched the updated |testProp| property value");
 +
-+  prop.focus();
-+
 +  is(content.wrappedJSObject.fooObj.testProp, aResults[0].value,
 +     "|fooObj.testProp| value has been updated");
 +
-+  EventUtils.synthesizeKey("VK_ENTER", { shiftKey: true }, gVariablesView.window);
-+
-+  executeSoon(function() {
-+    // Check that property name updates work.
-+    for (let c of "testUpdatedProp") {
-+      EventUtils.synthesizeKey(c, {}, gVariablesView.window);
-+    }
-+
-+    gJSTerm.once("variablesview-fetched", onFooObjFetchAfterPropRename);
-+
-+    EventUtils.synthesizeKey("VK_ENTER", {}, gVariablesView.window);
++  // Check that property name updates work.
++  updateVariablesViewProperty({
++    property: prop,
++    field: "name",
++    string: "testUpdatedProp",
++    webconsole: gWebConsole,
++    callback: onFooObjFetchAfterPropRename,
 +  });
 +}
 +
@@ -538,25 +612,19 @@ new file mode 100644
 +  let prop = aResults[0].matchedProp;
 +  ok(prop, "matched the renamed |testProp| property");
 +
-+  prop.focus();
-+
 +  ok(!content.wrappedJSObject.fooObj.testProp,
 +     "|fooObj.testProp| has been deleted");
 +  is(content.wrappedJSObject.fooObj.testUpdatedProp, aResults[0].value,
 +     "|fooObj.testUpdatedProp| is correct");
 +
-+  EventUtils.synthesizeKey("VK_ENTER", {}, gVariablesView.window);
-+
-+  executeSoon(function() {
-+    // Check that property value updates that cause exceptions are reported in
-+    // the web console output.
-+    for (let c of "foobarzFailure()") {
-+      EventUtils.synthesizeKey(c, {}, gVariablesView.window);
-+    }
-+
-+    gJSTerm.once("variablesview-fetched", onPropUpdateError);
-+
-+    EventUtils.synthesizeKey("VK_ENTER", {}, gVariablesView.window);
++  // Check that property value updates that cause exceptions are reported in
++  // the web console output.
++  updateVariablesViewProperty({
++    property: prop,
++    field: "value",
++    string: "foobarzFailure()",
++    webconsole: gWebConsole,
++    callback: onPropUpdateError,
 +  });
 +}
 +
@@ -577,20 +645,70 @@ new file mode 100644
 +{
 +  let prop = aResults[0].matchedProp;
 +  ok(prop, "matched the renamed |testProp| property again");
++
++  let outputNode = gWebConsole.outputNode;
++
++  waitForSuccess({
++    name: "exception in property update reported in the web console output",
++    validatorFn: function() {
++      return outputNode.textContent.indexOf("foobarzFailure") != -1;
++    },
++    successFn: testPropDelete.bind(null, prop),
++    failureFn: testPropDelete.bind(null, prop),
++  });
 +}
 +
-+function onNewFoo2()
++function testPropDelete(aProp)
 +{
-+  is(gWebConsole.outputNode.textContent.indexOf("undefined"), -1,
-+     "|undefined| is not displayed after adding |foo2|");
++  gVariablesView.window.focus();
++  aProp.focus();
 +
-+  let msg = gWebConsole.outputNode.querySelector(".webconsole-msg-output");
-+  ok(msg, "output result found");
++  executeSoon(function() {
++    EventUtils.synthesizeKey("VK_DELETE", {}, gVariablesView.window);
++    gWebConsole = gJSTerm = gVariablesView = null;
++  });
 +
-+  isnot(msg.textContent.indexOf("newFoo"), -1,
-+        "'newFoo' is displayed after adding |foo2|");
++  waitForSuccess({
++    name: "property deleted",
++    validatorFn: function() {
++      return !("testUpdatedProp" in content.wrappedJSObject.fooObj);
++    },
++    successFn: finishTest,
++    failureFn: finishTest,
++  });
++}
+diff --git a/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging.js b/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging.js
+@@ -0,0 +1,133 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
 +
-+  gJSTerm.clearOutput();
++// Test that makes sure web console eval happens in the user-selected stackframe
++// from the js debugger, when changing the value of a property in the variables
++// view.
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-eval-in-stackframe.html";
++
++let gWebConsole, gJSTerm, gDebuggerWin, gThread, gDebuggerController,
++    gStackframes, gVariablesView;
++
++function test()
++{
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function consoleOpened(hud)
++{
++  gWebConsole = hud;
++  gJSTerm = hud.jsterm;
 +
 +  executeSoon(function() {
 +    info("openDebugger");
@@ -605,85 +723,96 @@ new file mode 100644
 +  gThread = gDebuggerController.activeThread;
 +  gStackframes = gDebuggerController.StackFrames;
 +
-+  info("openConsole");
-+  executeSoon(openConsole.bind(null, null, function() {
-+    gJSTerm.execute("foo + foo2", onExecuteFooAndFoo2);
-+  }));
-+}
-+
-+function onExecuteFooAndFoo2()
-+{
-+  let expected = "globalFooBug783499newFoo";
-+  isnot(gWebConsole.outputNode.textContent.indexOf(expected), -1,
-+        "|foo + foo2| is displayed after starting the debugger");
-+
 +  executeSoon(function() {
-+    gJSTerm.clearOutput();
++    gThread.addOneTimeListener("framesadded", onFramesAdded);
 +
-+    info("openDebugger");
-+    openDebugger().then(function() {
-+      gThread.addOneTimeListener("framesadded", onFramesAdded);
-+
-+      info("firstCall()");
-+      content.wrappedJSObject.firstCall();
-+    });
++    info("firstCall()");
++    content.wrappedJSObject.firstCall();
 +  });
 +}
 +
 +function onFramesAdded()
 +{
-+  info("onFramesAdded, openConsole() now");
++  info("onFramesAdded");
++
 +  executeSoon(openConsole.bind(null, null, function() {
-+    gJSTerm.execute("foo + foo2", onExecuteFooAndFoo2InSecondCall);
++    gJSTerm.execute("fooObj", onExecuteFooObj);
 +  }));
 +}
 +
-+function onExecuteFooAndFoo2InSecondCall()
++
++function onExecuteFooObj()
 +{
-+  let expected = "globalFooBug783499foo2SecondCall";
-+  isnot(gWebConsole.outputNode.textContent.indexOf(expected), -1,
-+        "|foo + foo2| from |secondCall()|");
++  let msg = gWebConsole.outputNode.querySelector(".webconsole-msg-output");
++  ok(msg, "output message found");
++  isnot(msg.textContent.indexOf("[object Object]"), -1, "message text check");
++
++  gJSTerm.once("variablesview-fetched", onFooObjFetch);
 +
 +  executeSoon(function() {
-+    gJSTerm.clearOutput();
-+
-+    info("openDebugger and selectFrame(1)");
-+
-+    openDebugger().then(function() {
-+      gStackframes.selectFrame(1);
-+
-+      info("openConsole");
-+      executeSoon(openConsole.bind(null, null, function() {
-+        gJSTerm.execute("foo + foo2 + foo3", onExecuteFoo23InFirstCall);
-+      }));
-+    });
++    EventUtils.synthesizeMouse(msg, 2, 2, {}, gWebConsole.iframeWindow);
 +  });
 +}
 +
-+function onExecuteFoo23InFirstCall()
++function onFooObjFetch(aEvent, aVar)
 +{
-+  let expected = "fooFirstCallnewFoofoo3FirstCall";
-+  isnot(gWebConsole.outputNode.textContent.indexOf(expected), -1,
-+        "|foo + foo2 + foo3| from |firstCall()|");
++  gVariablesView = aVar._variablesView;
++  ok(gVariablesView, "variables view object");
 +
-+  executeSoon(function() {
-+    gJSTerm.execute("foo = 'abba'; foo3 = 'bug783499'; foo + foo3",
-+                    onExecuteFooAndFoo3ChangesInFirstCall);
++  findVariableViewProperties(aVar, [
++    { name: "testProp2", value: "testValue2" },
++    { name: "testProp", value: "testValue", dontMatch: true },
++  ], { webconsole: gWebConsole }).then(onTestPropFound);
++}
++
++function onTestPropFound(aResults)
++{
++  let prop = aResults[0].matchedProp;
++  ok(prop, "matched the |testProp2| property in the variables view");
++
++  // Check that property value updates work and that jsterm functions can be
++  // used.
++  updateVariablesViewProperty({
++    property: prop,
++    field: "value",
++    string: "document.title + foo2 + $('p')",
++    webconsole: gWebConsole,
++    callback: onFooObjFetchAfterUpdate,
 +  });
 +}
 +
-+function onExecuteFooAndFoo3ChangesInFirstCall()
++function onFooObjFetchAfterUpdate(aEvent, aVar)
 +{
-+  let expected = "abbabug783499";
-+  isnot(gWebConsole.outputNode.textContent.indexOf(expected), -1,
-+        "|foo + foo3| updated in |firstCall()|");
++  info("onFooObjFetchAfterUpdate");
++  let para = content.document.querySelector("p");
++  let expectedValue = content.document.title + "foo2SecondCall" + para;
 +
-+  is(content.wrappedJSObject.foo, "globalFooBug783499", "|foo| in content window");
-+  is(content.wrappedJSObject.foo2, "newFoo", "|foo2| in content window");
-+  ok(!content.wrappedJSObject.foo3, "|foo3| was not added to the content window");
++  findVariableViewProperties(aVar, [
++    { name: "testProp2", value: expectedValue },
++  ], { webconsole: gWebConsole }).then(onUpdatedTestPropFound);
++}
++
++function onUpdatedTestPropFound(aResults)
++{
++  let prop = aResults[0].matchedProp;
++  ok(prop, "matched the updated |testProp2| property value");
++
++  // Check that testProp2 was updated.
++  executeSoon(function() {
++    gJSTerm.execute("fooObj.testProp2", onExecuteFooObjTestProp2);
++  });
++}
++
++function onExecuteFooObjTestProp2()
++{
++  let para = content.document.querySelector("p");
++  let expected = content.document.title + "foo2SecondCall" + para;
++
++  isnot(gWebConsole.outputNode.textContent.indexOf(expected), -1,
++        "fooObj.testProp2 is correct");
 +
 +  gWebConsole = gJSTerm = gDebuggerWin = gThread = gDebuggerController =
-+    gStackframes = null;
++    gStackframes = gVariablesView = null;
 +  executeSoon(finishTest);
 +}
 diff --git a/browser/devtools/webconsole/test/browser_eval_in_debugger_stackframe.js b/browser/devtools/webconsole/test/browser_eval_in_debugger_stackframe.js
@@ -895,27 +1024,6 @@ diff --git a/browser/devtools/webconsole/test/browser_result_format_as_string.js
      failureFn: finishTest,
    });
  }
-diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js b/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
---- a/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
-+++ b/browser/devtools/webconsole/test/browser_webconsole_bug_595350_multiple_windows_and_tabs.js
-@@ -94,16 +94,17 @@ function closeConsoles() {
-   openTabs = win1 = win2 = null;
- 
-   function onTimeout() {
-     Services.obs.removeObserver(onWebConsoleClose, "web-console-destroyed");
-     executeSoon(finishTest);
-   }
- 
-   waitForSuccess({
-+    timeout: 10000,
-     name: "4 web consoles closed",
-     validatorFn: function()
-     {
-       return consolesClosed == 4;
-     },
-     successFn: onTimeout,
-     failureFn: onTimeout,
-   });
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
@@ -1806,7 +1914,28 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *
   * @param nsIDOMElement [aTab]
   *        Optional tab element for which you want close the Web Console. The
-@@ -310,8 +313,387 @@ function waitForSuccess(aOptions)
+@@ -160,19 +163,17 @@ function openConsole(aTab, aCallback = f
+ function closeConsole(aTab, aCallback = function() { })
+ {
+   let target = TargetFactory.forTab(aTab || tab);
+   let toolbox = gDevTools.getToolbox(target);
+   if (toolbox) {
+     let panel = toolbox.getPanel("webconsole");
+     if (panel) {
+       let hudId = panel.hud.hudId;
+-      toolbox.destroy().then(function() {
+-        executeSoon(aCallback.bind(null, hudId));
+-      }).then(null, console.error);
++      toolbox.destroy().then(aCallback.bind(null, hudId)).then(null, console.debug);
+     }
+     else {
+       toolbox.destroy().then(aCallback.bind(null));
+     }
+   }
+   else {
+     aCallback();
+   }
+@@ -310,8 +311,452 @@ function waitForSuccess(aOptions)
  
  function openInspector(aCallback, aTab = gBrowser.selectedTab)
  {
@@ -1929,7 +2058,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +      }
 +      else if (matched && rule.dontMatch) {
 +        ok(false, "rule " + rule.name + " should not match property " +
-+           aProp.name);
++           matched.name);
 +      }
 +      else {
 +        ok(rule.dontMatch, "rule " + rule.name + " did not match any property");
@@ -2149,6 +2278,71 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +}
 +
 +
++/**
++ * Update the content of a property in the variables view.
++ *
++ * @param object aOptions
++ *        Options for the property update:
++ *        - property: the property you want to change.
++ *        - field: string that tells what you want to change:
++ *          - use "name" to change the property name,
++ *          - or "value" to change the property value.
++ *        - string: the new string to write into the field.
++ *        - webconsole: reference to the Web Console instance we work with.
++ *        - callback: function to invoke after the property is updated.
++ */
++function updateVariablesViewProperty(aOptions)
++{
++  let view = aOptions.property._variablesView;
++  view.window.focus();
++  aOptions.property.focus();
++
++  switch (aOptions.field) {
++    case "name":
++      EventUtils.synthesizeKey("VK_ENTER", { shiftKey: true }, view.window);
++      break;
++    case "value":
++      EventUtils.synthesizeKey("VK_ENTER", {}, view.window);
++      break;
++    default:
++      throw new Error("options.field is incorrect");
++      return;
++  }
++
++  executeSoon(function() {
++    EventUtils.synthesizeKey("A", { accelKey: true }, view.window);
++
++    for (let c of aOptions.string) {
++      EventUtils.synthesizeKey(c, {}, gVariablesView.window);
++    }
++
++    if (aOptions.webconsole) {
++      aOptions.webconsole.jsterm.once("variablesview-fetched", aOptions.callback);
++    }
++
++    EventUtils.synthesizeKey("VK_ENTER", {}, view.window);
++
++    if (!aOptions.webconsole) {
++      executeSoon(aOptions.callback);
++    }
++  });
++}
++
++/**
++ * Open the JavaScript debugger.
++ *
++ * @param object aOptions
++ *        Options for opening the debugger:
++ *        - tab: the tab you want to open the debugger for.
++ * @return object
++ *         A Promise that is resolved once the debugger opens, or rejected if
++ *         the open fails. The resolution callback is given one argument, an
++ *         object that holds the following properties:
++ *         - target: the Target object for the Tab.
++ *         - toolbox: the Toolbox instance.
++ *         - panel: the jsdebugger panel instance.
++ *         - panelWin: the window object of the panel iframe.
++ */
 +function openDebugger(aOptions = {})
 +{
 +  if (!aOptions.tab) {
@@ -4229,163 +4423,3 @@ diff --git a/browser/themes/windows/devtools/webconsole.css b/browser/themes/win
 +  height: 0;
 +  overflow: hidden;
 +}
-diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
---- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-+++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -859,16 +859,29 @@ this.WebConsoleUtils = {
- 
-     if (val.displayString && typeof val.displayString == "object" &&
-         val.displayString.type == "longString") {
-       return val.displayString.initial;
-     }
- 
-     return val.displayString || val.type;
-   },
-+
-+  /**
-+   * Check if the given value is a grip with an actor.
-+   *
-+   * @param mixed aGrip
-+   *        Value you want to check if it is a grip with an actor.
-+   * @return boolean
-+   *         True if the given value is a grip with an actor.
-+   */
-+  isActorGrip: function WCU_isActorGrip(aGrip)
-+  {
-+    return aGrip && typeof(aGrip) == "object" && aGrip.actor;
-+  },
- };
- 
- //////////////////////////////////////////////////////////////////////////
- // Localization
- //////////////////////////////////////////////////////////////////////////
- 
- WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
- {
-diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
---- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-+++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
-@@ -497,31 +497,32 @@ WebConsoleActor.prototype =
-   {
-     let input = aRequest.text;
-     let timestamp = Date.now();
- 
-     let evalOptions = {
-       bindObjectActor: aRequest.bindObjectActor,
-       frameActor: aRequest.frameActor,
-     };
--    let evalResult = this.evalWithDebugger(input, evalOptions);
-+    let evalInfo = this.evalWithDebugger(input, evalOptions);
-+    let evalResult = evalInfo.result;
-     let helperResult = this._jstermHelpers.helperResult;
-     delete this._jstermHelpers.helperResult;
- 
-     let result, error, errorMessage;
-     if (evalResult) {
-       if ("return" in evalResult) {
-         result = evalResult.return;
-       }
-       else if ("yield" in evalResult) {
-         result = evalResult.yield;
-       }
-       else if ("throw" in evalResult) {
-         error = evalResult.throw;
--        let errorToString = this._dbgWindow
-+        let errorToString = evalInfo.window
-                             .evalInGlobalWithBindings("ex + ''", {ex: error});
-         if (errorToString && typeof errorToString.return == "string") {
-           errorMessage = errorToString.return;
-         }
-       }
-     }
- 
-     return {
-@@ -666,17 +667,22 @@ WebConsoleActor.prototype =
-    *        Options for evaluation:
-    *        - bindObjectActor: the ObjectActor ID to use for evaluation.
-    *          |evalWithBindings()| will be called with one additional binding:
-    *          |_self| which will point to the Debugger.Object of the given
-    *          ObjectActor.
-    *        - frameActor: the FrameActor ID to use for evaluation. The given
-    *        debugger frame is used for evaluation, instead of the global window.
-    * @return object
--   *         The result of the evaluation.
-+   *         An object that holds the following properties:
-+   *         - dbg: the debugger where the string was evaluated.
-+   *         - frame: (optional) the frame where the string was evaluated.
-+   *         - window: the Debugger.Object for the global where the string was
-+   *         evaluated.
-+   *         - result: the result of the evaluation.
-    */
-   evalWithDebugger: function WCA_evalWithDebugger(aString, aOptions = {})
-   {
-     this._createGlobal();
- 
-     // The help function needs to be easy to guess, so we make the () optional.
-     if (aString.trim() == "help" || aString.trim() == "?") {
-       aString = "help()";
-@@ -688,33 +694,36 @@ WebConsoleActor.prototype =
-       let objActor = this.getActorByID(aOptions.bindObjectActor);
-       if (objActor) {
-         bindSelf = objActor.obj;
-       }
-     }
- 
-     let helpers = this._jstermHelpers;
-     let found$ = false, found$$ = false;
--    let frame = null;
-+    let frame = null, frameActor = null;
-     if (aOptions.frameActor) {
--      let frameActor = this.conn.getActor(aOptions.frameActor);
-+      frameActor = this.conn.getActor(aOptions.frameActor);
-       if (frameActor) {
-         frame = frameActor.frame;
-       }
-       else {
-         Cu.reportError("Web Console Actor: the frame actor was not found: " +
-                        aOptions.frameActor);
-       }
-     }
- 
-+    let dbg = this.dbg;
-+    let dbgWindow = this._dbgWindow;
-+
-     if (frame) {
-       // Avoid having bindings from a different Debugger. The Debugger.Frame
-       // comes from the jsdebugger's Debugger instance.
--      let dbg = frameActor.threadActor.dbg;
--      let dbgWindow = dbg.addDebuggee(this.window);
-+      dbg = frameActor.threadActor.dbg;
-+      dbgWindow = dbg.addDebuggee(this.window);
-       helpers = this._getJSTermHelpers(dbgWindow);
- 
-       let env = frame.environment;
-       if (env) {
-         found$ = !!env.find("$");
-         found$$ = !!env.find("$$");
-       }
-     }
-@@ -762,17 +771,22 @@ WebConsoleActor.prototype =
-     if ($$) {
-       bindings.$$ = $$;
-     }
- 
-     if (bindings._self) {
-       delete bindings._self;
-     }
- 
--    return result;
-+    return {
-+      result: result,
-+      dbg: dbg,
-+      frame: frame,
-+      window: dbgWindow,
-+    };
-   },
- 
-   //////////////////
-   // Event handlers for various listeners.
-   //////////////////
- 
-   /**
-    * Handler for page errors received from the PageErrorListener. This method

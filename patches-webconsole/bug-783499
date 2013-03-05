@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 50b38f4711a2fe42de48648111d068e000818d70
+# Parent 410a5dde32f5e42fb2eb49fa8832086a1d9bf310
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1362403485 -7200
 
@@ -530,7 +530,37 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        return "undefined";
      }
  
-@@ -1537,60 +1542,53 @@ this.JSTermHelpers = function JSTermHelp
+@@ -854,16 +859,29 @@ this.WebConsoleUtils = {
+ 
+     if (val.displayString && typeof val.displayString == "object" &&
+         val.displayString.type == "longString") {
+       return val.displayString.initial;
+     }
+ 
+     return val.displayString || val.type;
+   },
++
++  /**
++   * Check if the given value is a grip with an actor.
++   *
++   * @param mixed aGrip
++   *        Value you want to check if it is a grip with an actor.
++   * @return boolean
++   *         True if the given value is a grip with an actor.
++   */
++  isActorGrip: function WCU_isActorGrip(aGrip)
++  {
++    return aGrip && typeof(aGrip) == "object" && aGrip.actor;
++  },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // Localization
+ //////////////////////////////////////////////////////////////////////////
+ 
+ WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
+ {
+@@ -1537,60 +1555,53 @@ this.JSTermHelpers = function JSTermHelp
     * @param string aXPath
     *        xPath search query to execute.
     * @param [optional] nsIDOMNode aContext
@@ -607,7 +637,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    /**
     * Clears the output of the JSTerm.
     */
-@@ -1605,38 +1603,33 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1605,38 +1616,33 @@ this.JSTermHelpers = function JSTermHelp
     * Returns the result of Object.keys(aObject).
     *
     * @param object aObject
@@ -650,7 +680,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
    /**
     * Opens a help window in MDN.
     */
-@@ -1648,25 +1641,22 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1648,25 +1654,22 @@ this.JSTermHelpers = function JSTermHelp
    /**
     * Inspects the passed aObject. This is done by opening the PropertyPanel.
     *
@@ -679,7 +709,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     *
     * @param object aObject
     *        Object to print to the output.
-@@ -1685,23 +1675,34 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1685,23 +1688,34 @@ this.JSTermHelpers = function JSTermHelp
  
      aOwner.helperResult = { rawOutput: true };
  
@@ -943,7 +973,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     * @param string aActorID
     * @return object
     */
-@@ -447,54 +491,67 @@ WebConsoleActor.prototype =
+@@ -447,54 +491,68 @@ WebConsoleActor.prototype =
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
     * @return object
@@ -965,7 +995,8 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +      bindObjectActor: aRequest.bindObjectActor,
 +      frameActor: aRequest.frameActor,
 +    };
-+    let evalResult = this.evalWithDebugger(input, evalOptions);
++    let evalInfo = this.evalWithDebugger(input, evalOptions);
++    let evalResult = evalInfo.result;
 +    let helperResult = this._jstermHelpers.helperResult;
 +    delete this._jstermHelpers.helperResult;
 +
@@ -979,7 +1010,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +      }
 +      else if ("throw" in evalResult) {
 +        error = evalResult.throw;
-+        let errorToString = this._dbgWindow
++        let errorToString = evalInfo.window
 +                            .evalInGlobalWithBindings("ex + ''", {ex: error});
 +        if (errorToString && typeof errorToString.return == "string") {
 +          errorMessage = errorToString.return;
@@ -1027,7 +1058,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      };
    },
  
-@@ -524,75 +581,195 @@ WebConsoleActor.prototype =
+@@ -524,78 +582,211 @@ WebConsoleActor.prototype =
      return { updated: Object.keys(aRequest.preferences) };
    },
  
@@ -1123,6 +1154,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     * @param string aString
 -   *        String to evaluate in the sandbox.
 -   * @return mixed
+-   *         The result of the evaluation.
 +   *        String to evaluate.
 +   * @param object [aOptions]
 +   *        Options for evaluation:
@@ -1133,7 +1165,12 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +   *        - frameActor: the FrameActor ID to use for evaluation. The given
 +   *        debugger frame is used for evaluation, instead of the global window.
 +   * @return object
-    *         The result of the evaluation.
++   *         An object that holds the following properties:
++   *         - dbg: the debugger where the string was evaluated.
++   *         - frame: (optional) the frame where the string was evaluated.
++   *         - window: the Debugger.Object for the global where the string was
++   *         evaluated.
++   *         - result: the result of the evaluation.
     */
 -  evalInSandbox: function WCA_evalInSandbox(aString)
 +  evalWithDebugger: function WCA_evalWithDebugger(aString, aOptions = {})
@@ -1175,9 +1212,9 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 -                                  "Web Console", 1);
 +    let helpers = this._jstermHelpers;
 +    let found$ = false, found$$ = false;
-+    let frame = null;
++    let frame = null, frameActor = null;
 +    if (aOptions.frameActor) {
-+      let frameActor = this.conn.getActor(aOptions.frameActor);
++      frameActor = this.conn.getActor(aOptions.frameActor);
 +      if (frameActor) {
 +        frame = frameActor.frame;
 +      }
@@ -1187,11 +1224,14 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
 +      }
 +    }
 +
++    let dbg = this.dbg;
++    let dbgWindow = this._dbgWindow;
++
 +    if (frame) {
 +      // Avoid having bindings from a different Debugger. The Debugger.Frame
 +      // comes from the jsdebugger's Debugger instance.
-+      let dbg = frameActor.threadActor.dbg;
-+      let dbgWindow = dbg.addDebuggee(this.window);
++      dbg = frameActor.threadActor.dbg;
++      dbgWindow = dbg.addDebuggee(this.window);
 +      helpers = this._getJSTermHelpers(dbgWindow);
 +
 +      let env = frame.environment;
@@ -1245,19 +1285,28 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
      if ($$) {
 -      this.sandbox.$$ = $$;
 +      bindings.$$ = $$;
-+    }
-+
-+    if (bindings._self) {
-+      delete bindings._self;
      }
  
-     return result;
+-    return result;
++    if (bindings._self) {
++      delete bindings._self;
++    }
++
++    return {
++      result: result,
++      dbg: dbg,
++      frame: frame,
++      window: dbgWindow,
++    };
    },
  
    //////////////////
    // Event handlers for various listeners.
    //////////////////
-@@ -721,130 +898,58 @@ WebConsoleActor.prototype =
+ 
+   /**
+    * Handler for page errors received from the PageErrorListener. This method
+@@ -721,130 +912,58 @@ WebConsoleActor.prototype =
    prepareConsoleMessageForRemote:
    function WCA_prepareConsoleMessageForRemote(aMessage)
    {
@@ -1402,7 +1451,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
   * @param object aWebConsoleActor
   *        The parent WebConsoleActor instance for this object.
   */
-@@ -1078,17 +1183,17 @@ NetworkEventActor.prototype =
+@@ -1078,17 +1197,17 @@ NetworkEventActor.prototype =
     * Add network request POST data.
     *
     * @param object aPostData
@@ -1421,7 +1470,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "requestPostData",
-@@ -1173,17 +1278,17 @@ NetworkEventActor.prototype =
+@@ -1173,17 +1292,17 @@ NetworkEventActor.prototype =
     *        The response content.
     * @param boolean aDiscardedResponseBody
     *        Tells if the response content was recorded or not.
@@ -1440,7 +1489,7 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "responseContent",
-@@ -1223,22 +1328,40 @@ NetworkEventActor.prototype =
+@@ -1223,22 +1342,40 @@ NetworkEventActor.prototype =
     * LongStringActor for the header values, when needed.
     *
     * @private
