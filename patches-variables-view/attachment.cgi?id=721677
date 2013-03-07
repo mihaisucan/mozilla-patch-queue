@@ -1,0 +1,2969 @@
+# HG changeset patch
+# User Victor Porof <vporof@mozilla.com>
+# Date 1362576133 -7200
+# Node ID 9e4ff6873a968c6ff27fd4278660a1ad8c495092
+# Parent  a2fabfb32b309dfe6eb94166a8db64dfe1d477f3
+Bug 802546 - Prettify the Stackframes UI, r=rcampbell
+
+diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools/debugger/debugger-controller.js
+--- a/browser/devtools/debugger/debugger-controller.js
++++ b/browser/devtools/debugger/debugger-controller.js
+@@ -32,8 +32,9 @@ Cu.import("resource://gre/modules/XPCOMU
+ Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
+ Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
+ Cu.import("resource:///modules/source-editor.jsm");
+ Cu.import("resource:///modules/devtools/LayoutHelpers.jsm");
++Cu.import("resource:///modules/devtools/BreadcrumbsWidget.jsm");
+ Cu.import("resource:///modules/devtools/VariablesView.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this,
+   "Reflect", "resource://gre/modules/reflect.jsm");
+@@ -584,8 +585,11 @@ StackFrames.prototype = {
+       topmostFrame.watchExpressionsEvaluation = this.currentEvaluation.return;
+     }
+ 
+ 
++    // Make sure the debugger view panes are visible.
++    DebuggerView.showPanesSoon();
++
+     // Make sure all the previous stackframes are removed before re-adding them.
+     DebuggerView.StackFrames.empty();
+ 
+     for (let frame of this.activeThread.cachedFrames) {
+@@ -683,9 +687,9 @@ StackFrames.prototype = {
+     }
+ 
+     do {
+       // Create a scope to contain all the inspected variables.
+-      let label = this._getScopeLabel(environment);
++      let label = StackFrameUtils.getScopeLabel(environment);
+       let scope = DebuggerView.Variables.addScope(label);
+ 
+       // Handle additions to the innermost scope.
+       if (environment == frame.environment) {
+@@ -766,9 +770,9 @@ StackFrames.prototype = {
+ 
+     // Add nodes for every watch expression in scope.
+     this.activeThread.pauseGrip(aExp).getPrototypeAndProperties(function(aResponse) {
+       let ownProperties = aResponse.ownProperties;
+-      let totalExpressions = DebuggerView.WatchExpressions.totalItems;
++      let totalExpressions = DebuggerView.WatchExpressions.itemCount;
+ 
+       for (let i = 0; i < totalExpressions; i++) {
+         let name = DebuggerView.WatchExpressions.getExpression(i);
+         let expVal = ownProperties[i].value;
+@@ -943,55 +947,19 @@ StackFrames.prototype = {
+     }.bind(this));
+   },
+ 
+   /**
+-   * Constructs a scope label based on its environment.
+-   *
+-   * @param object aEnv
+-   *        The scope's environment.
+-   * @return string
+-   *         The scope's label.
+-   */
+-  _getScopeLabel: function SV__getScopeLabel(aEnv) {
+-    let name = "";
+-
+-    // Name the outermost scope Global.
+-    if (!aEnv.parent) {
+-      name = L10N.getStr("globalScopeLabel");
+-    }
+-    // Otherwise construct the scope name.
+-    else {
+-      name = aEnv.type.charAt(0).toUpperCase() + aEnv.type.slice(1);
+-    }
+-
+-    let label = L10N.getFormatStr("scopeLabel", [name]);
+-    switch (aEnv.type) {
+-      case "with":
+-      case "object":
+-        label += " [" + aEnv.object.class + "]";
+-        break;
+-      case "function":
+-        let f = aEnv.function;
+-        label += " [" + (f.name || f.userDisplayName || f.displayName ||
+-                         "(anonymous)") + "]";
+-        break;
+-    }
+-    return label;
+-  },
+-
+-  /**
+    * Adds the specified stack frame to the list.
+    *
+    * @param object aFrame
+    *        The new frame to add.
+    */
+   _addFrame: function SF__addFrame(aFrame) {
+     let depth = aFrame.depth;
+     let { url, line } = aFrame.where;
++    let frameTitle = StackFrameUtils.getFrameTitle(aFrame);
+ 
+-    let startText = StackFrameUtils.getFrameTitle(aFrame);
+-    let endText = SourceUtils.getSourceLabel(url) + ":" + line;
+-    DebuggerView.StackFrames.addFrame(startText, endText, depth);
++    DebuggerView.StackFrames.addFrame(frameTitle, url, line, depth);
+   },
+ 
+   /**
+    * Loads more stack frames from the debugger server cache.
+@@ -1126,9 +1094,9 @@ SourceScripts.prototype = {
+     this._addSource({
+       url: aPacket.source.url,
+       source: aPacket.source
+     }, {
+-      forced: true
++      staged: false
+     });
+ 
+     let container = DebuggerView.Sources;
+     let preferredValue = container.preferredValue;
+@@ -1183,16 +1151,18 @@ SourceScripts.prototype = {
+       }
+       this._addSource({
+         url: source.url,
+         source: source
++      }, {
++        staged: true
+       });
+     }
+ 
+     let container = DebuggerView.Sources;
+     let preferredValue = container.preferredValue;
+ 
+     // Flushes all the prepared sources into the sources container.
+-    container.commit();
++    container.commit({ sorted: true });
+ 
+     // Select the preferred source if it exists and was part of the response.
+     if (container.containsValue(preferredValue)) {
+       container.selectedValue = preferredValue;
+@@ -1221,12 +1191,12 @@ SourceScripts.prototype = {
+    *        - forced: force the source to be immediately added
+    */
+   _addSource: function SS__addSource(aSource, aOptions = {}) {
+     let url = aSource.url;
+-    let label = SourceUtils.getSourceLabel(url);
++    let staged = aOptions.staged;
+ 
+-    DebuggerView.Sources.push(label, url, {
+-      forced: aOptions.forced,
++    DebuggerView.Sources.push([SourceUtils.getSourceLabel(url), url], {
++      staged: staged, /* stage the item to be appended later? */
+       tooltip: url,
+       attachment: aSource
+     });
+   },
+diff --git a/browser/devtools/debugger/debugger-panes.js b/browser/devtools/debugger/debugger-panes.js
+--- a/browser/devtools/debugger/debugger-panes.js
++++ b/browser/devtools/debugger/debugger-panes.js
+@@ -5,148 +5,8 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ "use strict";
+ 
+ /**
+- * Functions handling the stackframes UI.
+- */
+-function StackFramesView() {
+-  dumpn("StackFramesView was instantiated");
+-  MenuContainer.call(this);
+-  this._onClick = this._onClick.bind(this);
+-  this._onScroll = this._onScroll.bind(this);
+-}
+-
+-create({ constructor: StackFramesView, proto: MenuContainer.prototype }, {
+-  /**
+-   * Initialization function, called when the debugger is started.
+-   */
+-  initialize: function DVSF_initialize() {
+-    dumpn("Initializing the StackFramesView");
+-    this._container = new StackList(document.getElementById("stackframes"));
+-    this._container.emptyText = L10N.getStr("emptyStackText");
+-
+-    this._container.addEventListener("click", this._onClick, false);
+-    this._container.addEventListener("scroll", this._onScroll, true);
+-    window.addEventListener("resize", this._onScroll, true);
+-
+-    this._cache = new Map();
+-  },
+-
+-  /**
+-   * Destruction function, called when the debugger is closed.
+-   */
+-  destroy: function DVSF_destroy() {
+-    dumpn("Destroying the StackFramesView");
+-    this._container.removeEventListener("click", this._onClick, false);
+-    this._container.removeEventListener("scroll", this._onScroll, true);
+-    window.removeEventListener("resize", this._onScroll, true);
+-  },
+-
+-  /**
+-   * Adds a frame in this stackframes container.
+-   *
+-   * @param string aFrameName
+-   *        Name to be displayed in the list.
+-   * @param string aFrameDetails
+-   *        Details to be displayed in the list.
+-   * @param number aDepth
+-   *        The frame depth specified by the debugger.
+-   */
+-  addFrame: function DVSF_addFrame(aFrameName, aFrameDetails, aDepth) {
+-    // Stackframes are UI elements which benefit from visible panes.
+-    DebuggerView.showPanesSoon();
+-
+-    // Append a stackframe item to this container.
+-    let stackframeItem = this.push(aFrameName, aFrameDetails, {
+-      forced: true,
+-      unsorted: true,
+-      relaxed: true,
+-      attachment: {
+-        depth: aDepth
+-      }
+-    });
+-
+-    // Check if stackframe was already appended.
+-    if (!stackframeItem) {
+-      return;
+-    }
+-
+-    let element = stackframeItem.target;
+-    element.id = "stackframe-" + aDepth;
+-    element.className = "dbg-stackframe list-item";
+-    element.labelNode.className = "dbg-stackframe-name plain";
+-    element.valueNode.className = "dbg-stackframe-details plain";
+-
+-    this._cache.set(aDepth, stackframeItem);
+-  },
+-
+-  /**
+-   * Highlights a frame in this stackframes container.
+-   *
+-   * @param number aDepth
+-   *        The frame depth specified by the debugger controller.
+-   */
+-  highlightFrame: function DVSF_highlightFrame(aDepth) {
+-    this._container.selectedItem = this._cache.get(aDepth).target;
+-  },
+-
+-  /**
+-   * Specifies if the active thread has more frames that need to be loaded.
+-   */
+-  dirty: false,
+-
+-  /**
+-   * The click listener for the stackframes container.
+-   */
+-  _onClick: function DVSF__onClick(e) {
+-    let item = this.getItemForElement(e.target);
+-    if (item) {
+-      // The container is not empty and we clicked on an actual item.
+-      DebuggerController.StackFrames.selectFrame(item.attachment.depth);
+-    }
+-  },
+-
+-  /**
+-   * The scroll listener for the stackframes container.
+-   */
+-  _onScroll: function DVSF__onScroll() {
+-    // Update the stackframes container only if we have to.
+-    if (this.dirty) {
+-      let list = this._container._list;
+-
+-      // If the stackframes container was scrolled past 95% of the height,
+-      // load more content.
+-      if (list.scrollTop >= (list.scrollHeight - list.clientHeight) * 0.95) {
+-        DebuggerController.StackFrames.addMoreFrames();
+-        this.dirty = false;
+-      }
+-    }
+-  },
+-
+-  _cache: null
+-});
+-
+-/**
+- * Utility functions for handling stackframes.
+- */
+-let StackFrameUtils = {
+-  /**
+-   * Create a textual representation for the specified stack frame
+-   * to display in the stack frame container.
+-   *
+-   * @param object aFrame
+-   *        The stack frame to label.
+-   */
+-  getFrameTitle: function SFU_getFrameTitle(aFrame) {
+-    if (aFrame.type == "call") {
+-      let c = aFrame.callee;
+-      return (c.name || c.userDisplayName || c.displayName || "(anonymous)");
+-    }
+-    return "(" + aFrame.type + ")";
+-  }
+-};
+-
+-/**
+  * Functions handling the breakpoints UI.
+  */
+ function BreakpointsView() {
+   dumpn("BreakpointsView was instantiated");
+@@ -171,22 +31,22 @@ create({ constructor: BreakpointsView, p
+    * Initialization function, called when the debugger is started.
+    */
+   initialize: function DVB_initialize() {
+     dumpn("Initializing the BreakpointsView");
+-    this._container = new StackList(document.getElementById("breakpoints"));
++    this.node = new StackList(document.getElementById("breakpoints"));
+     this._commandset = document.getElementById("debuggerCommands");
+     this._popupset = document.getElementById("debuggerPopupset");
+     this._cmPopup = document.getElementById("sourceEditorContextMenu");
+     this._cbPanel = document.getElementById("conditional-breakpoint-panel");
+     this._cbTextbox = document.getElementById("conditional-breakpoint-textbox");
+ 
+-    this._container.emptyText = L10N.getStr("emptyBreakpointsText");
+-    this._container.itemFactory = this._createItemView;
+-    this._container.uniquenessQualifier = 2;
++    this.node.emptyText = L10N.getStr("emptyBreakpointsText");
++    this.node.itemFactory = this._createItemView;
++    this.node.uniquenessQualifier = 2;
+ 
+     window.addEventListener("Debugger:EditorLoaded", this._onEditorLoad, false);
+     window.addEventListener("Debugger:EditorUnloaded", this._onEditorUnload, false);
+-    this._container.addEventListener("click", this._onBreakpointClick, false);
++    this.node.addEventListener("click", this._onBreakpointClick, false);
+     this._cmPopup.addEventListener("popuphidden", this._onEditorContextMenuPopupHidden, false);
+     this._cbPanel.addEventListener("popupshowing", this._onConditionalPopupShowing, false);
+     this._cbPanel.addEventListener("popupshown", this._onConditionalPopupShown, false);
+     this._cbPanel.addEventListener("popuphiding", this._onConditionalPopupHiding, false);
+@@ -201,9 +61,9 @@ create({ constructor: BreakpointsView, p
+   destroy: function DVB_destroy() {
+     dumpn("Destroying the BreakpointsView");
+     window.removeEventListener("Debugger:EditorLoaded", this._onEditorLoad, false);
+     window.removeEventListener("Debugger:EditorUnloaded", this._onEditorUnload, false);
+-    this._container.removeEventListener("click", this._onBreakpointClick, false);
++    this.node.removeEventListener("click", this._onBreakpointClick, false);
+     this._cmPopup.removeEventListener("popuphidden", this._onEditorContextMenuPopupHidden, false);
+     this._cbPanel.removeEventListener("popupshowing", this._onConditionalPopupShowing, false);
+     this._cbPanel.removeEventListener("popupshown", this._onConditionalPopupShown, false);
+     this._cbPanel.removeEventListener("popuphiding", this._onConditionalPopupHiding, false);
+@@ -233,10 +93,9 @@ create({ constructor: BreakpointsView, p
+   addBreakpoint: function DVB_addBreakpoint(aSourceLocation, aLineNumber,
+                                             aActor, aLineInfo, aLineText,
+                                             aConditionalFlag, aOpenPopupFlag) {
+     // Append a breakpoint item to this container.
+-    let breakpointItem = this.push(aLineInfo.trim(), aLineText.trim(), {
+-      forced: true,
++    let breakpointItem = this.push([aLineInfo.trim(), aLineText.trim()], {
+       attachment: {
+         enabled: true,
+         sourceLocation: aSourceLocation,
+         lineNumber: aLineNumber,
+@@ -406,13 +265,13 @@ create({ constructor: BreakpointsView, p
+         this._cbPanel.hidePopup();
+       }
+ 
+       // Breakpoint is now highlighted.
+-      this._container.selectedItem = breakpointItem.target;
++      this.selectedItem = breakpointItem;
+     }
+     // Can't find a breakpoint at the requested source location and line number.
+     else {
+-      this._container.selectedIndex = -1;
++      this.selectedItem = null;
+       this._cbPanel.hidePopup();
+     }
+   },
+ 
+@@ -460,12 +319,10 @@ create({ constructor: BreakpointsView, p
+    * @param string aInfo
+    *        The breakpoint's line info.
+    * @param string aText
+    *        The breakpoint's line text.
+-   * @param any aAttachment [optional]
+-   *        Some attached primitive/object.
+    */
+-  _createItemView: function DVB__createItemView(aElementNode, aInfo, aText, aAttachment) {
++  _createItemView: function DVB__createItemView(aElementNode, aInfo, aText) {
+     let checkbox = document.createElement("checkbox");
+     checkbox.setAttribute("checked", "true");
+     checkbox.addEventListener("click", this._onCheckboxClick, false);
+ 
+@@ -550,9 +407,9 @@ create({ constructor: BreakpointsView, p
+     function createMenuItem(aName, aHiddenFlag) {
+       let menuitem = document.createElement("menuitem");
+       let command = document.createElement("command");
+ 
+-      let prefix = "bp-cMenu-";
++      let prefix = "bp-cMenu-"; // breakpoints context menu
+       let commandId = prefix + aName + "-" + breakpointId + "-command";
+       let menuitemId = prefix + aName + "-" + breakpointId + "-menuitem";
+ 
+       let label = L10N.getStr("breakpointMenuItem." + aName);
+@@ -959,15 +816,15 @@ create({ constructor: WatchExpressionsVi
+    * Initialization function, called when the debugger is started.
+    */
+   initialize: function DVWE_initialize() {
+     dumpn("Initializing the WatchExpressionsView");
+-    this._container = new StackList(document.getElementById("expressions"));
++    this.node = new StackList(document.getElementById("expressions"));
+     this._variables = document.getElementById("variables");
+ 
+-    this._container.setAttribute("context", "debuggerWatchExpressionsContextMenu");
+-    this._container.permaText = L10N.getStr("addWatchExpressionText");
+-    this._container.itemFactory = this._createItemView;
+-    this._container.addEventListener("click", this._onClick, false);
++    this.node.setAttribute("context", "debuggerWatchExpressionsContextMenu");
++    this.node.permaText = L10N.getStr("addWatchExpressionText");
++    this.node.itemFactory = this._createItemView;
++    this.node.addEventListener("click", this._onClick, false);
+ 
+     this._cache = [];
+   },
+ 
+@@ -975,9 +832,9 @@ create({ constructor: WatchExpressionsVi
+    * Destruction function, called when the debugger is closed.
+    */
+   destroy: function DVWE_destroy() {
+     dumpn("Destroying the WatchExpressionsView");
+-    this._container.removeEventListener("click", this._onClick, false);
++    this.node.removeEventListener("click", this._onClick, false);
+   },
+ 
+   /**
+    * Adds a watch expression in this container.
+@@ -989,24 +846,18 @@ create({ constructor: WatchExpressionsVi
+     // Watch expressions are UI elements which benefit from visible panes.
+     DebuggerView.showPanesSoon();
+ 
+     // Append a watch expression item to this container.
+-    let expressionItem = this.push("", aExpression, {
+-      forced: { atIndex: 0 },
+-      unsorted: true,
+-      relaxed: true,
++    let expressionItem = this.push([, aExpression], {
++      index: FIRST, /* specifies on which position should the item be appended */
++      relaxed: true, /* this container should allow dupes & degenerates */
+       attachment: {
+         currentExpression: "",
+         initialExpression: aExpression,
+         id: this._generateId()
+       }
+     });
+ 
+-    // Check if watch expression was already appended.
+-    if (!expressionItem) {
+-      return;
+-    }
+-
+     let element = expressionItem.target;
+     element.id = "expression-" + expressionItem.attachment.id;
+     element.className = "dbg-expression list-item";
+     element.arrowNode.className = "dbg-expression-arrow";
+@@ -1253,14 +1104,14 @@ create({ constructor: GlobalSearchView, 
+    * Initialization function, called when the debugger is started.
+    */
+   initialize: function DVGS_initialize() {
+     dumpn("Initializing the GlobalSearchView");
+-    this._container = new StackList(document.getElementById("globalsearch"));
++    this.node = new StackList(document.getElementById("globalsearch"));
+     this._splitter = document.getElementById("globalsearch-splitter");
+ 
+-    this._container.emptyText = L10N.getStr("noMatchingStringsText");
+-    this._container.itemFactory = this._createItemView;
+-    this._container.addEventListener("scroll", this._onScroll, false);
++    this.node.emptyText = L10N.getStr("noMatchingStringsText");
++    this.node.itemFactory = this._createItemView;
++    this.node.addEventListener("scroll", this._onScroll, false);
+ 
+     this._cache = new Map();
+   },
+ 
+@@ -1268,23 +1119,23 @@ create({ constructor: GlobalSearchView, 
+    * Destruction function, called when the debugger is closed.
+    */
+   destroy: function DVGS_destroy() {
+     dumpn("Destroying the GlobalSearchView");
+-    this._container.removeEventListener("scroll", this._onScroll, false);
++    this.node.removeEventListener("scroll", this._onScroll, false);
+   },
+ 
+   /**
+    * Gets the visibility state of the global search container.
+    * @return boolean
+    */
+-  get hidden() this._container.getAttribute("hidden") == "true",
++  get hidden() this.node.getAttribute("hidden") == "true",
+ 
+   /**
+    * Sets the results container hidden or visible. It's hidden by default.
+    * @param boolean aFlag
+    */
+   set hidden(aFlag) {
+-    this._container.setAttribute("hidden", aFlag);
++    this.node.setAttribute("hidden", aFlag);
+     this._splitter.setAttribute("hidden", aFlag);
+   },
+ 
+   /**
+@@ -1580,12 +1431,11 @@ create({ constructor: GlobalSearchView, 
+    */
+   _createSourceResultsUI:
+   function DVGS__createSourceResultsUI(aLocation, aSourceResults, aExpandFlag) {
+     // Append a source results item to this container.
+-    let sourceResultsItem = this.push(aLocation, aSourceResults.matchCount, {
+-      forced: true,
+-      unsorted: true,
+-      relaxed: true,
++    let sourceResultsItem = this.push([aLocation, aSourceResults.matchCount], {
++      index: LAST, /* specifies on which position should the item be appended */
++      relaxed: true, /* this container should allow dupes & degenerates */
+       attachment: {
+         sourceResults: aSourceResults,
+         expandFlag: aExpandFlag
+       }
+@@ -1679,9 +1529,9 @@ create({ constructor: GlobalSearchView, 
+         sourceResultsItem.instance.expanded) {
+       return;
+     }
+     let { top, height } = aTarget.getBoundingClientRect();
+-    let { clientHeight } = this._container._parent;
++    let { clientHeight } = this.node._parent;
+ 
+     if (top - height <= clientHeight || this._forceExpandResults) {
+       sourceResultsItem.instance.expand();
+     }
+@@ -1694,20 +1544,20 @@ create({ constructor: GlobalSearchView, 
+    *        The match to scroll into view.
+    */
+   _scrollMatchIntoViewIfNeeded:  function DVGS__scrollMatchIntoViewIfNeeded(aMatch) {
+     let { top, height } = aMatch.getBoundingClientRect();
+-    let { clientHeight } = this._container._parent;
++    let { clientHeight } = this.node._parent;
+ 
+     let style = window.getComputedStyle(aMatch);
+     let topBorderSize = window.parseInt(style.getPropertyValue("border-top-width"));
+     let bottomBorderSize = window.parseInt(style.getPropertyValue("border-bottom-width"));
+ 
+     let marginY = top - (height + topBorderSize + bottomBorderSize) * 2;
+     if (marginY <= 0) {
+-      this._container._parent.scrollTop += marginY;
++      this.node._parent.scrollTop += marginY;
+     }
+     if (marginY + height > clientHeight) {
+-      this._container._parent.scrollTop += height - (clientHeight - marginY);
++      this.node._parent.scrollTop += height - (clientHeight - marginY);
+     }
+   },
+ 
+   /**
+@@ -2107,10 +1957,12 @@ LineResults.getElementAtIndex = function
+ 
+ /**
+  * Gets the index of an item associated with the specified element.
+  *
++ * @param nsIDOMNode aElement
++ *        The element to get the index for.
+  * @return number
+- *         The index of the matched item, or -1 if nothing is found.
++ *         The index of the matched element, or -1 if nothing is found.
+  */
+ SourceResults.indexOfElement =
+ LineResults.indexOfElement = function DVGS_indexOFElement(aElement) {
+   let count = 0;
+diff --git a/browser/devtools/debugger/debugger-toolbar.js b/browser/devtools/debugger/debugger-toolbar.js
+--- a/browser/devtools/debugger/debugger-toolbar.js
++++ b/browser/devtools/debugger/debugger-toolbar.js
+@@ -29,9 +29,9 @@ ToolbarView.prototype = {
+     this._stepOverButton = document.getElementById("step-over");
+     this._stepInButton = document.getElementById("step-in");
+     this._stepOutButton = document.getElementById("step-out");
+     this._chromeGlobals = document.getElementById("chrome-globals");
+-    this._scripts = document.getElementById("sources");
++    this._sources = document.getElementById("sources");
+ 
+     let resumeKey = LayoutHelpers.prettyKey(document.getElementById("resumeKey"), true);
+     let stepOverKey = LayoutHelpers.prettyKey(document.getElementById("stepOverKey"), true);
+     let stepInKey = LayoutHelpers.prettyKey(document.getElementById("stepInKey"), true);
+@@ -275,14 +275,14 @@ create({ constructor: ChromeGlobalsView,
+    * Initialization function, called when the debugger is started.
+    */
+   initialize: function DVCG_initialize() {
+     dumpn("Initializing the ChromeGlobalsView");
+-    this._container = document.getElementById("chrome-globals");
++    this.node = document.getElementById("chrome-globals");
+     this._emptyLabel = L10N.getStr("noGlobalsText");
+     this._unavailableLabel = L10N.getStr("noMatchingGlobalsText");
+ 
+-    this._container.addEventListener("select", this._onSelect, false);
+-    this._container.addEventListener("click", this._onClick, false);
++    this.node.addEventListener("select", this._onSelect, false);
++    this.node.addEventListener("click", this._onClick, false);
+ 
+     this.empty();
+   },
+ 
+@@ -290,10 +290,10 @@ create({ constructor: ChromeGlobalsView,
+    * Destruction function, called when the debugger is closed.
+    */
+   destroy: function DVT_destroy() {
+     dumpn("Destroying the ChromeGlobalsView");
+-    this._container.removeEventListener("select", this._onSelect, false);
+-    this._container.removeEventListener("click", this._onClick, false);
++    this.node.removeEventListener("select", this._onSelect, false);
++    this.node.removeEventListener("click", this._onClick, false);
+   },
+ 
+   /**
+    * The select listener for the chrome globals container.
+@@ -328,14 +328,14 @@ create({ constructor: SourcesView, proto
+    * Initialization function, called when the debugger is started.
+    */
+   initialize: function DVS_initialize() {
+     dumpn("Initializing the SourcesView");
+-    this._container = document.getElementById("sources");
++    this.node = document.getElementById("sources");
+     this._emptyLabel = L10N.getStr("noScriptsText");
+     this._unavailableLabel = L10N.getStr("noMatchingScriptsText");
+ 
+-    this._container.addEventListener("select", this._onSelect, false);
+-    this._container.addEventListener("click", this._onClick, false);
++    this.node.addEventListener("select", this._onSelect, false);
++    this.node.addEventListener("click", this._onClick, false);
+ 
+     this.empty();
+   },
+ 
+@@ -343,10 +343,10 @@ create({ constructor: SourcesView, proto
+    * Destruction function, called when the debugger is closed.
+    */
+   destroy: function DVS_destroy() {
+     dumpn("Destroying the SourcesView");
+-    this._container.removeEventListener("select", this._onSelect, false);
+-    this._container.removeEventListener("click", this._onClick, false);
++    this.node.removeEventListener("select", this._onSelect, false);
++    this.node.removeEventListener("click", this._onClick, false);
+   },
+ 
+   /**
+    * Sets the preferred source url to be displayed in this container.
+@@ -386,44 +386,69 @@ create({ constructor: SourcesView, proto
+ let SourceUtils = {
+   _labelsCache: new Map(),
+ 
+   /**
+-   * Gets a unique, simplified label from a source url.
+-   *
+-   * @param string aUrl
+-   *        The source url.
+-   * @return string
+-   *         The simplified label.
+-   */
+-  getSourceLabel: function SU_getSourceLabel(aUrl) {
+-    if (!this._labelsCache.has(aUrl)) {
+-      this._labelsCache.set(aUrl, this.trimUrlLength(this.trimUrl(aUrl)));
+-    }
+-    return this._labelsCache.get(aUrl);
+-  },
+-
+-  /**
+    * Clears the labels cache, populated by SourceUtils.getSourceLabel.
+    * This should be done every time the content location changes.
+    */
+   clearLabelsCache: function SU_clearLabelsCache() {
+     this._labelsCache = new Map();
+   },
+ 
+   /**
++   * Gets a unique, simplified label from a source url.
++   *
++   * @param string aUrl
++   *        The source url.
++   * @param number aLength [optional]
++   *        The expected source url length.
++   * @param number aSection [optional]
++   *        The section to trim. Supported values: "start", "center", "end"
++   * @return string
++   *         The simplified label.
++   */
++  getSourceLabel: function SU_getSourceLabel(aUrl, aLength, aSection) {
++    let id = [aUrl, aLength, aSection].join();
++    aLength = aLength || SOURCE_URL_DEFAULT_MAX_LENGTH;
++    aSection = aSection || "end";
++
++    if (this._labelsCache.has(id)) {
++      return this._labelsCache.get(id);
++    }
++    let sourceLabel = this.trimUrlLength(this.trimUrl(aUrl), aLength, aSection);
++    this._labelsCache.set(id, sourceLabel);
++    return sourceLabel;
++  },
++
++  /**
+    * Trims the url by shortening it if it exceeds a certain length, adding an
+    * ellipsis at the end.
+    *
+    * @param string aUrl
+    *        The source url.
+-   * @param number aMaxLength [optional]
+-   *        The max source url length.
++   * @param number aLength [optional]
++   *        The expected source url length.
++   * @param number aSection [optional]
++   *        The section to trim. Supported values: "start", "center", "end"
+    * @return string
+    *         The shortened url.
+    */
+-  trimUrlLength: function SU_trimUrlLength(aUrl, aMaxLength = SOURCE_URL_MAX_LENGTH) {
+-    if (aUrl.length > aMaxLength) {
+-      return aUrl.substring(0, aMaxLength) + L10N.ellipsis;
++  trimUrlLength: function SU_trimUrlLength(aUrl, aLength, aSection) {
++    aLength = aLength || SOURCE_URL_DEFAULT_MAX_LENGTH;
++    aSection = aSection || "end";
++
++    if (aUrl.length > aLength) {
++      switch (aSection) {
++        case "start":
++          return L10N.ellipsis + aUrl.slice(-aLength);
++          break;
++        case "center":
++          return aUrl.substr(0, aLength / 2 - 1) + L10N.ellipsis + aUrl.slice(-aLength / 2 + 1);
++          break;
++        case "end":
++          return aUrl.substr(0, aLength) + L10N.ellipsis;
++          break;
++      }
+     }
+     return aUrl;
+   },
+ 
+@@ -488,9 +513,9 @@ let SourceUtils = {
+     }
+ 
+     // If we have a label and it doesn't start with a query...
+     if (aLabel && aLabel.indexOf("?") != 0) {
+-      if (DebuggerView.Sources.containsTrimmedValue(aUrl.spec)) {
++      if (DebuggerView.Sources.containsTrimmedValue(aUrl.spec, SourceUtils.trimUrlQuery)) {
+         // A page may contain multiple requests to the same url but with different
+         // queries. It would be redundant to show each one.
+         return aLabel;
+       }
+@@ -541,8 +566,346 @@ let SourceUtils = {
+   }
+ };
+ 
+ /**
++ * Functions handling the stackframes UI.
++ */
++function StackFramesView() {
++  dumpn("StackFramesView was instantiated");
++  MenuContainer.call(this);
++  this._createItemView = this._createItemView.bind(this);
++  this._onStackframeRemoved = this._onStackframeRemoved.bind(this);
++  this._onClick = this._onClick.bind(this);
++  this._onScroll = this._onScroll.bind(this);
++  this._afterScroll = this._afterScroll.bind(this);
++  this._selectFrame = this._selectFrame.bind(this);
++}
++
++create({ constructor: StackFramesView, proto: MenuContainer.prototype }, {
++  /**
++   * Initialization function, called when the debugger is started.
++   */
++  initialize: function DVSF_initialize() {
++    dumpn("Initializing the StackFramesView");
++
++    let commandset = this._commandset = document.createElement("commandset");
++    let menupopup = this._menupopup = document.createElement("menupopup");
++    commandset.setAttribute("id", "stackframesCommandset");
++    menupopup.setAttribute("id", "stackframesMenupopup");
++
++    document.getElementById("debuggerPopupset").appendChild(menupopup);
++    document.getElementById("debuggerCommands").appendChild(commandset);
++
++    this.node = new BreadcrumbsWidget(document.getElementById("stackframes"));
++    this.decorateWidgetMethods("parentNode");
++    this.node.addEventListener("click", this._onClick, false);
++    this.node.addEventListener("scroll", this._onScroll, true);
++    window.addEventListener("resize", this._onScroll, true);
++
++    this._cache = new Map();
++  },
++
++  /**
++   * Destruction function, called when the debugger is closed.
++   */
++  destroy: function DVSF_destroy() {
++    dumpn("Destroying the StackFramesView");
++    this.node.removeEventListener("click", this._onClick, false);
++    this.node.removeEventListener("scroll", this._onScroll, true);
++    window.removeEventListener("resize", this._onScroll, true);
++  },
++
++  /**
++   * Adds a frame in this stackframes container.
++   *
++   * @param string aFrameTitle
++   *        The frame title to be displayed in the list.
++   * @param string aSourceLocation
++   *        The source location to be displayed in the list.
++   * @param string aLineNumber
++   *        The line number to be displayed in the list.
++   * @param number aDepth
++   *        The frame depth specified by the debugger.
++   */
++  addFrame:
++  function DVSF_addFrame(aFrameTitle, aSourceLocation, aLineNumber, aDepth) {
++    // Create the fragment node and menu popup for the stackframe item.
++    let stackframeFragment = this._createItemView.apply(this, arguments);
++    let stackframePopup = this._createMenuItem.apply(this, arguments);
++
++    // Append a stackframe item to this container.
++    let stackframeItem = this.push(stackframeFragment, {
++      index: FIRST, /* specifies on which position should the item be appended */
++      relaxed: true, /* this container should allow dupes & degenerates */
++      attachment: {
++        popup: stackframePopup,
++        depth: aDepth
++      }
++    });
++
++    let element = stackframeItem.target;
++    element.id = "stackframe-" + aDepth;
++    element.classList.add("dbg-stackframe");
++    element.setAttribute("tooltiptext", aSourceLocation + ":" + aLineNumber);
++    element.setAttribute("contextmenu", "stackframesMenupopup");
++
++    stackframeItem.finalize = this._onStackframeRemoved;
++    this._cache.set(aDepth, stackframeItem);
++  },
++
++  /**
++   * Highlights a frame in this stackframes container.
++   *
++   * @param number aDepth
++   *        The frame depth specified by the debugger controller.
++   */
++  highlightFrame: function DVSF_highlightFrame(aDepth) {
++    let cache = this._cache;
++    let selectedItem = this.selectedItem = cache.get(aDepth);
++
++    for (let [, item] of cache) {
++      if (item != selectedItem) {
++        item.attachment.popup.menuitem.removeAttribute("checked");
++      } else {
++        item.attachment.popup.menuitem.setAttribute("checked", "");
++      }
++    }
++  },
++
++  /**
++   * Specifies if the active thread has more frames that need to be loaded.
++   */
++  dirty: false,
++
++  /**
++   * Customization function for creating an item's UI.
++   *
++   * @param string aFrameTitle
++   *        The frame title to be displayed in the list.
++   * @param string aSourceLocation
++   *        The source location to be displayed in the list.
++   * @param string aLineNumber
++   *        The line number to be displayed in the list.
++   */
++  _createItemView:
++  function DVSF__createItemView(aFrameTitle, aSourceLocation, aLineNumber) {
++    let frameTitleNode = document.createElement("label");
++    let frameDetailsNode = document.createElement("label");
++
++    let frameDetails = SourceUtils.getSourceLabel(aSourceLocation,
++      STACK_FRAMES_SOURCE_URL_MAX_LENGTH,
++      STACK_FRAMES_SOURCE_URL_TRIM_SECTION) +
++      SEARCH_LINE_FLAG + aLineNumber;
++
++    frameTitleNode.className = "plain dbg-stackframe-title inspector-breadcrumbs-tag";
++    frameTitleNode.setAttribute("value", aFrameTitle);
++
++    frameDetailsNode.className = "plain dbg-stackframe-details inspector-breadcrumbs-id";
++    frameDetailsNode.setAttribute("value", " " + frameDetails);
++
++    let fragment = document.createDocumentFragment();
++    fragment.appendChild(frameTitleNode);
++    fragment.appendChild(frameDetailsNode);
++
++    return fragment;
++  },
++
++  /**
++   * Customization function for populating an item's context menu.
++   *
++   * @param string aFrameTitle
++   *        The frame title to be displayed in the list.
++   * @param string aSourceLocation
++   *        The source location to be displayed in the list.
++   * @param string aLineNumber
++   *        The line number to be displayed in the list.
++   * @param number aDepth
++   *        The frame depth specified by the debugger.
++   */
++  _createMenuItem:
++  function DVSF__createMenuItem(aFrameTitle, aSourceLocation, aLineNumber, aDepth) {
++    let menuitem = document.createElement("menuitem");
++    let command = document.createElement("command");
++
++    let frameDescription = SourceUtils.getSourceLabel(aSourceLocation,
++      STACK_FRAMES_POPUP_SOURCE_URL_MAX_LENGTH,
++      STACK_FRAMES_POPUP_SOURCE_URL_TRIM_SECTION) +
++      SEARCH_LINE_FLAG + aLineNumber;
++
++    let prefix = "sf-cMenu-"; // stackframes context menu
++    let commandId = prefix + aDepth + "-" + "-command";
++    let menuitemId = prefix + aDepth + "-" + "-menuitem";
++
++    command.id = commandId;
++    command.addEventListener("command", this._selectFrame.bind(this, aDepth), false);
++
++    menuitem.id = menuitemId;
++    menuitem.className = "dbg-stackframe-menuitem";
++    menuitem.setAttribute("type", "checkbox");
++    menuitem.setAttribute("command", commandId);
++    menuitem.setAttribute("tooltiptext", aSourceLocation + ":" + aLineNumber);
++
++    let labelNode = document.createElement("label");
++    labelNode.className = "plain dbg-stackframe-menuitem-title";
++    labelNode.setAttribute("value", aFrameTitle);
++    labelNode.setAttribute("flex", "1");
++
++    let descriptionNode = document.createElement("label");
++    descriptionNode.className = "plain dbg-stackframe-menuitem-details";
++    descriptionNode.setAttribute("value", frameDescription);
++
++    menuitem.appendChild(labelNode);
++    menuitem.appendChild(descriptionNode);
++
++    this._commandset.appendChild(command);
++    this._menupopup.appendChild(menuitem);
++
++    return {
++      command: command,
++      menuitem: menuitem
++    };
++  },
++
++  /**
++   * Destroys a context menu item for a stackframe.
++   *
++   * @param object aPopup
++   *        The popup associated with the displayed stackframe item.
++   */
++  _destroyMenuItem: function DVSF__destroyMenuItem(aPopup) {
++    let command = aPopup.command;
++    let menuitem = aPopup.menuitem;
++
++    command.parentNode.removeChild(command);
++    menuitem.parentNode.removeChild(menuitem);
++  },
++
++  /**
++   * Function called each time a stackframe item is removed.
++   */
++  _onStackframeRemoved: function DVSF__onStackframeRemoved(aItem) {
++    this._destroyMenuItem(aItem.attachment.popup);
++  },
++
++  /**
++   * The click listener for the stackframes container.
++   */
++  _onClick: function DVSF__onClick(e) {
++    if (e && e.button != 0) {
++      // Only allow left-click to trigger this event.
++      return;
++    }
++    let item = this.getItemForElement(e.target);
++    if (item) {
++      // The container is not empty and we clicked on an actual item.
++      this._selectFrame(item.attachment.depth);
++    }
++  },
++
++  /**
++   * The scroll listener for the stackframes container.
++   */
++  _onScroll: function DVSF__onScroll() {
++    // Update the stackframes container only if we have to.
++    if (!this.dirty) {
++      return;
++    }
++    window.clearTimeout(this._scrollTimeout);
++    this._scrollTimeout = window.setTimeout(this._afterScroll, STACK_FRAMES_SCROLL_DELAY);
++  },
++
++  /**
++   * Requests the addition of more frames from the controller.
++   */
++  _afterScroll: function DVSF__afterScroll() {
++    let list = this.node._list;
++    let scrollPosition = list.scrollPosition;
++    let scrollWidth = list.scrollWidth;
++
++    // If the stackframes container scrolled almost to the end, with only
++    // 1/10 of a breadcrumb remaining, load more content.
++    if (scrollPosition - scrollWidth / 10 < 1) {
++      list.ensureElementIsVisible(this.getItemAtIndex(CALL_STACK_PAGE_SIZE - 1).target);
++      this.dirty = false;
++
++      // Loads more stack frames from the debugger server cache.
++      DebuggerController.StackFrames.addMoreFrames();
++    }
++  },
++
++  /**
++   * Requests selection of a frame from the controller.
++   *
++   * @param number aDepth
++   *        The depth of the frame in the stack.
++   */
++  _selectFrame: function DVSF__selectFrame(aDepth) {
++    DebuggerController.StackFrames.selectFrame(aDepth);
++  },
++
++  _commandset: null,
++  _menupopup: null,
++  _cache: null,
++  _scrollTimeout: null,
++});
++
++/**
++ * Utility functions for handling stackframes.
++ */
++let StackFrameUtils = {
++  /**
++   * Create a textual representation for the specified stack frame
++   * to display in the stack frame container.
++   *
++   * @param object aFrame
++   *        The stack frame to label.
++   */
++  getFrameTitle: function SFU_getFrameTitle(aFrame) {
++    if (aFrame.type == "call") {
++      let c = aFrame.callee;
++      return (c.name || c.userDisplayName || c.displayName || "(anonymous)");
++    }
++    return "(" + aFrame.type + ")";
++  },
++
++  /**
++   * Constructs a scope label based on its environment.
++   *
++   * @param object aEnv
++   *        The scope's environment.
++   * @return string
++   *         The scope's label.
++   */
++  getScopeLabel: function SFU_getScopeLabel(aEnv) {
++    let name = "";
++
++    // Name the outermost scope Global.
++    if (!aEnv.parent) {
++      name = L10N.getStr("globalScopeLabel");
++    }
++    // Otherwise construct the scope name.
++    else {
++      name = aEnv.type.charAt(0).toUpperCase() + aEnv.type.slice(1);
++    }
++
++    let label = L10N.getFormatStr("scopeLabel", [name]);
++    switch (aEnv.type) {
++      case "with":
++      case "object":
++        label += " [" + aEnv.object.class + "]";
++        break;
++      case "function":
++        let f = aEnv.function;
++        label += " [" +
++          (f.name || f.userDisplayName || f.displayName || "(anonymous)") +
++        "]";
++        break;
++    }
++    return label;
++  },
++};
++
++/**
+  * Functions handling the filtering UI.
+  */
+ function FilterView() {
+   dumpn("FilterView was instantiated");
+@@ -872,9 +1235,9 @@ FilterView.prototype = {
+     // Meta+Shift+G and Ctrl+P focus previous matches.
+     else if ((e.char == "G" && e.metaKey) || e.char == "p" && e.ctrlKey) {
+       action = 1;
+     }
+-    // Return, enter down and up keys focus next or previous matches, while
++    // Return, enter, down and up keys focus next or previous matches, while
+     // the escape key switches focus from the search container.
+     else switch (e.keyCode) {
+       case e.DOM_VK_RETURN:
+       case e.DOM_VK_ENTER:
+@@ -1069,33 +1432,33 @@ create({ constructor: FilteredSourcesVie
+     panel.setAttribute("position", FILTERED_SOURCES_POPUP_POSITION);
+     document.documentElement.appendChild(panel);
+ 
+     this._searchbox = document.getElementById("searchbox");
+-    this._container = new StackList(panel);
++    this.node = new StackList(panel);
+ 
+-    this._container.itemFactory = this._createItemView;
+-    this._container.itemType = "vbox";
+-    this._container.addEventListener("click", this._onClick, false);
++    this.node.itemFactory = this._createItemView;
++    this.node.itemType = "vbox";
++    this.node.addEventListener("click", this._onClick, false);
+   },
+ 
+   /**
+    * Destruction function, called when the debugger is closed.
+    */
+   destroy: function DVFS_destroy() {
+     dumpn("Destroying the FilteredSourcesView");
+     document.documentElement.removeChild(this._panel);
+-    this._container.removeEventListener("click", this._onClick, false);
++    this.node.removeEventListener("click", this._onClick, false);
+   },
+ 
+   /**
+    * Sets the files container hidden or visible. It's hidden by default.
+    * @param boolean aFlag
+    */
+   set hidden(aFlag) {
+     if (aFlag) {
+-      this._container._parent.hidePopup();
++      this.node._parent.hidePopup();
+     } else {
+-      this._container._parent.openPopup(this._searchbox);
++      this.node._parent.openPopup(this._searchbox);
+     }
+   },
+ 
+   /**
+@@ -1120,12 +1483,10 @@ create({ constructor: FilteredSourcesVie
+       // Append a location item item to this container.
+       let trimmedLabel = SourceUtils.trimUrlLength(item.label);
+       let trimmedValue = SourceUtils.trimUrlLength(item.value);
+ 
+-      let locationItem = this.push(trimmedLabel, trimmedValue, {
+-        forced: true,
+-        relaxed: true,
+-        unsorted: true,
++      let locationItem = this.push([trimmedLabel, trimmedValue], {
++        relaxed: true, /* this container should allow dupes & degenerates */
+         attachment: {
+           fullLabel: item.label,
+           fullValue: item.value
+         }
+@@ -1145,9 +1506,9 @@ create({ constructor: FilteredSourcesVie
+    * Focuses the next found match in this container.
+    */
+   focusNext: function DVFS_focusNext() {
+     let nextIndex = this.selectedIndex + 1;
+-    if (nextIndex >= this.totalItems) {
++    if (nextIndex >= this.itemCount) {
+       nextIndex = 0;
+     }
+     this._updateSelection(this.getItemAtIndex(nextIndex));
+   },
+@@ -1157,9 +1518,9 @@ create({ constructor: FilteredSourcesVie
+    */
+   focusPrev: function DVFS_focusPrev() {
+     let prevIndex = this.selectedIndex - 1;
+     if (prevIndex < 0) {
+-      prevIndex = this.totalItems - 1;
++      prevIndex = this.itemCount - 1;
+     }
+     this._updateSelection(this.getItemAtIndex(prevIndex));
+   },
+ 
+diff --git a/browser/devtools/debugger/debugger-view.js b/browser/devtools/debugger/debugger-view.js
+--- a/browser/devtools/debugger/debugger-view.js
++++ b/browser/devtools/debugger/debugger-view.js
+@@ -4,10 +4,15 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ "use strict";
+ 
+-const SOURCE_URL_MAX_LENGTH = 64; // chars
++const SOURCE_URL_DEFAULT_MAX_LENGTH = 64; // chars
+ const SOURCE_SYNTAX_HIGHLIGHT_MAX_FILE_SIZE = 1048576; // 1 MB in bytes
++const STACK_FRAMES_SOURCE_URL_MAX_LENGTH = 15; // chars
++const STACK_FRAMES_SOURCE_URL_TRIM_SECTION = "center";
++const STACK_FRAMES_POPUP_SOURCE_URL_MAX_LENGTH = 32; // chars
++const STACK_FRAMES_POPUP_SOURCE_URL_TRIM_SECTION = "center";
++const STACK_FRAMES_SCROLL_DELAY = 100; // ms
+ const PANES_APPEARANCE_DELAY = 50; // ms
+ const BREAKPOINT_LINE_TOOLTIP_MAX_LENGTH = 1000; // chars
+ const BREAKPOINT_CONDITIONAL_POPUP_POSITION = "after_start";
+ const BREAKPOINT_CONDITIONAL_POPUP_OFFSET = 50; // px
+@@ -108,9 +113,9 @@ let DebuggerView = {
+ 
+   /**
+    * Destroys the UI for the window.
+    */
+-  _destroyWindow: function DV__initializeWindow() {
++  _destroyWindow: function DV__destroyWindow() {
+     dumpn("Destroying the DebuggerView window");
+ 
+     if (window._isRemoteDebugger || window._isChromeDebugger) {
+       Prefs.windowX = window.screenX;
+@@ -140,9 +145,9 @@ let DebuggerView = {
+ 
+   /**
+    * Destroys the UI for all the displayed panes.
+    */
+-  _destroyPanes: function DV__initializePanes() {
++  _destroyPanes: function DV__destroyPanes() {
+     dumpn("Destroying the DebuggerView panes");
+ 
+     Prefs.stackframesWidth = this._stackframesAndBreakpoints.getAttribute("width");
+     Prefs.variablesWidth = this._variablesAndExpressions.getAttribute("width");
+@@ -574,113 +579,123 @@ MenuItem.prototype = {
+  * Language:
+  *   - An "item" is an instance (or compatible iterface) of a MenuItem.
+  *   - An "element" or "node" is a nsIDOMNode.
+  *
+- * The container node supplied to all instances of this constructor can either
+- * be a <menulist> element, or any other object interfacing the following
+- * methods:
+- *   - function:nsIDOMNode appendItem(aLabel:string, aValue:string)
++ * The container node or widget supplied to all instances of this constructor
++ * can either be a <menulist> element, or any other object interfacing the
++ * following methods:
+  *   - function:nsIDOMNode insertItemAt(aIndex:number, aLabel:string, aValue:string)
+  *   - function:nsIDOMNode getItemAtIndex(aIndex:number)
+  *   - function removeChild(aChild:nsIDOMNode)
+  *   - function removeAllItems()
+- *   - get:number itemCount()
+- *   - get:number selectedIndex()
+- *   - set selectedIndex(aIndex:number)
+  *   - get:nsIDOMNode selectedItem()
+  *   - set selectedItem(aChild:nsIDOMNode)
+  *   - function getAttribute(aName:string)
+  *   - function setAttribute(aName:string, aValue:string)
+  *   - function removeAttribute(aName:string)
+  *   - function addEventListener(aName:string, aCallback:function, aBubbleFlag:boolean)
+  *   - function removeEventListener(aName:string, aCallback:function, aBubbleFlag:boolean)
+- *
+- * @param nsIDOMNode aContainerNode [optional]
+- *        The element associated with the displayed container. Although required,
+- *        derived objects may set this value later, upon debugger initialization.
+  */
+-function MenuContainer(aContainerNode) {
+-  this._container = aContainerNode;
+-  this._stagedItems = [];
+-  this._itemsByLabel = new Map();
+-  this._itemsByValue = new Map();
+-  this._itemsByElement = new Map();
+-}
++function MenuContainer() {}
++const FIRST = 0;
++const LAST = -1;
+ 
+ MenuContainer.prototype = {
+   /**
++   * Sets the element node or widget associated with this displayed container.
++   * @param nsIDOMNode | object aWidget
++   */
++  set node(aWidget) {
++    this._container = aWidget;
++    this._stagedItems = [];
++    this._itemsByLabel = new Map();
++    this._itemsByValue = new Map();
++    this._itemsByElement = new Map();
++  },
++
++  /**
++   * Gets the element node or widget associated with this displayed container.
++   * @return nsIDOMNode | object
++   */
++  get node() this._container,
++
++  /**
+    * Prepares an item to be added to this container. This allows for a large
+    * number of items to be batched up before being alphabetically sorted and
+    * added in this menu.
+    *
+-   * If the "forced" flag is true, the item will be immediately inserted at the
+-   * correct position in this container, so that all the items remain sorted.
+-   * This can (possibly) be much slower than batching up multiple items.
++   * If the "staged" flag is not set to true, the item will be immediately
++   * inserted at the correct position in this container, so that all the items
++   * remain sorted. This can (possibly) be much slower than batching up
++   * multiple items.
+    *
+    * By default, this container assumes that all the items should be displayed
+-   * sorted by their label. This can be overridden with the "unsorted" flag.
++   * sorted by their label. This can be overridden with the "index" flag,
++   * specifying on which position should the item be appended.
+    *
+    * Furthermore, this container makes sure that all the items are unique
+    * (two items with the same label or value are not allowed) and non-degenerate
+    * (items with "undefined" or "null" labels/values). This can, as well, be
+    * overridden via the "relaxed" flag.
+    *
+-   * @param string aLabel
+-   *        The label displayed in the container.
+-   * @param string aValue
+-   *        The actual internal value of the item.
++   * @param nsIDOMNode | object aContents
++   *        An nsIDOMNode, or an array containing the following properties:
++   *          - label: the label displayed in the container
++   *          - value: the actual internal value of the item
++   *          - description: an optional description of the item
+    * @param object aOptions [optional]
+    *        Additional options or flags supported by this operation:
+-   *          - forced: true to force the item to be immediately appended
+-   *          - unsorted: true if the items should not always remain sorted
++   *          - staged: true to stage the item to be appended later
++   *          - index: specifies on which position should the item be appended
+    *          - relaxed: true if this container should allow dupes & degenerates
+-   *          - description: an optional description of the item
+    *          - tooltip: an optional tooltip for the item
+    *          - attachment: some attached primitive/object
+    * @return MenuItem
+-   *         The item associated with the displayed element if a forced push,
++   *         The item associated with the displayed element if an unstaged push,
+    *         undefined if the item was staged for a later commit.
+    */
+-  push: function DVMC_push(aLabel, aValue, aOptions = {}) {
+-    let item = new MenuItem(
+-      aLabel, aValue, aOptions.description, aOptions.attachment);
++  push: function DVMC_push(aContents, aOptions = {}) {
++    if (aContents instanceof Node || aContents instanceof Element) {
++      aOptions.nsIDOMNode = aContents;
++      aContents = [];
++    }
++
++    let [label, value, description] = aContents;
++    let item = new MenuItem(label, value, description || "", aOptions.attachment);
+ 
+     // Batch the item to be added later.
+-    if (!aOptions.forced) {
++    if (aOptions.staged) {
+       this._stagedItems.push({ item: item, options: aOptions });
+     }
+-    // Immediately insert the item at the specified index.
+-    else if (aOptions.forced && aOptions.forced.atIndex !== undefined) {
+-      return this._insertItemAt(aOptions.forced.atIndex, item, aOptions);
++    // Find the target position in this container and insert the item there.
++    else if (!("index" in aOptions)) {
++      return this._insertItemAt(this._findExpectedIndex(label), item, aOptions);
+     }
+-    // Find the target position in this container and insert the item there.
+-    else if (!aOptions.unsorted) {
+-      return this._insertItemAt(this._findExpectedIndex(aLabel), item, aOptions);
+-    }
+-    // Just append the item in this container.
++    // Insert the item at the specified index. If negative or out of bounds,
++    // the item will be simply appended.
+     else {
+-      return this._appendItem(item, aOptions);
++      return this._insertItemAt(aOptions.index, item, aOptions);
+     }
+   },
+ 
+   /**
+    * Flushes all the prepared items into this container.
+    *
+    * @param object aOptions [optional]
+    *        Additional options or flags supported by this operation:
+-   *          - unsorted: true if the items should not be sorted beforehand
++   *          - sorted: true to sort all the items before adding them
+    */
+   commit: function DVMC_commit(aOptions = {}) {
+     let stagedItems = this._stagedItems;
+ 
+     // By default, sort the items before adding them to this container.
+-    if (!aOptions.unsorted) {
++    if (aOptions.sorted) {
+       stagedItems.sort(function(a, b) a.item.label.toLowerCase() >
+                                       b.item.label.toLowerCase());
+     }
+     // Append the prepared items to this container.
+     for (let { item, options } of stagedItems) {
+-      this._appendItem(item, options);
++      this._insertItemAt(LAST, item, options);
+     }
+     // Recreate the temporary items list for ulterior pushes.
+     this._stagedItems = [];
+   },
+@@ -711,8 +726,11 @@ MenuContainer.prototype = {
+    * @param MenuItem aItem
+    *        The item associated with the element to remove.
+    */
+   remove: function DVMC__remove(aItem) {
++    if (!aItem) {
++      return;
++    }
+     this._container.removeChild(aItem.target);
+     this._untangleItem(aItem);
+   },
+ 
+@@ -720,12 +738,12 @@ MenuContainer.prototype = {
+    * Removes all items from this container.
+    */
+   empty: function DVMC_empty() {
+     this._preferredValue = this.selectedValue;
+-    this._container.selectedIndex = -1;
++    this._container.selectedItem = null;
++    this._container.removeAllItems();
+     this._container.setAttribute("label", this._emptyLabel);
+     this._container.removeAttribute("tooltiptext");
+-    this._container.removeAllItems();
+ 
+     for (let [, item] of this._itemsByElement) {
+       this._untangleItem(item);
+     }
+@@ -736,8 +754,28 @@ MenuContainer.prototype = {
+     this._stagedItems = [];
+   },
+ 
+   /**
++   * Does not remove any item in this container. Instead, it overrides the
++   * current label to signal that it is unavailable and removes the tooltip.
++   */
++  setUnavailable: function DVMC_setUnavailable() {
++    this._container.setAttribute("label", this._unavailableLabel);
++    this._container.removeAttribute("tooltiptext");
++  },
++
++  /**
++   * The label string automatically added to this container when there are
++   * no child nodes present.
++   */
++  _emptyLabel: "",
++
++  /**
++   * The label string added to this container when it is marked as unavailable.
++   */
++  _unavailableLabel: "",
++
++  /**
+    * Toggles all the items in this container hidden or visible.
+    *
+    * @param boolean aVisibleFlag
+    *        Specifies the intended visibility.
+@@ -748,17 +786,8 @@ MenuContainer.prototype = {
+     }
+   },
+ 
+   /**
+-   * Does not remove any item in this container. Instead, it overrides the
+-   * current label to signal that it is unavailable and removes the tooltip.
+-   */
+-  setUnavailable: function DVMC_setUnavailable() {
+-    this._container.setAttribute("label", this._unavailableLabel);
+-    this._container.removeAttribute("tooltiptext");
+-  },
+-
+-  /**
+    * Checks whether an item with the specified label is among the elements
+    * shown in this container.
+    *
+    * @param string aLabel
+@@ -790,16 +819,14 @@ MenuContainer.prototype = {
+    * elements shown in this container.
+    *
+    * @param string aValue
+    *        The item's value.
+-   * @param function aTrim [optional]
+-   *        A custom trimming function.
++   * @param function aTrim
++   *        The custom trimming function.
+    * @return boolean
+    *         True if the trimmed value is known, false otherwise.
+    */
+-  containsTrimmedValue:
+-  function DVMC_containsTrimmedValue(aValue,
+-                                     aTrim = SourceUtils.trimUrlQuery) {
++  containsTrimmedValue: function DVMC_containsTrimmedValue(aValue, aTrim) {
+     let trimmedValue = aTrim(aValue);
+ 
+     for (let [value] of this._itemsByValue) {
+       if (aTrim(value) == trimmedValue) {
+@@ -818,9 +845,11 @@ MenuContainer.prototype = {
+   /**
+    * Retrieves the selected element's index in this container.
+    * @return number
+    */
+-  get selectedIndex() this._container.selectedIndex,
++  get selectedIndex()
++    this._container.selectedItem ?
++    this.indexOfItem(this.selectedItem) : -1,
+ 
+   /**
+    * Retrieves the item associated with the selected element.
+    * @return MenuItem
+@@ -848,15 +877,17 @@ MenuContainer.prototype = {
+   /**
+    * Selects the element at the specified index in this container.
+    * @param number aIndex
+    */
+-  set selectedIndex(aIndex) this._container.selectedIndex = aIndex,
++  set selectedIndex(aIndex)
++    this._container.selectedItem = this._container.getItemAtIndex(aIndex),
+ 
+   /**
+    * Selects the element with the entangled item in this container.
+    * @param MenuItem aItem
+    */
+-  set selectedItem(aItem) this._container.selectedItem = aItem.target,
++  set selectedItem(aItem)
++    this._container.selectedItem = aItem ? aItem.target : null,
+ 
+   /**
+    * Selects the element with the specified label in this container.
+    * @param string aLabel
+@@ -934,8 +965,27 @@ MenuContainer.prototype = {
+     return null;
+   },
+ 
+   /**
++   * Finds the index of an item in the container.
++   *
++   * @param MenuItem
++   *        The element item get the index for.
++   * @return number
++   *         The index of the matched item, or -1 if nothing is found.
++   */
++  indexOfItem: function indexOfItem({target}) {
++    let itemCount = this._itemsByElement.size;
++
++    for (let i = 0; i < itemCount; i++) {
++      if (this._container.getItemAtIndex(i) == target) {
++        return i;
++      }
++    }
++    return -1;
++  },
++
++  /**
+    * Returns the list of labels in this container.
+    * @return array
+    */
+   get labels() {
+@@ -961,11 +1011,9 @@ MenuContainer.prototype = {
+   /**
+    * Gets the total number of items in this container.
+    * @return number
+    */
+-  get totalItems() {
+-    return this._itemsByElement.size;
+-  },
++  get itemCount() this._itemsByElement.size,
+ 
+   /**
+    * Returns a list of all the visible (non-hidden) items in this container.
+    * @return array
+@@ -1037,46 +1085,19 @@ MenuContainer.prototype = {
+    *         The expected item index.
+    */
+   _findExpectedIndex: function DVMC__findExpectedIndex(aLabel) {
+     let container = this._container;
+-    let itemCount = container.itemCount;
++    let itemCount = this.itemCount;
+ 
+     for (let i = 0; i < itemCount; i++) {
+-      if (this.getItemForElement(container.getItemAtIndex(i)).label > aLabel) {
++      if (this.getItemAtIndex(i).label > aLabel) {
+         return i;
+       }
+     }
+     return itemCount;
+   },
+ 
+   /**
+-   * Immediately appends an item in this container.
+-   *
+-   * @param MenuItem aItem
+-   *        An object containing a label and a value property.
+-   * @param object aOptions [optional]
+-   *        Additional options or flags supported by this operation:
+-   *          - relaxed: true if this container should allow dupes & degenerates
+-   * @return MenuItem
+-   *         The item associated with the displayed element, null if rejected.
+-   */
+-  _appendItem: function DVMC__appendItem(aItem, aOptions = {}) {
+-    if (!aOptions.relaxed && !this.isEligible(aItem)) {
+-      return null;
+-    }
+-
+-    this._entangleItem(aItem, this._container.appendItem(
+-      aItem.label, aItem.value, "", aOptions.attachment));
+-
+-    // Handle any additional options after entangling the item.
+-    if (aOptions.tooltip) {
+-      aItem._target.setAttribute("tooltiptext", aOptions.tooltip);
+-    }
+-
+-    return aItem;
+-  },
+-
+-  /**
+    * Immediately inserts an item in this container at the specified index.
+    *
+    * @param number aIndex
+    *        The position in the container intended for this item.
+@@ -1084,24 +1105,29 @@ MenuContainer.prototype = {
+    *        An object containing a label and a value property.
+    * @param object aOptions [optional]
+    *        Additional options or flags supported by this operation:
+    *          - relaxed: true if this container should allow dupes & degenerates
++   *          - tooltip: an optional tooltip for the item
+    * @return MenuItem
+    *         The item associated with the displayed element, null if rejected.
+    */
+   _insertItemAt: function DVMC__insertItemAt(aIndex, aItem, aOptions) {
+     if (!aOptions.relaxed && !this.isEligible(aItem)) {
+       return null;
+     }
+ 
+-    this._entangleItem(aItem, this._container.insertItemAt(
+-      aIndex, aItem.label, aItem.value, "", aOptions.attachment));
++    this._entangleItem(aItem, this._container.insertItemAt(aIndex,
++      aOptions.nsIDOMNode || aItem.label,
++      aItem.value,
++      aItem.description,
++      aOptions.attachment));
+ 
+     // Handle any additional options after entangling the item.
+     if (aOptions.tooltip) {
+       aItem._target.setAttribute("tooltiptext", aOptions.tooltip);
+     }
+ 
++    // Return the item associated with the displayed element.
+     return aItem;
+   },
+ 
+   /**
+@@ -1110,27 +1136,22 @@ MenuContainer.prototype = {
+    * @param MenuItem aItem
+    *        The item describing the element.
+    * @param nsIDOMNode aElement
+    *        The element displaying the item.
+-   * @return MenuItem
+-   *         The same item.
+    */
+   _entangleItem: function DVMC__entangleItem(aItem, aElement) {
+     this._itemsByLabel.set(aItem.label, aItem);
+     this._itemsByValue.set(aItem.value, aItem);
+     this._itemsByElement.set(aElement, aItem);
+ 
+     aItem._target = aElement;
+-    return aItem;
+   },
+ 
+   /**
+    * Untangles an item (model) from a displayed node element (view).
+    *
+    * @param MenuItem aItem
+    *        The item describing the element.
+-   * @return MenuItem
+-   *         The same item.
+    */
+   _untangleItem: function DVMC__untangleItem(aItem) {
+     if (aItem.finalize instanceof Function) {
+       aItem.finalize(aItem);
+@@ -1140,9 +1161,27 @@ MenuContainer.prototype = {
+     this._itemsByValue.delete(aItem.value);
+     this._itemsByElement.delete(aItem.target);
+ 
+     aItem._target = null;
+-    return aItem;
++  },
++
++  /**
++   * Helper decorating some of the DOM methods of a widget (not element node)
++   * associated with this menu container, to satisfy the required interface.
++   * @see MenuContainer constructor
++   *
++   * @param string aTarget
++   *        The name of a nsIDOMNode property in the widget.
++   */
++  decorateWidgetMethods: function DVMC_decorateWidgetMethods(aTarget) {
++    let widget = this.node;
++    let targetNode = widget[aTarget];
++
++    widget.getAttribute = targetNode.getAttribute.bind(targetNode);
++    widget.setAttribute = targetNode.setAttribute.bind(targetNode);
++    widget.removeAttribute = targetNode.removeAttribute.bind(targetNode);
++    widget.addEventListener = targetNode.addEventListener.bind(targetNode);
++    widget.removeEventListener = targetNode.removeEventListener.bind(targetNode);
+   },
+ 
+   /**
+    * A generator-iterator over all the items in this container.
+@@ -1157,17 +1196,18 @@ MenuContainer.prototype = {
+   _stagedItems: null,
+   _itemsByLabel: null,
+   _itemsByValue: null,
+   _itemsByElement: null,
+-  _preferredValue: null,
+-  _emptyLabel: "",
+-  _unavailableLabel: ""
++  _preferredValue: null
+ };
+ 
+ /**
+  * A stacked list of items, compatible with MenuContainer instances, used for
+  * displaying views like the StackFrames, Breakpoints etc.
+  *
++ * You should never need to access these methods directly, use the wrapper
++ * MenuContainer instances.
++ *
+  * Custom methods introduced by this view, not necessary for a MenuContainer:
+  * set emptyText(aValue:string)
+  * set permaText(aValue:string)
+  * set itemType(aType:string)
+@@ -1181,32 +1221,16 @@ function StackList(aAssociatedNode) {
+ 
+   // Create an internal list container.
+   this._list = document.createElement("vbox");
+   this._parent.appendChild(this._list);
++
++  // Delegate some of the associated node's methods to satisfy the interface
++  // required by MenuContainer instances.
++  MenuContainer.prototype.decorateWidgetMethods.call({ node: this }, "_parent");
+ }
+ 
+ StackList.prototype = {
+   /**
+-   * Immediately appends an item in this container.
+-   *
+-   * @param string aLabel
+-   *        The label displayed in the container.
+-   * @param string aValue
+-   *        The actual internal value of the item.
+-   * @param string aDescription [optional]
+-   *        An optional description of the item.
+-   * @param any aAttachment [optional]
+-   *        Some attached primitive/object.
+-   * @return nsIDOMNode
+-   *         The element associated with the displayed item.
+-   */
+-  appendItem:
+-  function DVSL_appendItem(aLabel, aValue, aDescription, aAttachment) {
+-    return this.insertItemAt(
+-      Number.MAX_VALUE, aLabel, aValue, aDescription, aAttachment);
+-  },
+-
+-  /**
+    * Immediately inserts an item in this container at the specified index.
+    *
+    * @param number aIndex
+    *        The position in the container intended for this item.
+@@ -1226,9 +1250,9 @@ StackList.prototype = {
+     let list = this._list;
+     let childNodes = list.childNodes;
+ 
+     let element = document.createElement(this.itemType);
+-    this._createItemView(element, aLabel, aValue, aAttachment);
++    this.itemFactory(element, aLabel, aValue, aAttachment);
+     this._removeEmptyNotice();
+ 
+     return list.insertBefore(element, childNodes[aIndex]);
+   },
+@@ -1253,9 +1277,12 @@ StackList.prototype = {
+    */
+   removeChild: function DVSL__removeChild(aChild) {
+     this._list.removeChild(aChild);
+ 
+-    if (!this.itemCount) {
++    if (this._selectedItem == aChild) {
++      this._selectedItem = null;
++    }
++    if (!this._list.hasChildNodes()) {
+       this._appendEmptyNotice();
+     }
+   },
+ 
+@@ -1273,32 +1300,12 @@ StackList.prototype = {
+     parent.scrollTop = 0;
+     parent.scrollLeft = 0;
+ 
+     this._selectedItem = null;
+-    this._selectedIndex = -1;
+     this._appendEmptyNotice();
+   },
+ 
+   /**
+-   * Gets the number of child nodes present in this container.
+-   * @return number
+-   */
+-  get itemCount() this._list.childNodes.length,
+-
+-  /**
+-   * Gets the index of the selected child node in this container.
+-   * @return number
+-   */
+-  get selectedIndex() this._selectedIndex,
+-
+-  /**
+-   * Sets the index of the selected child node in this container.
+-   * Only one child node may be selected at a time.
+-   * @param number aIndex
+-   */
+-  set selectedIndex(aIndex) this.selectedItem = this._list.childNodes[aIndex],
+-
+-  /**
+    * Gets the currently selected child node in this container.
+    * @return nsIDOMNode
+    */
+   get selectedItem() this._selectedItem,
+@@ -1311,86 +1318,20 @@ StackList.prototype = {
+     let childNodes = this._list.childNodes;
+ 
+     if (!aChild) {
+       this._selectedItem = null;
+-      this._selectedIndex = -1;
+     }
+     for (let node of childNodes) {
+       if (node == aChild) {
+         node.classList.add("selected");
+-        this._selectedIndex = Array.indexOf(childNodes, node);
+         this._selectedItem = node;
+       } else {
+         node.classList.remove("selected");
+       }
+     }
+   },
+ 
+   /**
+-   * Applies an attribute to this container.
+-   *
+-   * @param string aName
+-   *        The name of the attribute to set.
+-   * @return string
+-   *         The attribute value.
+-   */
+-  getAttribute: function DVSL_setAttribute(aName) {
+-    return this._parent.getAttribute(aName);
+-  },
+-
+-  /**
+-   * Applies an attribute to this container.
+-   *
+-   * @param string aName
+-   *        The name of the attribute to set.
+-   * @param any aValue
+-   *        The supplied attribute value.
+-   */
+-  setAttribute: function DVSL_setAttribute(aName, aValue) {
+-    this._parent.setAttribute(aName, aValue);
+-  },
+-
+-  /**
+-   * Removes an attribute applied to this container.
+-   *
+-   * @param string aName
+-   *        The name of the attribute to remove.
+-   */
+-  removeAttribute: function DVSL_removeAttribute(aName) {
+-    this._parent.removeAttribute(aName);
+-  },
+-
+-  /**
+-   * Adds an event listener to this container.
+-   *
+-   * @param string aName
+-   *        The name of the listener to set.
+-   * @param function aCallback
+-   *        The function to be called when the event is triggered.
+-   * @param boolean aBubbleFlag
+-   *        True if the event should bubble.
+-   */
+-  addEventListener:
+-  function DVSL_addEventListener(aName, aCallback, aBubbleFlag) {
+-    this._parent.addEventListener(aName, aCallback, aBubbleFlag);
+-  },
+-
+-  /**
+-   * Removes an event listener added to this container.
+-   *
+-   * @param string aName
+-   *        The name of the listener to remove.
+-   * @param function aCallback
+-   *        The function called when the event was triggered.
+-   * @param boolean aBubbleFlag
+-   *        True if the event was bubbling.
+-   */
+-  removeEventListener:
+-  function DVSL_removeEventListener(aName, aCallback, aBubbleFlag) {
+-    this._parent.removeEventListener(aName, aCallback, aBubbleFlag);
+-  },
+-
+-  /**
+    * Sets the text displayed permanently in this container's header.
+    * @param string aValue
+    */
+   set permaText(aValue) {
+@@ -1413,45 +1354,24 @@ StackList.prototype = {
+     this._appendEmptyNotice();
+   },
+ 
+   /**
+-   * Overrides the item's element type (e.g. "vbox" or "hbox").
++   * Overrides an item's element type (e.g. "vbox" or "hbox") in this container.
+    * @param string aType
+    */
+   itemType: "hbox",
+ 
+   /**
+-   * Overrides the customization function for creating an item's UI.
+-   * @param function aCallback
+-   */
+-  set itemFactory(aCallback) this._createItemView = aCallback,
+-
+-  /**
+-   * Customization function for creating an item's UI for this container.
++   * Customization function for creating an item's UI in this container.
+    *
+    * @param nsIDOMNode aElementNode
+    *        The element associated with the displayed item.
+    * @param string aLabel
+    *        The item's label.
+    * @param string aValue
+    *        The item's value.
+    */
+-  _createItemView: function DVSL__createItemView(aElementNode, aLabel, aValue) {
+-    let labelNode = document.createElement("label");
+-    let valueNode = document.createElement("label");
+-    let spacer = document.createElement("spacer");
+-
+-    labelNode.setAttribute("value", aLabel);
+-    valueNode.setAttribute("value", aValue);
+-    spacer.setAttribute("flex", "1");
+-
+-    aElementNode.appendChild(labelNode);
+-    aElementNode.appendChild(spacer);
+-    aElementNode.appendChild(valueNode);
+-
+-    aElementNode.labelNode = labelNode;
+-    aElementNode.valueNode = valueNode;
+-  },
++  itemFactory: null,
+ 
+   /**
+    * Creates and appends a label displayed permanently in this container's header.
+    */
+@@ -1497,9 +1417,8 @@ StackList.prototype = {
+   },
+ 
+   _parent: null,
+   _list: null,
+-  _selectedIndex: -1,
+   _selectedItem: null,
+   _permaTextNode: null,
+   _permaTextValue: "",
+   _emptyTextNode: null,
+diff --git a/browser/devtools/debugger/debugger.css b/browser/devtools/debugger/debugger.css
+--- a/browser/devtools/debugger/debugger.css
++++ b/browser/devtools/debugger/debugger.css
+@@ -17,16 +17,8 @@
+   display: none;
+ }
+ 
+ /**
+- * Stack frames
+- */
+-
+-#stackframes {
+-  overflow: auto;
+-}
+-
+-/**
+  * Breakpoints view
+  */
+ 
+ #breakpoints {
+diff --git a/browser/devtools/debugger/debugger.xul b/browser/devtools/debugger/debugger.xul
+--- a/browser/devtools/debugger/debugger.xul
++++ b/browser/devtools/debugger/debugger.xul
+@@ -5,8 +5,9 @@
+ <?xml-stylesheet href="chrome://browser/skin/" type="text/css"?>
+ <?xml-stylesheet href="chrome://browser/content/debugger.css" type="text/css"?>
+ <?xml-stylesheet href="chrome://browser/skin/devtools/common.css" type="text/css"?>
+ <?xml-stylesheet href="chrome://browser/skin/devtools/debugger.css" type="text/css"?>
++<?xml-stylesheet href="chrome://browser/skin/devtools/inspector.css" type="text/css"?>
+ <!DOCTYPE window [
+ <!ENTITY % debuggerDTD SYSTEM "chrome://browser/locale/devtools/debugger.dtd">
+   %debuggerDTD;
+ ]>
+@@ -234,11 +235,11 @@
+                 sizetopopup="none" hidden="true"/>
+       <menulist id="sources"
+                 class="devtools-menulist"
+                 sizetopopup="none"/>
++      <vbox id="stackframes" flex="1"/>
+       <textbox id="searchbox"
+                class="devtools-searchinput" type="search"/>
+-      <spacer flex="1"/>
+       <toolbarbutton id="toggle-panes"
+                      class="devtools-toolbarbutton"
+                      tooltiptext="&debuggerUI.panesButton.tooltip;"
+                      tabindex="0"/>
+@@ -294,11 +295,9 @@
+       <splitter id="globalsearch-splitter"
+                 class="devtools-horizontal-splitter" hidden="true"/>
+       <hbox flex="1">
+         <vbox id="stackframes+breakpoints">
+-          <vbox id="stackframes" flex="1"/>
+-          <splitter class="devtools-horizontal-splitter"/>
+-          <vbox id="breakpoints"/>
++          <vbox id="breakpoints" flex="1"/>
+         </vbox>
+         <splitter class="devtools-side-splitter"/>
+         <vbox id="editor" flex="1"/>
+         <splitter class="devtools-side-splitter"/>
+diff --git a/browser/devtools/debugger/test/browser_dbg_bug727429_watch-expressions-01.js b/browser/devtools/debugger/test/browser_dbg_bug727429_watch-expressions-01.js
+--- a/browser/devtools/debugger/test/browser_dbg_bug727429_watch-expressions-01.js
++++ b/browser/devtools/debugger/test/browser_dbg_bug727429_watch-expressions-01.js
+@@ -141,9 +141,9 @@ function test()
+     gWatch.addExpression(string);
+ 
+     is(gWatch.getExpressions().length, total,
+       "There should be " + total + " watch expressions available (1)");
+-    is(gWatch.totalItems, total,
++    is(gWatch.itemCount, total,
+       "There should be " + total + " watch expressions available (2)");
+ 
+     ok(gWatch.getItemAtIndex(index),
+       "The expression at index " + index + " should be available");
+@@ -208,9 +208,9 @@ function test()
+     gWatch.removeExpressionAt(index);
+ 
+     is(gWatch.getExpressions().length, total,
+       "There should be " + total + " watch expressions available (1)");
+-    is(gWatch.totalItems, total,
++    is(gWatch.itemCount, total,
+       "There should be " + total + " watch expressions available (2)");
+ 
+     ok(gWatch.getItemAtIndex(index),
+       "The expression at index " + index + " should still be available");
+diff --git a/browser/devtools/debugger/test/browser_dbg_displayName.js b/browser/devtools/debugger/test/browser_dbg_displayName.js
+--- a/browser/devtools/debugger/test/browser_dbg_displayName.js
++++ b/browser/devtools/debugger/test/browser_dbg_displayName.js
+@@ -35,9 +35,9 @@ function testAnonCall() {
+ 
+       is(frames.querySelectorAll(".dbg-stackframe").length, 3,
+         "Should have three frames.");
+ 
+-      is(frames.querySelector("#stackframe-0 .dbg-stackframe-name").getAttribute("value"),
++      is(frames.querySelector("#stackframe-0 .dbg-stackframe-title").getAttribute("value"),
+         "anonFunc", "Frame name should be anonFunc");
+ 
+       testInferredName();
+     }}, 0);
+@@ -57,9 +57,9 @@ function testInferredName() {
+ 
+       is(frames.querySelectorAll(".dbg-stackframe").length, 3,
+         "Should have three frames.");
+ 
+-      is(frames.querySelector("#stackframe-0 .dbg-stackframe-name").getAttribute("value"),
++      is(frames.querySelector("#stackframe-0 .dbg-stackframe-title").getAttribute("value"),
+         "a/<", "Frame name should be a/<");
+ 
+       resumeAndFinish();
+     }}, 0);
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-01.js b/browser/devtools/debugger/test/browser_dbg_propertyview-01.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-01.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-01.js
+@@ -80,9 +80,9 @@ function testlabelshortening() {
+ 
+     urls.forEach(function(url) {
+       executeSoon(function() {
+         let loc = url.href + url.leaf;
+-        vs.push(sv.getSourceLabel(loc, url.href), loc, { forced: true });
++        vs.push([sv.getSourceLabel(loc), loc], { forced: true });
+       });
+     });
+ 
+     executeSoon(function() {
+diff --git a/browser/devtools/debugger/test/browser_dbg_scripts-searching-files_ui.js b/browser/devtools/debugger/test/browser_dbg_scripts-searching-files_ui.js
+--- a/browser/devtools/debugger/test/browser_dbg_scripts-searching-files_ui.js
++++ b/browser/devtools/debugger/test/browser_dbg_scripts-searching-files_ui.js
+@@ -49,14 +49,14 @@ function firstSearch() {
+     gDebugger.removeEventListener(aEvent.type, _onEvent);
+     info("Current script url:\n" + gScripts.selectedValue + "\n");
+     info("Debugger editor text:\n" + gEditor.getText() + "\n");
+ 
+-    is(gFilteredSources.totalItems, 3,
++    is(gFilteredSources.itemCount, 3,
+       "The filtered sources view should have 3 items available.");
+     is(gFilteredSources.visibleItems.length, 3,
+       "The filtered sources view should have 3 items visible.");
+ 
+-    for (let i = 0; i < gFilteredSources.totalItems; i++) {
++    for (let i = 0; i < gFilteredSources.itemCount; i++) {
+       is(gFilteredSources.labels[i],
+          gDebugger.SourceUtils.trimUrlLength(gScripts.labels[i]),
+         "The filtered sources view should have the correct labels.");
+       is(gFilteredSources.values[i],
+@@ -126,14 +126,14 @@ function secondSearch() {
+     proceeded = true;
+     info("Current script url:\n" + gScripts.selectedValue + "\n");
+     info("Debugger editor text:\n" + gEditor.getText() + "\n");
+ 
+-    is(gFilteredSources.totalItems, 1,
++    is(gFilteredSources.itemCount, 1,
+       "The filtered sources view should have 1 items available.");
+     is(gFilteredSources.visibleItems.length, 1,
+       "The filtered sources view should have 1 items visible.");
+ 
+-    for (let i = 0; i < gFilteredSources.totalItems; i++) {
++    for (let i = 0; i < gFilteredSources.itemCount; i++) {
+       is(gFilteredSources.labels[i],
+          gDebugger.SourceUtils.trimUrlLength(gScripts.visibleItems[i].label),
+         "The filtered sources view should have the correct labels.");
+       is(gFilteredSources.values[i],
+@@ -203,14 +203,14 @@ function thirdSearch() {
+     proceeded = true;
+     info("Current script url:\n" + gScripts.selectedValue + "\n");
+     info("Debugger editor text:\n" + gEditor.getText() + "\n");
+ 
+-    is(gFilteredSources.totalItems, 3,
++    is(gFilteredSources.itemCount, 3,
+       "The filtered sources view should have 3 items available.");
+     is(gFilteredSources.visibleItems.length, 3,
+       "The filtered sources view should have 3 items visible.");
+ 
+-    for (let i = 0; i < gFilteredSources.totalItems; i++) {
++    for (let i = 0; i < gFilteredSources.itemCount; i++) {
+       is(gFilteredSources.labels[i],
+          gDebugger.SourceUtils.trimUrlLength(gScripts.visibleItems[i].label),
+         "The filtered sources view should have the correct labels.");
+       is(gFilteredSources.values[i],
+@@ -261,9 +261,9 @@ function goDown() {
+   gDebugger.addEventListener("Debugger:SourceShown", function _onEvent(aEvent) {
+     info("Current script url:\n" + gScripts.selectedValue + "\n");
+     info("Debugger editor text:\n" + gEditor.getText() + "\n");
+ 
+-    is(gFilteredSources.totalItems, 3,
++    is(gFilteredSources.itemCount, 3,
+       "The filtered sources view should have 3 items available.");
+     is(gFilteredSources.visibleItems.length, 3,
+       "The filtered sources view should have 3 items visible.");
+ 
+@@ -299,9 +299,9 @@ function goDownAgain() {
+   gDebugger.addEventListener("Debugger:SourceShown", function _onEvent(aEvent) {
+     info("Current script url:\n" + gScripts.selectedValue + "\n");
+     info("Debugger editor text:\n" + gEditor.getText() + "\n");
+ 
+-    is(gFilteredSources.totalItems, 3,
++    is(gFilteredSources.itemCount, 3,
+       "The filtered sources view should have 3 items available.");
+     is(gFilteredSources.visibleItems.length, 3,
+       "The filtered sources view should have 3 items visible.");
+ 
+@@ -337,9 +337,9 @@ function goDownAndWrap() {
+   gDebugger.addEventListener("Debugger:SourceShown", function _onEvent(aEvent) {
+     info("Current script url:\n" + gScripts.selectedValue + "\n");
+     info("Debugger editor text:\n" + gEditor.getText() + "\n");
+ 
+-    is(gFilteredSources.totalItems, 3,
++    is(gFilteredSources.itemCount, 3,
+       "The filtered sources view should have 3 items available.");
+     is(gFilteredSources.visibleItems.length, 3,
+       "The filtered sources view should have 3 items visible.");
+ 
+@@ -375,9 +375,9 @@ function goUpAndWrap() {
+   gDebugger.addEventListener("Debugger:SourceShown", function _onEvent(aEvent) {
+     info("Current script url:\n" + gScripts.selectedValue + "\n");
+     info("Debugger editor text:\n" + gEditor.getText() + "\n");
+ 
+-    is(gFilteredSources.totalItems, 3,
++    is(gFilteredSources.itemCount, 3,
+       "The filtered sources view should have 3 items available.");
+     is(gFilteredSources.visibleItems.length, 3,
+       "The filtered sources view should have 3 items visible.");
+ 
+@@ -413,9 +413,9 @@ function clickAndSwitch() {
+   gDebugger.addEventListener("Debugger:SourceShown", function _onEvent(aEvent) {
+     info("Current script url:\n" + gScripts.selectedValue + "\n");
+     info("Debugger editor text:\n" + gEditor.getText() + "\n");
+ 
+-    is(gFilteredSources.totalItems, 3,
++    is(gFilteredSources.itemCount, 3,
+       "The filtered sources view should have 3 items available.");
+     is(gFilteredSources.visibleItems.length, 3,
+       "The filtered sources view should have 3 items visible.");
+ 
+@@ -451,9 +451,9 @@ function clickAndSwitchAgain() {
+   gDebugger.addEventListener("Debugger:SourceShown", function _onEvent(aEvent) {
+     info("Current script url:\n" + gScripts.selectedValue + "\n");
+     info("Debugger editor text:\n" + gEditor.getText() + "\n");
+ 
+-    is(gFilteredSources.totalItems, 3,
++    is(gFilteredSources.itemCount, 3,
+       "The filtered sources view should have 3 items available.");
+     is(gFilteredSources.visibleItems.length, 3,
+       "The filtered sources view should have 3 items visible.");
+ 
+diff --git a/browser/devtools/debugger/test/browser_dbg_scripts-sorting.js b/browser/devtools/debugger/test/browser_dbg_scripts-sorting.js
+--- a/browser/devtools/debugger/test/browser_dbg_scripts-sorting.js
++++ b/browser/devtools/debugger/test/browser_dbg_scripts-sorting.js
+@@ -66,33 +66,33 @@ function addScriptAndCheckOrder(method, 
+   switch (method) {
+     case 1:
+       urls.forEach(function(url) {
+         let loc = url.href + url.leaf;
+-        vs.push(sv.getSourceLabel(loc, url.href), { url: loc });
++        vs.push([sv.getSourceLabel(loc), { url: loc }], { staged: true });
+       });
+-      vs.commit();
++      vs.commit({ sorted: true });
+       break;
+ 
+     case 2:
+       urls.forEach(function(url) {
+         let loc = url.href + url.leaf;
+-        vs.push(sv.getSourceLabel(loc, url.href), { url: loc }, { forced: true });
++        vs.push([sv.getSourceLabel(loc), { url: loc }]);
+       });
+       break;
+ 
+     case 3:
+       let i = 0
+       for (; i < urls.length / 2; i++) {
+         let url = urls[i];
+         let loc = url.href + url.leaf;
+-        vs.push(sv.getSourceLabel(loc, url.href), { url: loc });
++        vs.push([sv.getSourceLabel(loc), { url: loc }], { staged: true });
+       }
+-      vs.commit();
++      vs.commit({ sorted: true });
+ 
+       for (; i < urls.length; i++) {
+         let url = urls[i];
+         let loc = url.href + url.leaf;
+-        vs.push(sv.getSourceLabel(loc, url.href), { url: loc }, { forced: true });
++        vs.push([sv.getSourceLabel(loc), { url: loc }]);
+       }
+       break;
+   }
+ 
+diff --git a/browser/devtools/debugger/test/browser_dbg_stack-02.js b/browser/devtools/debugger/test/browser_dbg_stack-02.js
+--- a/browser/devtools/debugger/test/browser_dbg_stack-02.js
++++ b/browser/devtools/debugger/test/browser_dbg_stack-02.js
+@@ -35,9 +35,9 @@ function testEvalCall() {
+ 
+       is(childNodes.length, frames.querySelectorAll(".dbg-stackframe").length,
+         "All children should be frames.");
+ 
+-      is(frames.querySelector("#stackframe-0 .dbg-stackframe-name").getAttribute("value"),
++      is(frames.querySelector("#stackframe-0 .dbg-stackframe-title").getAttribute("value"),
+         "(eval)", "Frame name should be (eval)");
+ 
+       ok(frames.querySelector("#stackframe-0").classList.contains("selected"),
+         "First frame should be selected by default.");
+@@ -57,9 +57,9 @@ function testEvalCall() {
+          "Second frame should be selected after click.");
+ 
+ 
+       EventUtils.sendMouseEvent({ type: "click" },
+-        frames.querySelector("#stackframe-0 .dbg-stackframe-name"),
++        frames.querySelector("#stackframe-0 .dbg-stackframe-title"),
+         gDebugger);
+ 
+       ok(frames.querySelector("#stackframe-0").classList.contains("selected"),
+          "First frame should be selected after click inside the first frame.");
+diff --git a/browser/devtools/debugger/test/browser_dbg_stack-03.js b/browser/devtools/debugger/test/browser_dbg_stack-03.js
+--- a/browser/devtools/debugger/test/browser_dbg_stack-03.js
++++ b/browser/devtools/debugger/test/browser_dbg_stack-03.js
+@@ -38,25 +38,25 @@ function testRecurse() {
+         "All children should be frames.");
+ 
+ 
+       gDebugger.DebuggerController.activeThread.addOneTimeListener("framesadded", function() {
+-
+         is(frames.querySelectorAll(".dbg-stackframe").length, pageSize * 2,
+           "Should now have twice the max limit of frames.");
+ 
+         gDebugger.DebuggerController.activeThread.addOneTimeListener("framesadded", function() {
+           is(frames.querySelectorAll(".dbg-stackframe").length, recurseLimit,
+             "Should have reached the recurse limit.");
+ 
+           gDebugger.DebuggerController.activeThread.resume(function() {
++            window.clearInterval(scrollingInterval);
+             closeDebuggerAndFinish();
+           });
+         });
+-
+-        frames.parentNode.scrollTop = frames.scrollHeight;
+       });
+ 
+-      frames.parentNode.scrollTop = frames.scrollHeight;
++      let scrollingInterval = window.setInterval(function() {
++        frames.scrollByIndex(-1);
++      }, 100);
+     }}, 0);
+   });
+ 
+   gDebuggee.recurse();
+diff --git a/browser/devtools/debugger/test/browser_dbg_stack-04.js b/browser/devtools/debugger/test/browser_dbg_stack-04.js
+--- a/browser/devtools/debugger/test/browser_dbg_stack-04.js
++++ b/browser/devtools/debugger/test/browser_dbg_stack-04.js
+@@ -45,11 +45,8 @@ function testEvalCallResume() {
+ 
+         is(childNodes.length, 0,
+           "Should only have no children.");
+ 
+-        is(frames.parentNode.querySelectorAll(".empty").length, 1,
+-           "Should have the empty list explanation.");
+-
+         closeDebuggerAndFinish();
+       }, true);
+ 
+       gDebugger.DebuggerController.activeThread.resume();
+diff --git a/browser/devtools/debugger/test/browser_dbg_stack-05.js b/browser/devtools/debugger/test/browser_dbg_stack-05.js
+--- a/browser/devtools/debugger/test/browser_dbg_stack-05.js
++++ b/browser/devtools/debugger/test/browser_dbg_stack-05.js
+@@ -82,9 +82,9 @@ function testRecurse()
+   is(gDebugger.editor.getDebugLocation(), 4,
+      "editor debugger location is correct after click.");
+ 
+   EventUtils.sendMouseEvent({ type: "click" },
+-    frames.querySelector("#stackframe-0 .dbg-stackframe-name"),
++    frames.querySelector("#stackframe-0 .dbg-stackframe-title"),
+     gDebugger);
+ 
+   ok(frames.querySelector("#stackframe-0").classList.contains("selected"),
+      "First frame should be selected after click inside the first frame.");
+diff --git a/browser/devtools/shared/Makefile.in b/browser/devtools/shared/Makefile.in
+--- a/browser/devtools/shared/Makefile.in
++++ b/browser/devtools/shared/Makefile.in
+@@ -13,4 +13,5 @@ include $(DEPTH)/config/autoconf.mk
+ include $(topsrcdir)/config/rules.mk
+ 
+ libs::
+ 	$(NSINSTALL) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
++	$(NSINSTALL) $(srcdir)/widgets/*.jsm $(FINAL_TARGET)/modules/devtools
+diff --git a/browser/devtools/shared/widgets/BreadcrumbsWidget.jsm b/browser/devtools/shared/widgets/BreadcrumbsWidget.jsm
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/shared/widgets/BreadcrumbsWidget.jsm
+@@ -0,0 +1,240 @@
++/* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++"use strict";
++
++const ENSURE_SELECTION_VISIBLE_DELAY = 50; // ms
++
++this.EXPORTED_SYMBOLS = ["BreadcrumbsWidget"];
++
++/**
++ * A breadcrumb-like list of items.
++ *
++ * @param nsIDOMNode aNode
++ *        The element associated with the widget.
++ */
++this.BreadcrumbsWidget = function BreadcrumbsWidget(aNode) {
++  this._parent = aNode;
++
++  // Create an internal arrowscrollbox container.
++  this._list = this.document.createElement("arrowscrollbox");
++  this._list.id = "inspector-breadcrumbs";
++  this._list.setAttribute("flex", "1");
++  this._list.setAttribute("orient", "horizontal");
++  this._list.setAttribute("clicktoscroll", "true")
++  this._parent.appendChild(this._list);
++
++  // By default, hide the arrows. We let the arrowscrollbox show them
++  // in case of overflow.
++  this._list._scrollButtonUp.collapsed = true;
++  this._list._scrollButtonDown.collapsed = true;
++  this._list.addEventListener("underflow", this._onUnderflow, false);
++  this._list.addEventListener("overflow", this._onOverflow, false);
++};
++
++BreadcrumbsWidget.prototype = {
++  /**
++   * Inserts an item in this container at the specified index.
++   *
++   * @param number aIndex
++   *        The position in the container intended for this item.
++   * @param string | nsIDOMNode aContents
++   *        The string or node displayed in the container.
++   * @return nsIDOMNode
++   *         The element associated with the displayed item.
++   */
++  insertItemAt: function BCW_insertItemAt(aIndex, aContents) {
++    let list = this._list;
++    let breadcrumb = new Breadcrumb(this);
++    breadcrumb.contents = aContents;
++
++    return list.insertBefore(breadcrumb.target, list.childNodes[aIndex]);
++  },
++
++  /**
++   * Returns the child node in this container situated at the specified index.
++   *
++   * @param number aIndex
++   *        The position in the container intended for this item.
++   * @return nsIDOMNode
++   *         The element associated with the displayed item.
++   */
++  getItemAtIndex: function BCW_getItemAtIndex(aIndex) {
++    return this._list.childNodes[aIndex];
++  },
++
++  /**
++   * Removes the specified child node from this container.
++   *
++   * @param nsIDOMNode aChild
++   *        The element associated with the displayed item.
++   */
++  removeChild: function BCW_removeChild(aChild) {
++    this._list.removeChild(aChild);
++
++    if (this._selectedItem == aChild) {
++      this._selectedItem = null;
++    }
++  },
++
++  /**
++   * Removes all of the child nodes from this container.
++   */
++  removeAllItems: function BCW_removeAllItems() {
++    let parent = this._parent;
++    let list = this._list;
++    let firstChild;
++
++    while (firstChild = list.firstChild) {
++      list.removeChild(firstChild);
++    }
++    this._selectedItem = null;
++  },
++
++  /**
++   * Gets the currently selected child node in this container.
++   * @return nsIDOMNode
++   */
++  get selectedItem() this._selectedItem,
++
++  /**
++   * Sets the currently selected child node in this container.
++   * @param nsIDOMNode aChild
++   */
++  set selectedItem(aChild) {
++    let childNodes = this._list.childNodes;
++
++    if (!aChild) {
++      this._selectedItem = null;
++    }
++    for (let node of childNodes) {
++      if (node == aChild) {
++        node.setAttribute("checked", "");
++        node.classList.add("selected");
++        this._selectedItem = node;
++      } else {
++        node.removeAttribute("checked");
++        node.classList.remove("selected");
++      }
++    }
++
++    // Repeated calls to ensureElementIsVisible would interfere with each other
++    // and may sometimes result in incorrect scroll positions.
++    this.window.clearTimeout(this._ensureVisibleTimeout);
++    this._ensureVisibleTimeout = this.window.setTimeout(function() {
++      // Scroll the selected item into view.
++      if (this._selectedItem) {
++        this._list.ensureElementIsVisible(this._selectedItem);
++      }
++    }.bind(this), ENSURE_SELECTION_VISIBLE_DELAY);
++  },
++
++  /**
++   * The underflow and overflow listener for the arrowscrollbox container.
++   */
++  _onUnderflow: function BCW__onUnderflow({target}) {
++    target._scrollButtonUp.collapsed = true;
++    target._scrollButtonDown.collapsed = true;
++    target.removeAttribute("overflows");
++  },
++
++  /**
++   * The underflow and overflow listener for the arrowscrollbox container.
++   */
++  _onOverflow: function BCW__onOverflow({target}) {
++    target._scrollButtonUp.collapsed = false;
++    target._scrollButtonDown.collapsed = false;
++    target.setAttribute("overflows", "");
++  },
++
++  /**
++   * Gets the parent node holding this view.
++   * @return nsIDOMNode
++   */
++  get parentNode() this._parent,
++
++  /**
++   * Gets the owner document holding this view.
++   * @return nsIHTMLDocument
++   */
++  get document() this._parent.ownerDocument,
++
++  /**
++   * Gets the default window holding this view.
++   * @return nsIDOMWindow
++   */
++  get window() this.document.defaultView,
++
++  _parent: null,
++  _list: null,
++  _selectedItem: null
++};
++
++/**
++ * A Breadcrumb constructor for the BreadcrumbsWidget.
++ *
++ * @param BreadcrumbsWidget aWidget
++ *        The widget to contain this breadcrumb.
++ */
++function Breadcrumb(aWidget) {
++  this.ownerView = aWidget;
++
++  this._target = this.document.createElement("button");
++  this._target.className = "inspector-breadcrumbs-button";
++  this.parentNode.appendChild(this._target);
++}
++
++Breadcrumb.prototype = {
++  /**
++   * Sets the contents displayed in this item's view.
++   *
++   * @param string | nsIDOMNode aContents
++   *        The string or node displayed in the container.
++   */
++  set contents(aContents) {
++    // If this item's view contents are a string, then create a label to hold
++    // the text displayed in this breadcrumb.
++    if (typeof aContents == "string") {
++      let label = this.document.createElement("label");
++      label.setAttribute("value", aContents);
++      this.contents = label;
++      return;
++    }
++    // If there are already some contents displayed, replace them.
++    if (this._target.hasChildNodes()) {
++      this._target.replaceChild(aContents, this._target.firstChild);
++      return;
++    }
++    // These are the first contents ever displayed.
++    this._target.appendChild(aContents);
++  },
++
++  /**
++   * Gets the element associated with this item.
++   * @return nsIDOMNode
++   */
++  get target() this._target,
++
++  /**
++   * Gets the parent node holding this scope.
++   * @return nsIDOMNode
++   */
++  get parentNode() this.ownerView._list,
++
++  /**
++   * Gets the owner document holding this scope.
++   * @return nsIHTMLDocument
++   */
++  get document() this.ownerView.document,
++
++  /**
++   * Gets the default window holding this scope.
++   * @return nsIDOMWindow
++   */
++  get window() this.ownerView.window,
++
++  ownerView: null,
++  _target: null
++};
+diff --git a/browser/devtools/shared/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
+rename from browser/devtools/shared/VariablesView.jsm
+rename to browser/devtools/shared/widgets/VariablesView.jsm
+diff --git a/browser/locales/en-US/chrome/browser/devtools/debugger.properties b/browser/locales/en-US/chrome/browser/devtools/debugger.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/debugger.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/debugger.properties
+@@ -82,12 +82,8 @@ stepInTooltip=Step In (%S)
+ # LOCALIZATION NOTE (stepOutTooltip): The label that is displayed on the
+ # button that steps out of a function call.
+ stepOutTooltip=Step Out (%S)
+ 
+-# LOCALIZATION NOTE (emptyStackText): The text that is displayed in the stack
+-# frames list when there are no frames to display.
+-emptyStackText=No stacks to display
+-
+ # LOCALIZATION NOTE (emptyBreakpointsText): The text that is displayed in the
+ # breakpoints list when there are no breakpoints to display.
+ emptyBreakpointsText=No breakpoints to display
+ 
+diff --git a/browser/themes/linux/devtools/common.css b/browser/themes/linux/devtools/common.css
+--- a/browser/themes/linux/devtools/common.css
++++ b/browser/themes/linux/devtools/common.css
+@@ -157,8 +157,9 @@
+   -moz-padding-end: 12px;
+   background-image: url(magnifying-glass.png), -moz-linear-gradient(hsla(210,16%,76%,.15), hsla(210,16%,76%,.35));
+   background-position: 4px center, top left, top left;
+   background-repeat: no-repeat;
++  font-size: inherit;
+ }
+ 
+ .devtools-searchinput:-moz-locale-dir(rtl) {
+   background-position: calc(100% - 4px) center, top left, top left;
+diff --git a/browser/themes/linux/devtools/debugger.css b/browser/themes/linux/devtools/debugger.css
+--- a/browser/themes/linux/devtools/debugger.css
++++ b/browser/themes/linux/devtools/debugger.css
+@@ -106,11 +106,16 @@
+   transform: scale(1.75, 1.75);
+ }
+ 
+ /**
+- * Searchbox panel
++ * Searchbox
+  */
+ 
++.devtools-searchinput {
++  min-width: 220px;
++  -moz-margin-start: 1px;
++}
++
+ #searchbox-panel .description {
+   margin: -6px 0 8px 0;
+ }
+ 
+@@ -153,12 +158,12 @@
+   border-radius: 0 0 4px 4px;
+ }
+ 
+ .dbg-source-item:only-of-type {
+-  border-radius: 4px 4px 4px 4px;
++  border-radius: 4px;
+ }
+ 
+-.dbg-source-item:not(:hover) {
++.dbg-source-item:not(.selected):not(:hover) {
+   text-shadow: 0 1px #fff;
+ }
+ 
+ .dbg-source-item-name {
+@@ -197,39 +202,33 @@
+ /**
+  * Stack frames view
+  */
+ 
+-#stackframes {
+-  min-height: 10px;
++.dbg-stackframe {
++  width: auto !important;
++  min-width: 64px;
+ }
+ 
+-.dbg-stackframe {
+-  -moz-padding-start: 4px;
+-  -moz-padding-end: 4px;
+-}
+-
+-.dbg-stackframe-name {
++.dbg-stackframe-menuitem[checked] {
++  outline: 1px solid #eee;
++  margin-top: 3px;
++  margin-bottom: 3px;
+   font-weight: 600;
+ }
+ 
+-.dbg-stackframe-details {
+-  -moz-padding-start: 4px;
++.dbg-stackframe-menuitem-title {
++  -moz-padding-end: 8px;
++}
++
++.dbg-stackframe-menuitem-details {
++  -moz-padding-start: 8px;
+ }
+ 
+ /**
+  * Breakpoints view
+  */
+ 
+-#breakpoints {
+-  min-height: 10px;
+-}
+-
+-#breakpoints > vbox:not(:empty) {
+-  min-height: 10px;
+-  max-height: 200px;
+-}
+-
+-.dbg-breakpoint:not(:last-child) {
++.dbg-breakpoint {
+   border-bottom: 1px solid #eee;
+ }
+ 
+ .dbg-breakpoint-info {
+diff --git a/browser/themes/osx/devtools/common.css b/browser/themes/osx/devtools/common.css
+--- a/browser/themes/osx/devtools/common.css
++++ b/browser/themes/osx/devtools/common.css
+@@ -162,8 +162,9 @@
+   padding-top: 0;
+   padding-bottom: 0;
+   -moz-padding-start: 18px;
+   -moz-padding-end: 12px;
++  font-size: inherit;
+ }
+ 
+ .devtools-searchinput:-moz-locale-dir(rtl) {
+   background-position: calc(100% - 4px) center, top left, top left;
+diff --git a/browser/themes/osx/devtools/debugger.css b/browser/themes/osx/devtools/debugger.css
+--- a/browser/themes/osx/devtools/debugger.css
++++ b/browser/themes/osx/devtools/debugger.css
+@@ -108,11 +108,16 @@
+   transform: scale(1.75, 1.75);
+ }
+ 
+ /**
+- * Searchbox panel
++ * Searchbox
+  */
+ 
++.devtools-searchinput {
++  min-width: 220px;
++  -moz-margin-start: 1px;
++}
++
+ #searchbox-panel .description {
+   margin: -6px 0 8px 0;
+ }
+ 
+@@ -155,9 +160,9 @@
+   border-radius: 0 0 4px 4px;
+ }
+ 
+ .dbg-source-item:only-of-type {
+-  border-radius: 4px 4px 4px 4px;
++  border-radius: 4px;
+ }
+ 
+ .dbg-source-item:not(.selected):not(:hover) {
+   text-shadow: 0 1px #fff;
+@@ -199,39 +204,33 @@
+ /**
+  * Stack frames view
+  */
+ 
+-#stackframes {
+-  min-height: 10px;
++.dbg-stackframe {
++  width: auto !important;
++  min-width: 64px;
+ }
+ 
+-.dbg-stackframe {
+-  -moz-padding-start: 4px;
+-  -moz-padding-end: 4px;
+-}
+-
+-.dbg-stackframe-name {
++.dbg-stackframe-menuitem[checked] {
++  outline: 1px solid #eee;
++  margin-top: 3px;
++  margin-bottom: 3px;
+   font-weight: 600;
+ }
+ 
+-.dbg-stackframe-details {
+-  -moz-padding-start: 4px;
++.dbg-stackframe-menuitem-title {
++  -moz-padding-end: 8px;
++}
++
++.dbg-stackframe-menuitem-details {
++  -moz-padding-start: 8px;
+ }
+ 
+ /**
+  * Breakpoints view
+  */
+ 
+-#breakpoints {
+-  min-height: 10px;
+-}
+-
+-#breakpoints > vbox:not(:empty) {
+-  min-height: 10px;
+-  max-height: 200px;
+-}
+-
+-.dbg-breakpoint:not(:last-child) {
++.dbg-breakpoint {
+   border-bottom: 1px solid #eee;
+ }
+ 
+ .dbg-breakpoint-info {
+diff --git a/browser/themes/osx/devtools/inspector.css b/browser/themes/osx/devtools/inspector.css
+--- a/browser/themes/osx/devtools/inspector.css
++++ b/browser/themes/osx/devtools/inspector.css
+@@ -33,8 +33,46 @@
+      by the shadow.*/
+   margin-bottom: -1px;
+ }
+ 
++/* preloading hack */
++#inspector-breadcrumbs::after {
++  content: '';
++  display: block;
++  background-image:
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-start.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-start-selected.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-start-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-start-selected-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-middle.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-middle-selected.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-middle-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-middle-selected-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-end.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-end-selected.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-end-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/ltr-end-selected-pressed.png);
++}
++
++/* preloading hack */
++#inspector-breadcrumbs:-moz-locale-dir(rtl)::after {
++  content: '';
++  display: block;
++  background-image:
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-start.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-start-selected.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-start-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-start-selected-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-middle.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-middle-selected.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-middle-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-middle-selected-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-end.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-end-selected.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-end-pressed.png),
++    url(chrome://browser/skin/devtools/breadcrumbs/rtl-end-selected-pressed.png);
++}
++
+ #inspector-breadcrumbs > .scrollbutton-up,
+ #inspector-breadcrumbs > .scrollbutton-down {
+   -moz-appearance: none;
+   border: 1px solid hsla(210,8%,5%,.45);
+diff --git a/browser/themes/windows/devtools/common.css b/browser/themes/windows/devtools/common.css
+--- a/browser/themes/windows/devtools/common.css
++++ b/browser/themes/windows/devtools/common.css
+@@ -161,8 +161,9 @@
+   padding-top: 0;
+   padding-bottom: 0;
+   -moz-padding-start: 18px;
+   -moz-padding-end: 12px;
++  font-size: inherit;
+ }
+ 
+ .devtools-searchinput[focused] {
+   border-color: hsl(200,70%,40%) hsl(200,75%,37%) hsl(200,80%,35%);
+diff --git a/browser/themes/windows/devtools/debugger.css b/browser/themes/windows/devtools/debugger.css
+--- a/browser/themes/windows/devtools/debugger.css
++++ b/browser/themes/windows/devtools/debugger.css
+@@ -114,11 +114,16 @@
+   transform: scale(1.75, 1.75);
+ }
+ 
+ /**
+- * Searchbox panel
++ * Searchbox
+  */
+ 
++.devtools-searchinput {
++  min-width: 220px;
++  -moz-margin-start: 1px;
++}
++
+ #searchbox-panel .description {
+   margin: -6px 0 8px 0;
+ }
+ 
+@@ -161,12 +166,12 @@
+   border-radius: 0 0 4px 4px;
+ }
+ 
+ .dbg-source-item:only-of-type {
+-  border-radius: 4px 4px 4px 4px;
++  border-radius: 4px;
+ }
+ 
+-.dbg-source-item:not(:hover) {
++.dbg-source-item:not(.selected):not(:hover) {
+   text-shadow: 0 1px #fff;
+ }
+ 
+ .dbg-source-item-name {
+@@ -205,39 +210,33 @@
+ /**
+  * Stack frames view
+  */
+ 
+-#stackframes {
+-  min-height: 10px;
++.dbg-stackframe {
++  width: auto !important;
++  min-width: 64px;
+ }
+ 
+-.dbg-stackframe {
+-  -moz-padding-start: 4px;
+-  -moz-padding-end: 4px;
+-}
+-
+-.dbg-stackframe-name {
++.dbg-stackframe-menuitem[checked] {
++  outline: 1px solid #eee;
++  margin-top: 3px;
++  margin-bottom: 3px;
+   font-weight: 600;
+ }
+ 
+-.dbg-stackframe-details {
+-  -moz-padding-start: 4px;
++.dbg-stackframe-menuitem-title {
++  -moz-padding-end: 8px;
++}
++
++.dbg-stackframe-menuitem-details {
++  -moz-padding-start: 8px;
+ }
+ 
+ /**
+  * Breakpoints view
+  */
+ 
+-#breakpoints {
+-  min-height: 10px;
+-}
+-
+-#breakpoints > vbox:not(:empty) {
+-  min-height: 10px;
+-  max-height: 200px;
+-}
+-
+-.dbg-breakpoint:not(:last-child) {
++.dbg-breakpoint {
+   border-bottom: 1px solid #eee;
+ }
+ 
+ .dbg-breakpoint-info {
