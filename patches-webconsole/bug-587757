@@ -1,0 +1,362 @@
+# HG changeset patch
+# Parent dfeacbbb793d3617edd3ef430e99bd7c56176476
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1363151040 25200
+
+diff --git a/browser/base/content/browser-appmenu.inc b/browser/base/content/browser-appmenu.inc
+--- a/browser/base/content/browser-appmenu.inc
++++ b/browser/base/content/browser-appmenu.inc
+@@ -144,16 +144,18 @@
+         <menupopup id="appmenu_webDeveloper_popup">
+           <menuitem id="appmenu_devToolbox"
+                     observes="devtoolsMenuBroadcaster_DevToolbox"/>
+           <menuseparator id="appmenu_devtools_separator"/>
+           <menuitem id="appmenu_devToolbar"
+                     observes="devtoolsMenuBroadcaster_DevToolbar"/>
+           <menuitem id="appmenu_chromeDebugger"
+                     observes="devtoolsMenuBroadcaster_ChromeDebugger"/>
++          <menuitem id="appmenu_browserConsole"
++                    observes="devtoolsMenuBroadcaster_BrowserConsole"/>
+           <menuitem id="appmenu_responsiveUI"
+                     observes="devtoolsMenuBroadcaster_ResponsiveUI"/>
+           <menuitem id="appmenu_scratchpad"
+                     observes="devtoolsMenuBroadcaster_Scratchpad"/>
+           <menuitem id="appmenu_pageSource"
+                     observes="devtoolsMenuBroadcaster_PageSource"/>
+           <menuitem id="appmenu_errorConsole"
+                     observes="devtoolsMenuBroadcaster_ErrorConsole"/>
+diff --git a/browser/base/content/browser-menubar.inc b/browser/base/content/browser-menubar.inc
+--- a/browser/base/content/browser-menubar.inc
++++ b/browser/base/content/browser-menubar.inc
+@@ -571,16 +571,18 @@
+                             observes="devtoolsMenuBroadcaster_DevToolbox"
+                             accesskey="&devToolboxMenuItem.accesskey;"/>
+                   <menuseparator id="menu_devtools_separator"/>
+                   <menuitem id="menu_devToolbar"
+                             observes="devtoolsMenuBroadcaster_DevToolbar"
+                             accesskey="&devToolbarMenu.accesskey;"/>
+                   <menuitem id="menu_chromeDebugger"
+                             observes="devtoolsMenuBroadcaster_ChromeDebugger"/>
++                  <menuitem id="menu_browserConsole"
++                            observes="devtoolsMenuBroadcaster_BrowserConsole"/>
+                   <menuitem id="menu_responsiveUI"
+                             observes="devtoolsMenuBroadcaster_ResponsiveUI"
+                             accesskey="&responsiveDesignTool.accesskey;"/>
+                   <menuitem id="menu_scratchpad"
+                             observes="devtoolsMenuBroadcaster_Scratchpad"
+                             accesskey="&scratchpad.accesskey;"/>
+                   <menuitem id="menu_pageSource"
+                             observes="devtoolsMenuBroadcaster_PageSource"
+diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browser-sets.inc
+--- a/browser/base/content/browser-sets.inc
++++ b/browser/base/content/browser-sets.inc
+@@ -91,16 +91,17 @@
+     <command id="Browser:RestoreLastSession" oncommand="restoreLastSession();" disabled="true"/>
+ 
+     <command id="Tools:Search" oncommand="BrowserSearch.webSearch();"/>
+     <command id="Tools:Downloads" oncommand="BrowserDownloadsUI();"/>
+     <command id="Tools:DevToolbox" oncommand="gDevToolsBrowser.toggleToolboxCommand(gBrowser);"/>
+     <command id="Tools:DevToolbar" oncommand="DeveloperToolbar.toggle();" disabled="true" hidden="true"/>
+     <command id="Tools:DevToolbarFocus" oncommand="DeveloperToolbar.focusToggle();" disabled="true"/>
+     <command id="Tools:ChromeDebugger" oncommand="DebuggerUI.toggleChromeDebugger();" disabled="true" hidden="true"/>
++    <command id="Tools:BrowserConsole" oncommand="HUDConsoleUI.toggleBrowserConsole();" disabled="true" hidden="true"/>
+     <command id="Tools:Scratchpad" oncommand="Scratchpad.openScratchpad();" disabled="true" hidden="true"/>
+     <command id="Tools:ResponsiveUI" oncommand="ResponsiveUI.toggle();" disabled="true" hidden="true"/>
+     <command id="Tools:Addons" oncommand="BrowserOpenAddonsMgr();"/>
+     <command id="Tools:ErrorConsole" oncommand="toJavaScriptConsole()" disabled="true" hidden="true"/>
+     <command id="Tools:DevToolsConnect" oncommand="gDevToolsBrowser.openConnectScreen(gBrowser)" disabled="true" hidden="true"/>
+     <command id="Tools:Sanitize"
+      oncommand="Cc['@mozilla.org/browser/browserglue;1'].getService(Ci.nsIBrowserGlue).sanitize(window);"/>
+     <command id="Tools:PrivateBrowsing"
+diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+--- a/browser/base/content/browser.js
++++ b/browser/base/content/browser.js
+@@ -1547,25 +1547,33 @@ var gBrowserInit = {
+ 
+       // Show the toolbar if it was previously visible
+       if (gPrefService.getBoolPref("devtools.toolbar.visible")) {
+         DeveloperToolbar.show(false);
+       }
+     }
+ 
+     // Enable Chrome Debugger?
+-    let enabled = gPrefService.getBoolPref("devtools.chrome.enabled") &&
++    let chromeEnabled = gPrefService.getBoolPref("devtools.chrome.enabled");
++    let enabled = chromeEnabled &&
+                   gPrefService.getBoolPref("devtools.debugger.chrome-enabled") &&
+                   gPrefService.getBoolPref("devtools.debugger.remote-enabled");
+     if (enabled) {
+       let cmd = document.getElementById("Tools:ChromeDebugger");
+       cmd.removeAttribute("disabled");
+       cmd.removeAttribute("hidden");
+     }
+ 
++    // Enable the Browser Console?
++    if (chromeEnabled) {
++      let cmd = document.getElementById("Tools:BrowserConsole");
++      cmd.removeAttribute("disabled");
++      cmd.removeAttribute("hidden");
++    }
++
+     // Enable Error Console?
+     // Temporarily enabled. See bug 798925.
+     let consoleEnabled = true || gPrefService.getBoolPref("devtools.errorconsole.enabled") ||
+                          gPrefService.getBoolPref("devtools.chrome.enabled");
+     if (consoleEnabled) {
+       let cmd = document.getElementById("Tools:ErrorConsole");
+       cmd.removeAttribute("disabled");
+       cmd.removeAttribute("hidden");
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -5,38 +5,42 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+ const Cc = Components.classes;
+ const Ci = Components.interfaces;
+ const Cu = Components.utils;
+ 
+-const CONSOLEAPI_CLASS_ID = "{b49c18f8-3379-4fc0-8c90-d7772c1a9ff3}";
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
+     "resource:///modules/devtools/gDevTools.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "TargetFactory",
+     "resource:///modules/devtools/Target.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+     "resource://gre/modules/Services.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+     "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "webConsoleDefinition",
++    "resource:///modules/devtools/ToolDefinitions.jsm");
++
+ XPCOMUtils.defineLazyModuleGetter(this, "Promise",
+     "resource://gre/modules/commonjs/sdk/core/promise.js");
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
++const BROWSER_CONSOLE_WINDOW_FEATURES = "chrome,titlebar,toolbar,centerscreen,resizable,dialog=no";
++
+ this.EXPORTED_SYMBOLS = ["HUDService"];
+ 
+ ///////////////////////////////////////////////////////////////////////////
+ //// The HUD service
+ 
+ function HUD_SERVICE()
+ {
+   this.hudReferences = {};
+@@ -68,26 +72,25 @@ HUD_SERVICE.prototype =
+     return Services.wm.getMostRecentWindow("navigator:browser");
+   },
+ 
+   /**
+    * Open a Web Console for the given target.
+    *
+    * @see devtools/framework/Target.jsm for details about targets.
+    *
+-   * @param object aTarget
+-   *        The target that the web console will connect to.
+-   * @param nsIDOMElement aIframe
+-   *        The iframe element into which to place the web console.
++   * @param object aOptions
++   *        The options for opening the web console, see the WebConsole
++   *        constructor.
+    * @return object
+    *         A Promise object for the opening of the new WebConsole instance.
+    */
+-  openWebConsole: function HS_openWebConsole(aTarget, aIframe)
++  openWebConsole: function HS_openWebConsole(aOptions)
+   {
+-    let hud = new WebConsole(aTarget, aIframe);
++    let hud = new WebConsole(aOptions);
+     this.hudReferences[hud.hudId] = hud;
+     return hud.init();
+   },
+ 
+   /**
+    * Returns the HeadsUpDisplay object associated to a content window.
+    *
+    * @param nsIDOMWindow aContentWindow
+@@ -142,43 +145,42 @@ HUD_SERVICE.prototype =
+ /**
+  * A WebConsole instance is an interactive console initialized *per target*
+  * that displays console log data as well as provides an interactive terminal to
+  * manipulate the target's document content.
+  *
+  * This object only wraps the iframe that holds the Web Console UI.
+  *
+  * @constructor
+- * @param object aTarget
+- *        The target that the web console will connect to.
+- * @param nsIDOMElement aIframe
+- *        iframe into which we should create the WebConsole UI.
++ *
++ * @param object aOptions
++ *        The options for opening the web console:
++ *        - target: the target that the web console will connect to.
++ *        - window: the window where the web console UI is already loaded.
+  */
+-function WebConsole(aTarget, aIframe)
++function WebConsole(aOptions)
+ {
+-  this.iframe = aIframe;
+-  this.iframe.className = "web-console-frame";
++  this.uiWindow = aOptions.window;
+   this.chromeDocument = this.iframe.ownerDocument;
+   this.chromeWindow = this.chromeDocument.defaultView;
+   this.hudId = "hud_" + Date.now();
+-  this.target = aTarget;
++  this.target = aOptions.target;
+ 
+   this.browserWindow = this.chromeWindow.top;
+   let element = this.browserWindow.document.documentElement;
+   if (element.getAttribute("windowtype") != "navigator:browser") {
+     this.browserWindow = HUDService.currentContext();
+   }
+ }
+ 
+ WebConsole.prototype = {
+   chromeWindow: null,
+   chromeDocument: null,
+   hudId: null,
+   target: null,
+-  iframe: null,
+   _destroyer: null,
+ 
+   /**
+    * Getter for HUDService.lastFinishedRequestCallback.
+    *
+    * @see HUDService.lastFinishedRequestCallback
+    * @type function
+    */
+@@ -452,16 +454,19 @@ WebConsole.prototype = {
+   },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // HeadsUpDisplayUICommands
+ //////////////////////////////////////////////////////////////////////////
+ 
+ var HeadsUpDisplayUICommands = {
++  _browserConsoleID: null,
++  _browserConsoleDefer: null,
++
+   /**
+    * Toggle the Web Console for the current tab.
+    *
+    * @return object
+    *         A Promise for either the opening of the toolbox that holds the Web
+    *         Console, or a Promise for the closing of the toolbox.
+    */
+   toggleHUD: function UIC_toggleHUD()
+@@ -488,11 +493,62 @@ var HeadsUpDisplayUICommands = {
+     if (!tab || !TargetFactory.isKnownTab(tab)) {
+       return null;
+     }
+     let target = TargetFactory.forTab(tab);
+     let toolbox = gDevTools.getToolbox(target);
+     let panel = toolbox ? toolbox.getPanel("webconsole") : null;
+     return panel ? panel.hud : null;
+   },
++
++  /**
++   * Toggle the Browser Console.
++   */
++  toggleBrowserConsole: function UIC_toggleBrowserConsole()
++  {
++    if (this._browserConsoleID) {
++      let hud = HUDService.getHudReferenceById(this._browserConsoleID);
++      return hud.destroy().then(function() {
++        this._browserConsoleID = null;
++      }.bind(this));
++    }
++
++    if (this._browserConsoleDefer) {
++      return this._browserConsoleDefer.promise;
++    }
++
++    this._browserConsoleDefer = Promise.defer();
++
++    let targetOptions = {
++      form: form,
++      client: gClient,
++      chrome: chrome
++    };
++
++    let target = TargetFactory.forTab(targetOptions);
++
++    target.makeRemote(options).then(function() {
++      let win = Services.ww.openWindow(null, webConsoleDefinition.url, "_blank",
++                                     BROWSER_CONSOLE_WINDOW_FEATURES);
++      win.addEventListener("load", function onLoad() {
++        win.removeEventListener("load", onLoad);
++
++        let consoleOptions = {
++          target: target,
++          window: win,
++        };
++
++        HUDService.openWebConsole(consoleOptions).then(function(aWebConsole) {
++          this._browserConsoleID = aWebConsole.hudId;
++          this._browserConsoleDefer = null;
++        }.bind(this));
++      }.bind(this));
++    }.bind(this));
++
++    return this._browserConsoleDefer.promise;
++  },
++
++  get browserConsole() {
++    return HUDService.getHudReferenceById(this._browserConsoleID);
++  },
+ };
+ 
+ const HUDService = new HUD_SERVICE();
+diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/webconsole/WebConsolePanel.jsm
+--- a/browser/devtools/webconsole/WebConsolePanel.jsm
++++ b/browser/devtools/webconsole/WebConsolePanel.jsm
+@@ -35,29 +35,35 @@ WebConsolePanel.prototype = {
+    * Open is effectively an asynchronous constructor.
+    *
+    * @return object
+    *         A Promise that is resolved when the Web Console completes opening.
+    */
+   open: function WCP_open()
+   {
+     let parentDoc = this._toolbox.doc;
++    let promise;
++
+     let iframe = parentDoc.getElementById("toolbox-panel-iframe-webconsole");
+-    let promise;
++    iframe.className = "web-console-frame";
+ 
+     // Local debugging needs to make the target remote.
+     if (!this.target.isRemote) {
+       promise = this.target.makeRemote();
+     } else {
+       promise = Promise.resolve(this.target);
+     }
+ 
+     return promise
+       .then(function(aTarget) {
+         this._frameWindow._remoteTarget = aTarget;
++        let options = {
++          target: this.target,
++          window:
++        };
+         return HUDService.openWebConsole(this.target, iframe);
+       }.bind(this))
+       .then(function onSuccess(aWebConsole) {
+         this.hud = aWebConsole;
+         this._isReady = true;
+         this.emit("ready");
+         return this;
+       }.bind(this), function onError(aReason) {
