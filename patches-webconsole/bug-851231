@@ -1,80 +1,9 @@
 # HG changeset patch
-# Parent bf901b936163c2fc55932b82207ad746f90aa356
+# Parent c53701edc79911691b42116b9116b9cda87b15fb
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1363244292 25200
+# Date 1363286030 25200
+Bug 851231 - Output Console.jsm API calls to the browser console
 
-diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
---- a/browser/devtools/webconsole/webconsole.js
-+++ b/browser/devtools/webconsole/webconsole.js
-@@ -32,16 +32,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
-                                   "resource:///modules/AutocompletePopup.jsm");
- 
- XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
-                                   "resource://gre/modules/devtools/WebConsoleUtils.jsm");
- 
- XPCOMUtils.defineLazyModuleGetter(this, "Promise",
-                                   "resource://gre/modules/commonjs/sdk/core/promise.js");
- 
-+XPCOMUtils.defineLazyModuleGetter(this, "console",
-+    "resource://gre/modules/devtools/Console.jsm");
-+
- const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
- let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
- 
- 
- // The XUL namespace.
- const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
- 
- const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/en/Security/MixedContent";
-@@ -3031,32 +3034,48 @@ JSTerm.prototype = {
-    * Clear the Web Console output.
-    *
-    * @param boolean aClearStorage
-    *        True if you want to clear the console messages storage associated to
-    *        this Web Console.
-    */
-   clearOutput: function JST_clearOutput(aClearStorage)
-   {
-+    delete this.hud.window;
-+    delete this.hud.document;
-+    delete this.hud.rootElement;
-+    delete this.hud.owner;
-+    delete this.hud.proxy;
-+    delete this.hud._cssNodes;
-+    delete this.hud._networkRequests;
-+    delete this.hud.jsterm;
-+
-+    console.time("foobar");
-+    console.group("foo");
-+    console.log("hud", this.hud);
-+    console.trace();
-+    console.groupEnd("foo");
-+
-     let hud = this.hud;
-     let outputNode = hud.outputNode;
-     let node;
-     while ((node = outputNode.firstChild)) {
-       hud.removeOutputMessage(node);
-     }
- 
-     hud.groupDepth = 0;
-     hud._outputQueue.forEach(hud._pruneItemFromQueue, hud);
-     hud._outputQueue = [];
-     hud._networkRequests = {};
-     hud._cssNodes = {};
- 
-     if (aClearStorage) {
-       this.webConsoleClient.clearMessagesCache();
-     }
-+    console.timeEnd("foobar");
-   },
- 
-   /**
-    * Updates the size of the input field (command line) to fit its contents.
-    *
-    * @returns void
-    */
-   resizeInput: function JST_resizeInput()
 diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 --- a/toolkit/devtools/Console.jsm
 +++ b/toolkit/devtools/Console.jsm
@@ -329,7 +258,7 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 +    let args = Array.prototype.slice.call(arguments, 0);
 +    let timer = stopTimer(args[0]);
 +    sendConsoleAPIMessage({
-+      level: "time",
++      level: "timeEnd",
 +      frame: getStackForConsoleAPI(Components.stack.caller, 1),
 +      args: args,
 +      timer: timer,
@@ -337,26 +266,3 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 +    dump("console.timeEnd: '" + timer.name + "' " + timer.duration + "ms\n");
 +  },
  };
-diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
---- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-+++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -29,16 +29,19 @@ XPCOMUtils.defineLazyServiceGetter(this,
-                                    "nsIHttpActivityDistributor");
- 
- XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
-                                   "resource:///modules/devtools/gDevTools.jsm");
- 
- XPCOMUtils.defineLazyModuleGetter(this, "TargetFactory",
-                                   "resource:///modules/devtools/Target.jsm");
- 
-+XPCOMUtils.defineLazyModuleGetter(this, "console",
-+    "resource://gre/modules/devtools/Console.jsm");
-+
- this.EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider", "JSTermHelpers",
-                          "PageErrorListener", "ConsoleAPIListener",
-                          "NetworkResponseListener", "NetworkMonitor",
-                          "ConsoleProgressListener"];
- 
- // Match the function name from the result of toString() or toSource().
- //
- // Examples:
