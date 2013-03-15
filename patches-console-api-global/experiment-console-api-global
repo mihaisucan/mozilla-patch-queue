@@ -1,12 +1,32 @@
 # HG changeset patch
-# Parent 7a68d699427bbf3182d20c51ed8d37e5315d3bb2
+# Parent aff1786b7daa6fd2925ad5185470575324847345
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1363299480 25200
+# Date 1363359944 25200
 
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 --- a/browser/base/content/browser.js
 +++ b/browser/base/content/browser.js
-@@ -1138,16 +1138,20 @@ var gBrowserInit = {
+@@ -115,16 +115,19 @@ XPCOMUtils.defineLazyGetter(this, "Devel
+ });
+ 
+ XPCOMUtils.defineLazyGetter(this, "DebuggerUI", function() {
+   let tmp = {};
+   Cu.import("resource:///modules/devtools/DebuggerUI.jsm", tmp);
+   return new tmp.DebuggerUI(window);
+ });
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "console",
++  "resource://gre/modules/devtools/Console.jsm");
++
+ XPCOMUtils.defineLazyModuleGetter(this, "Social",
+   "resource:///modules/Social.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "PageThumbs",
+   "resource://gre/modules/PageThumbs.jsm");
+ 
+ #ifdef MOZ_SAFE_BROWSING
+ XPCOMUtils.defineLazyModuleGetter(this, "SafeBrowsing",
+@@ -1138,16 +1141,21 @@ var gBrowserInit = {
  
      gBrowser.addEventListener("NewPluginInstalled", gPluginHandler.newPluginInstalled, true);
  #ifdef XP_MACOSX
@@ -16,7 +36,8 @@ diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
      Services.obs.addObserver(gPluginHandler.pluginCrashed, "plugin-crashed", false);
  
 +    Services.obs.addObserver(function(aSubj, aTopic, aData) {
-+      dump(aTopic + " subj " + aSubj + " unwrap " + aSubj.wrappedJSObject + " data " + aData + "\n");
++      dump(aTopic + " subj " + aSubj + "\n");
++      aSubj.console = console;
 +    }, "module-global-created", false);
 +
      window.addEventListener("AppCommand", HandleAppCommandEvent, true);
@@ -27,6 +48,27 @@ diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
      // and give C++ access to gBrowser
      gBrowser.init();
      XULBrowserWindow.init();
+diff --git a/browser/devtools/inspector/Highlighter.jsm b/browser/devtools/inspector/Highlighter.jsm
+--- a/browser/devtools/inspector/Highlighter.jsm
++++ b/browser/devtools/inspector/Highlighter.jsm
+@@ -201,16 +201,17 @@ Highlighter.prototype = {
+       this.lock();
+     }
+ 
+     let canHighlightNode = this.selection.isNode() &&
+                           this.selection.isConnected() &&
+                           this.selection.isElementNode();
+ 
+     if (canHighlightNode) {
++      console.debug("selection", this.selection);
+       this.show();
+       this.updateInfobar();
+       this.invalidateSize();
+       if (!this._highlighting &&
+           this.selection.reason != "highlighter") {
+         LayoutHelpers.scrollIntoViewIfNeeded(this.selection.node);
+       }
+     } else {
 diff --git a/js/xpconnect/loader/mozJSComponentLoader.cpp b/js/xpconnect/loader/mozJSComponentLoader.cpp
 --- a/js/xpconnect/loader/mozJSComponentLoader.cpp
 +++ b/js/xpconnect/loader/mozJSComponentLoader.cpp
@@ -78,7 +120,7 @@ diff --git a/js/xpconnect/loader/mozJSComponentLoader.cpp b/js/xpconnect/loader/
 +        nsCOMPtr<nsIObserverService> obsSvc =
 +            do_GetService(kObserverServiceContractID, &rv);
 +        if (NS_SUCCEEDED(rv)) {
-+          obsSvc->NotifyObservers(static_cast<nsIXPCScriptable *>(backstagePass), kModuleGlobalCreatedTopic, nullptr);
++          obsSvc->NotifyObservers(static_cast<nsIGlobalObject *>(backstagePass), kModuleGlobalCreatedTopic, nullptr);
 +        }
 +
          if (aReuseLoaderGlobal) {
