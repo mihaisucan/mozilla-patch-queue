@@ -1,0 +1,91 @@
+# HG changeset patch
+# Parent 7a68d699427bbf3182d20c51ed8d37e5315d3bb2
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1363299480 25200
+
+diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
+--- a/browser/base/content/browser.js
++++ b/browser/base/content/browser.js
+@@ -1138,16 +1138,20 @@ var gBrowserInit = {
+ 
+     gBrowser.addEventListener("NewPluginInstalled", gPluginHandler.newPluginInstalled, true);
+ #ifdef XP_MACOSX
+     gBrowser.addEventListener("npapi-carbon-event-model-failure", gPluginHandler, true);
+ #endif
+ 
+     Services.obs.addObserver(gPluginHandler.pluginCrashed, "plugin-crashed", false);
+ 
++    Services.obs.addObserver(function(aSubj, aTopic, aData) {
++      dump(aTopic + " subj " + aSubj + " unwrap " + aSubj.wrappedJSObject + " data " + aData + "\n");
++    }, "module-global-created", false);
++
+     window.addEventListener("AppCommand", HandleAppCommandEvent, true);
+ 
+     messageManager.loadFrameScript("chrome://browser/content/content.js", true);
+ 
+     // initialize observers and listeners
+     // and give C++ access to gBrowser
+     gBrowser.init();
+     XULBrowserWindow.init();
+diff --git a/js/xpconnect/loader/mozJSComponentLoader.cpp b/js/xpconnect/loader/mozJSComponentLoader.cpp
+--- a/js/xpconnect/loader/mozJSComponentLoader.cpp
++++ b/js/xpconnect/loader/mozJSComponentLoader.cpp
+@@ -87,16 +87,17 @@ static JSClass kFakeBackstagePassJSClass
+     JS_ResolveStub,
+     JS_ConvertStub
+ };
+ 
+ static const char kJSRuntimeServiceContractID[] = "@mozilla.org/js/xpc/RuntimeService;1";
+ static const char kXPConnectServiceContractID[] = "@mozilla.org/js/xpc/XPConnect;1";
+ static const char kObserverServiceContractID[] = "@mozilla.org/observer-service;1";
+ static const char kJSCachePrefix[] = "jsloader";
++static const char kModuleGlobalCreatedTopic[] = "module-global-created";
+ 
+ /* Some platforms don't have an implementation of PR_MemMap(). */
+ #ifndef XP_OS2
+ #define HAVE_PR_MEMMAP
+ #endif
+ 
+ /**
+  * Buffer sizes for serialization and deserialization of scripts.
+@@ -529,16 +530,17 @@ mozJSComponentLoader::LoadModule(FileLoc
+     nsAutoPtr<ModuleEntry> entry(new ModuleEntry);
+ 
+     rv = ObjectForLocation(file, uri, &entry->obj,
+                            &entry->location, nullptr);
+     if (NS_FAILED(rv)) {
+         return NULL;
+     }
+ 
++
+     nsCOMPtr<nsIXPConnect> xpc = do_GetService(kXPConnectServiceContractID,
+                                                &rv);
+     if (NS_FAILED(rv))
+         return NULL;
+ 
+     nsCOMPtr<nsIComponentManager> cm;
+     rv = NS_GetComponentManager(getter_AddRefs(cm));
+     if (NS_FAILED(rv))
+@@ -753,16 +755,22 @@ mozJSComponentLoader::PrepareObjectForLo
+         backstagePass->SetGlobalObject(global);
+ 
+         JSAutoCompartment ac(aCx, global);
+         if (!JS_DefineFunctions(aCx, global, gGlobalFun) ||
+             !JS_DefineProfilingFunctions(aCx, global)) {
+             return nullptr;
+         }
+ 
++        nsCOMPtr<nsIObserverService> obsSvc =
++            do_GetService(kObserverServiceContractID, &rv);
++        if (NS_SUCCEEDED(rv)) {
++          obsSvc->NotifyObservers(static_cast<nsIXPCScriptable *>(backstagePass), kModuleGlobalCreatedTopic, nullptr);
++        }
++
+         if (aReuseLoaderGlobal) {
+             mLoaderGlobal = holder;
+         }
+     }
+ 
+     JSObject* obj;
+     rv = holder->GetJSObject(&obj);
+     NS_ENSURE_SUCCESS(rv, nullptr);

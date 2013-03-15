@@ -1,0 +1,142 @@
+# HG changeset patch
+# Parent f99a075a5bce157bf2d000533153e1b109823222
+# User Gabor Krizsanits <gkrizsanits@mozilla.com>
+[mq]: merge scope members on nsDocument
+
+diff --git a/content/base/public/nsIDocument.h b/content/base/public/nsIDocument.h
+--- a/content/base/public/nsIDocument.h
++++ b/content/base/public/nsIDocument.h
+@@ -103,18 +103,18 @@ class UndoManager;
+ template<typename> class Sequence;
+ 
+ template<typename, typename> class CallbackObjectHolder;
+ typedef CallbackObjectHolder<NodeFilter, nsIDOMNodeFilter> NodeFilterHolder;
+ } // namespace dom
+ } // namespace mozilla
+ 
+ #define NS_IDOCUMENT_IID \
+-{ 0x45ce048f, 0x5970, 0x411e, \
+-  { 0xaa, 0x99, 0x12, 0xed, 0x3a, 0x55, 0xc9, 0xc3 } }
++{ 0x2adedf2, 0x8d85, 0x4a38, \
++  { 0xb6, 0x38, 0x91, 0xf4, 0xd2, 0xa4, 0x9b, 0x36 } }
+ 
+ // Flag for AddStyleSheet().
+ #define NS_STYLESHEET_FROM_CATALOG                (1 << 0)
+ 
+ // Enum for requesting a particular type of document when creating a doc
+ enum DocumentFlavor {
+   DocumentFlavorLegacyGuess, // compat with old code until made HTML5-compliant
+   DocumentFlavorHTML, // HTMLDocument with HTMLness bit set to true
+@@ -2282,16 +2282,18 @@ protected:
+ 
+   // True if DisallowBFCaching has been called on this document.
+   bool mBFCacheDisallowed;
+ 
+   // If true, we have an input encoding.  If this is false, then the
+   // document was created entirely in memory
+   bool mHaveInputEncoding;
+ 
++  bool mHasHadDefaultView;
++
+   // The document's script global object, the object from which the
+   // document can get its script context and scope. This is the
+   // *inner* window object.
+   nsCOMPtr<nsIScriptGlobalObject> mScriptGlobalObject;
+ 
+   // If mIsStaticDocument is true, mOriginalDocument points to the original
+   // document.
+   nsCOMPtr<nsIDocument> mOriginalDocument;
+diff --git a/content/base/src/nsDocument.cpp b/content/base/src/nsDocument.cpp
+--- a/content/base/src/nsDocument.cpp
++++ b/content/base/src/nsDocument.cpp
+@@ -3969,18 +3969,18 @@ nsDocument::SetScriptGlobalObject(nsIScr
+         loadGroup->RemoveRequest(mOnloadBlocker, nullptr, NS_OK);
+       }
+     }
+   }
+ 
+   mScriptGlobalObject = aScriptGlobalObject;
+ 
+   if (aScriptGlobalObject) {
+-    mScriptObject = nullptr;
+     mHasHadScriptHandlingObject = true;
++    mHasHadDefaultView = true;
+     // Go back to using the docshell for the layout history state
+     mLayoutHistoryState = nullptr;
+     mScopeObject = do_GetWeakReference(aScriptGlobalObject);
+ 
+ #ifdef DEBUG
+     if (!mWillReparent) {
+       // We really shouldn't have a wrapper here but if we do we need to make sure
+       // it has the correct parent.
+@@ -4024,19 +4024,22 @@ nsDocument::SetScriptGlobalObject(nsIScr
+   mVisibilityState = GetVisibilityState();
+ }
+ 
+ nsIScriptGlobalObject*
+ nsDocument::GetScriptHandlingObjectInternal() const
+ {
+   NS_ASSERTION(!mScriptGlobalObject,
+                "Do not call this when mScriptGlobalObject is set!");
++  if (mHasHadDefaultView) {
++    return nullptr;
++  }
+ 
+   nsCOMPtr<nsIScriptGlobalObject> scriptHandlingObject =
+-    do_QueryReferent(mScriptObject);
++    do_QueryReferent(mScopeObject);
+   nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(scriptHandlingObject);
+   if (win) {
+     NS_ASSERTION(win->IsInnerWindow(), "Should have inner window here!");
+     nsPIDOMWindow* outer = win->GetOuterWindow();
+     if (!outer || outer->GetCurrentInnerWindow() != win) {
+       NS_WARNING("Wrong inner/outer window combination!");
+       return nullptr;
+     }
+@@ -4046,19 +4049,20 @@ nsDocument::GetScriptHandlingObjectInter
+ void
+ nsDocument::SetScriptHandlingObject(nsIScriptGlobalObject* aScriptObject)
+ {
+   NS_ASSERTION(!mScriptGlobalObject ||
+                mScriptGlobalObject == aScriptObject,
+                "Wrong script object!");
+   nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(aScriptObject);
+   NS_ASSERTION(!win || win->IsInnerWindow(), "Should have inner window here!");
+-  mScopeObject = mScriptObject = do_GetWeakReference(aScriptObject);
++  mScopeObject = do_GetWeakReference(aScriptObject);
+   if (aScriptObject) {
+     mHasHadScriptHandlingObject = true;
++    mHasHadDefaultView = false;
+   }
+ }
+ 
+ nsPIDOMWindow *
+ nsDocument::GetWindowInternal() const
+ {
+   NS_ASSERTION(!mWindow, "This should not be called when mWindow is not null!");
+ 
+diff --git a/content/base/src/nsDocument.h b/content/base/src/nsDocument.h
+--- a/content/base/src/nsDocument.h
++++ b/content/base/src/nsDocument.h
+@@ -1151,21 +1151,16 @@ protected:
+ 
+   nsCOMArray<nsIStyleSheet> mStyleSheets;
+   nsCOMArray<nsIStyleSheet> mCatalogSheets;
+   nsCOMArray<nsIStyleSheet> mAdditionalSheets[SheetTypeCount];
+ 
+   // Array of observers
+   nsTObserverArray<nsIDocumentObserver*> mObservers;
+ 
+-  // If document is created for example using
+-  // document.implementation.createDocument(...), mScriptObject points to
+-  // the script global object of the original document.
+-  nsWeakPtr mScriptObject;
+-
+   // Weak reference to the scope object (aka the script global object)
+   // that, unlike mScriptGlobalObject, is never unset once set. This
+   // is a weak reference to avoid leaks due to circular references.
+   nsWeakPtr mScopeObject;
+ 
+   // Weak reference to the document which owned the pending pointer lock
+   // element, at the time it requested pointer lock.
+   static nsWeakPtr sPendingPointerLockDoc;

@@ -1,0 +1,268 @@
+# HG changeset patch
+# Parent c53701edc79911691b42116b9116b9cda87b15fb
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1363286030 25200
+Bug 851231 - Output Console.jsm API calls to the browser console
+
+diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
+--- a/toolkit/devtools/Console.jsm
++++ b/toolkit/devtools/Console.jsm
+@@ -19,16 +19,21 @@
+  * - The primary use of this API is debugging and error logging so the perfect
+  *   implementation isn't always required (or even well defined)
+  */
+ 
+ this.EXPORTED_SYMBOLS = [ "console" ];
+ 
+ Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "Services",
++                                  "resource://gre/modules/Services.jsm");
++
++let gTimerRegistry = new Map();
++
+ /**
+  * String utility to ensure that strings are a specified length. Strings
+  * that are too long are truncated to the max length and the last char is
+  * set to "_". Strings that are too short are left padded with spaces.
+  *
+  * @param {string} aStr
+  *        The string to format to the correct length
+  * @param {number} aMaxLen
+@@ -289,16 +294,37 @@ function getStack(aFrame) {
+       line: aFrame.lineNumber,
+       call: aFrame.name
+     });
+     aFrame = aFrame.caller;
+   }
+   return trace;
+ }
+ 
++
++function getStackForConsoleAPI(aFrame, aMaxDepth = 0) {
++  if (!aFrame) {
++    aFrame = Components.stack.caller;
++  }
++  let trace = [];
++  while (aFrame) {
++    trace.push({
++      filename: aFrame.filename,
++      lineNumber: aFrame.lineNumber,
++      functionName: aFrame.name,
++      language: aFrame.language,
++    });
++    if (aMaxDepth == trace.length) {
++      break;
++    }
++    aFrame = aFrame.caller;
++  }
++  return trace;
++}
++
+ /**
+  * Take the output from parseStack() and convert it to nice readable
+  * output
+  *
+  * @param {object[]} aTrace
+  *        Array of trace objects as created by parseStack()
+  * @return {string} Multi line report of the stack trace
+  */
+@@ -308,29 +334,82 @@ function formatTrace(aTrace) {
+     reply += fmt(frame.file, 20, 20, { truncate: "start" }) + " " +
+              fmt(frame.line, 5, 5) + " " +
+              fmt(frame.call, 75, 75) + "\n";
+   });
+   return reply;
+ }
+ 
+ /**
++ * Create a new timer by recording the current time under the specified name.
++ *
++ * @param string aName
++ *        The name of the timer.
++ * @param number [aTimestamp=Date.now()]
++ *        Optional timestamp that tells when the timer was originally started.
++ * @return object
++ *        The name property holds the timer name and the started property
++ *        holds the time the timer was started. In case of error, it returns
++ *        an object with the single property "error" that contains the key
++ *        for retrieving the localized error message.
++ */
++function startTimer(aName, aTimestamp) {
++  if (!aName) {
++    return;
++  }
++  let key = aName.toString();
++  if (!gTimerRegistry.has(key)) {
++    gTimerRegistry.set(key, aTimestamp || Date.now());
++  }
++  return { name: aName, started: gTimerRegistry.get(key) };
++}
++
++/**
++ * Stop the timer with the specified name and retrieve the elapsed time.
++ *
++ * @param string aName
++ *        The name of the timer.
++ * @param number [aTimestamp=Date.now()]
++ *        Optional timestamp that tells when the timer was originally stopped.
++ * @return object
++ *        The name property holds the timer name and the duration property
++ *        holds the number of milliseconds since the timer was started.
++ */
++function stopTimer(aName, aTimestamp) {
++  if (!aName) {
++    return;
++  }
++  let key = aName.toString();
++  if (!gTimerRegistry.has(key)) {
++    return;
++  }
++  let duration = (aTimestamp || Date.now()) - gTimerRegistry.get(key);
++  gTimerRegistry.delete(key);
++  return { name: aName, duration: duration };
++}
++
++/**
+  * Create a function which will output a concise level of output when used
+  * as a logging function
+  *
+  * @param {string} aLevel
+  *        A prefix to all output generated from this function detailing the
+  *        level at which output occurred
+  * @return {function}
+  *        A logging function
+  * @see createMultiLineDumper()
+  */
+ function createDumper(aLevel) {
+   return function() {
+     let args = Array.prototype.slice.call(arguments, 0);
++    sendConsoleAPIMessage({
++      level: aLevel,
++      frame: getStackForConsoleAPI(Components.stack.caller, 1),
++      args: args,
++    });
+     let data = args.map(function(arg) {
+       return stringify(arg);
+     });
+     dump("console." + aLevel + ": " + data.join(", ") + "\n");
+   };
+ }
+ 
+ /**
+@@ -343,37 +422,114 @@ function createDumper(aLevel) {
+  * @return {function}
+  *        A logging function
+  * @see createDumper()
+  */
+ function createMultiLineDumper(aLevel) {
+   return function() {
+     dump("console." + aLevel + ": \n");
+     let args = Array.prototype.slice.call(arguments, 0);
++    sendConsoleAPIMessage({
++      level: aLevel,
++      frame: getStackForConsoleAPI(Components.stack.caller, 1),
++      args: args,
++    });
+     args.forEach(function(arg) {
+       dump(log(arg));
+     });
+   };
+ }
+ 
++function sendConsoleAPIMessage(aOptions)
++{
++  let {level, frame, args} = aOptions;
++
++  let consoleEvent = {
++    ID: frame.filename,
++    level: level,
++    filename: frame.filename,
++    lineNumber: frame.lineNumber,
++    functionName: frame.functionName,
++    timeStamp: Date.now(),
++    arguments: args,
++  };
++
++  consoleEvent.wrappedJSObject = consoleEvent;
++
++  switch (level) {
++    case "trace":
++      consoleEvent.stacktrace = aOptions.stacktrace;
++      break;
++    case "time":
++    case "timeEnd":
++      consoleEvent.timer = aOptions.timer;
++      break;
++    case "group":
++    case "groupCollapsed":
++    case "groupEnd":
++      try {
++        consoleEvent.groupName = Array.prototype.join.call(args, " ");
++      }
++      catch (ex) {
++        Cu.reportError(ex);
++        Cu.reportError(ex.stack);
++        return;
++      }
++      break;
++  }
++
++  Services.obs.notifyObservers(consoleEvent, "console-api-log-event", null);
++}
++
+ /**
+  * This creates a console object that somewhat replicates Firebug's console
+  * object. It currently writes to dump(), but should write to the web
+  * console's chrome error section (when it has one)
+  */
+ this.console = {
+   debug: createMultiLineDumper("debug"),
+   log: createDumper("log"),
+   info: createDumper("info"),
+   warn: createDumper("warn"),
+   error: createMultiLineDumper("error"),
+ 
+   trace: function Console_trace() {
++    let args = Array.prototype.slice.call(arguments, 0);
+     let trace = getStack(Components.stack.caller);
++    let traceForConsoleAPI = getStackForConsoleAPI(Components.stack.caller);
++    sendConsoleAPIMessage({
++      level: "trace",
++      frame: traceForConsoleAPI[0],
++      args: args,
++      stacktrace: traceForConsoleAPI,
++    });
+     dump(formatTrace(trace) + "\n");
+   },
+   clear: function Console_clear() {},
+ 
+   dir: createMultiLineDumper("dir"),
+   dirxml: createMultiLineDumper("dirxml"),
+   group: createDumper("group"),
+-  groupEnd: createDumper("groupEnd")
++  groupEnd: createDumper("groupEnd"),
++
++  time: function Console_time() {
++    let args = Array.prototype.slice.call(arguments, 0);
++    sendConsoleAPIMessage({
++      level: "time",
++      frame: getStackForConsoleAPI(Components.stack.caller, 1),
++      args: args,
++      timer: startTimer(args[0]),
++    });
++    dump("console.time: '" + args[0] + "' @ " + (new Date()) + "\n");
++  },
++
++  timeEnd: function Console_timeEnd() {
++    let args = Array.prototype.slice.call(arguments, 0);
++    let timer = stopTimer(args[0]);
++    sendConsoleAPIMessage({
++      level: "timeEnd",
++      frame: getStackForConsoleAPI(Components.stack.caller, 1),
++      args: args,
++      timer: timer,
++    });
++    dump("console.timeEnd: '" + timer.name + "' " + timer.duration + "ms\n");
++  },
+ };

@@ -1,0 +1,367 @@
+# HG changeset patch
+# Parent 136b4fb05cdd0386a4c4b42236d183433234a93f
+# User Gabor Krizsanits <gkrizsanits@mozilla.com>
+[mq]: nsIGlobalObject
+
+diff --git a/content/base/src/nsInProcessTabChildGlobal.cpp b/content/base/src/nsInProcessTabChildGlobal.cpp
+--- a/content/base/src/nsInProcessTabChildGlobal.cpp
++++ b/content/base/src/nsInProcessTabChildGlobal.cpp
+@@ -162,16 +162,17 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsInProcessTabChildGlobal)
+   NS_INTERFACE_MAP_ENTRY(nsIMessageListenerManager)
+   NS_INTERFACE_MAP_ENTRY(nsIMessageSender)
+   NS_INTERFACE_MAP_ENTRY(nsISyncMessageSender)
+   NS_INTERFACE_MAP_ENTRY(nsIContentFrameMessageManager)
+   NS_INTERFACE_MAP_ENTRY(nsIInProcessContentFrameMessageManager)
+   NS_INTERFACE_MAP_ENTRY(nsIScriptContextPrincipal)
+   NS_INTERFACE_MAP_ENTRY(nsIScriptObjectPrincipal)
++  NS_INTERFACE_MAP_ENTRY(nsIGlobalObject)
+   NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(ContentFrameMessageManager)
+ NS_INTERFACE_MAP_END_INHERITING(nsDOMEventTargetHelper)
+ 
+ NS_IMPL_ADDREF_INHERITED(nsInProcessTabChildGlobal, nsDOMEventTargetHelper)
+ NS_IMPL_RELEASE_INHERITED(nsInProcessTabChildGlobal, nsDOMEventTargetHelper)
+ 
+ NS_IMETHODIMP
+ nsInProcessTabChildGlobal::GetContent(nsIDOMWindow** aContent)
+diff --git a/content/base/src/nsInProcessTabChildGlobal.h b/content/base/src/nsInProcessTabChildGlobal.h
+--- a/content/base/src/nsInProcessTabChildGlobal.h
++++ b/content/base/src/nsInProcessTabChildGlobal.h
+@@ -14,22 +14,23 @@
+ #include "nsIScriptObjectPrincipal.h"
+ #include "nsIScriptContext.h"
+ #include "nsIClassInfo.h"
+ #include "jsapi.h"
+ #include "nsIDocShell.h"
+ #include "nsIDOMElement.h"
+ #include "nsCOMArray.h"
+ #include "nsThreadUtils.h"
++#include "nsIGlobalObject.h"
+ 
+ class nsInProcessTabChildGlobal : public nsDOMEventTargetHelper,
+                                   public nsFrameScriptExecutor,
+                                   public nsIInProcessContentFrameMessageManager,
+-                                  public nsIScriptObjectPrincipal,
+                                   public nsIScriptContextPrincipal,
++                                  public nsIGlobalObject,
+                                   public mozilla::dom::ipc::MessageManagerCallback
+ {
+ public:
+   nsInProcessTabChildGlobal(nsIDocShell* aShell, nsIContent* aOwner,
+                             nsFrameMessageManager* aChrome);
+   virtual ~nsInProcessTabChildGlobal();
+   NS_DECL_ISUPPORTS_INHERITED
+   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsInProcessTabChildGlobal,
+@@ -108,16 +109,27 @@ public:
+     return mChromeMessageManager;
+   }
+   void SetChromeMessageManager(nsFrameMessageManager* aParent)
+   {
+     mChromeMessageManager = aParent;
+   }
+ 
+   void DelayedDisconnect();
++
++  virtual JSObject* GetGlobalJSObject() {
++    if (!mGlobal) {
++      return nullptr;
++    }
++
++    JSObject* global;
++    mGlobal->GetJSObject(&global);
++
++    return global;
++  }
+ protected:
+   nsresult Init();
+   nsresult InitTabChildGlobal();
+   nsCOMPtr<nsIContentFrameMessageManager> mMessageManager;
+   nsCOMPtr<nsIDocShell> mDocShell;
+   bool mInitialized;
+   bool mLoadingScript;
+   bool mDelayedDisconnect;
+diff --git a/content/xbl/src/nsXBLDocumentInfo.cpp b/content/xbl/src/nsXBLDocumentInfo.cpp
+--- a/content/xbl/src/nsXBLDocumentInfo.cpp
++++ b/content/xbl/src/nsXBLDocumentInfo.cpp
+@@ -36,34 +36,35 @@ using namespace mozilla::scache;
+ using namespace mozilla;
+ 
+ static const char kXBLCachePrefix[] = "xblcache";
+ 
+ static NS_DEFINE_CID(kDOMScriptObjectFactoryCID, NS_DOM_SCRIPT_OBJECT_FACTORY_CID);
+ 
+ // An XBLDocumentInfo object has a special context associated with it which we can use to pre-compile 
+ // properties and methods of XBL bindings against.
+-class nsXBLDocGlobalObject : public nsIScriptGlobalObject,
+-                             public nsIScriptObjectPrincipal
++class nsXBLDocGlobalObject : public nsIScriptGlobalObject
+ {
+ public:
+   nsXBLDocGlobalObject(nsXBLDocumentInfo *aGlobalObjectOwner);
+ 
+   // nsISupports interface
+   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+-  
++
++  // nsIGlobalObject methods
++  virtual JSObject *GetGlobalJSObject();
++
+   // nsIScriptGlobalObject methods
+   virtual nsresult EnsureScriptEnvironment();
+   void ClearScriptContext()
+   {
+     mScriptContext = NULL;
+   }
+ 
+   virtual nsIScriptContext *GetContext();
+-  virtual JSObject *GetGlobalJSObject();
+   virtual void OnFinalize(JSObject* aObject);
+   virtual void SetScriptsEnabled(bool aEnabled, bool aFireTimeouts);
+ 
+   // nsIScriptObjectPrincipal methods
+   virtual nsIPrincipal* GetPrincipal();
+ 
+   static JSBool doCheckAccess(JSContext *cx, JSObject *obj, jsid id,
+                               uint32_t accessType);
+@@ -194,16 +195,17 @@ nsXBLDocGlobalObject::~nsXBLDocGlobalObj
+ {}
+ 
+ 
+ NS_IMPL_CYCLE_COLLECTION_1(nsXBLDocGlobalObject, mScriptContext)
+ 
+ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsXBLDocGlobalObject)
+   NS_INTERFACE_MAP_ENTRY(nsIScriptGlobalObject)
+   NS_INTERFACE_MAP_ENTRY(nsIScriptObjectPrincipal)
++  NS_INTERFACE_MAP_ENTRY(nsIGlobalObject)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIScriptGlobalObject)
+ NS_INTERFACE_MAP_END
+ 
+ NS_IMPL_CYCLE_COLLECTING_ADDREF(nsXBLDocGlobalObject)
+ NS_IMPL_CYCLE_COLLECTING_RELEASE(nsXBLDocGlobalObject)
+ 
+ void
+ XBL_ProtoErrorReporter(JSContext *cx,
+diff --git a/content/xul/document/src/nsXULPrototypeDocument.cpp b/content/xul/document/src/nsXULPrototypeDocument.cpp
+--- a/content/xul/document/src/nsXULPrototypeDocument.cpp
++++ b/content/xul/document/src/nsXULPrototypeDocument.cpp
+@@ -34,30 +34,31 @@
+ 
+ using mozilla::dom::DestroyProtoAndIfaceCache;
+ using mozilla::AutoPushJSContext;
+ 
+ static NS_DEFINE_CID(kDOMScriptObjectFactoryCID,
+                      NS_DOM_SCRIPT_OBJECT_FACTORY_CID);
+ 
+ 
+-class nsXULPDGlobalObject : public nsIScriptGlobalObject,
+-                            public nsIScriptObjectPrincipal
++class nsXULPDGlobalObject : public nsIScriptGlobalObject
+ {
+ public:
+     nsXULPDGlobalObject(nsXULPrototypeDocument* owner);
+ 
+     // nsISupports interface
+     NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+ 
++    // nsIGlobalJSObjectHolder methods
++    virtual JSObject* GetGlobalJSObject();
++
+     // nsIScriptGlobalObject methods
+     virtual void OnFinalize(JSObject* aObject);
+     virtual void SetScriptsEnabled(bool aEnabled, bool aFireTimeouts);
+ 
+-    virtual JSObject* GetGlobalJSObject();
+     virtual nsresult EnsureScriptEnvironment();
+ 
+     virtual nsIScriptContext *GetScriptContext();
+ 
+     // nsIScriptObjectPrincipal methods
+     virtual nsIPrincipal* GetPrincipal();
+ 
+     NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsXULPDGlobalObject,
+@@ -723,16 +724,17 @@ nsXULPDGlobalObject::~nsXULPDGlobalObjec
+ NS_IMPL_CYCLE_COLLECTION_UNLINK_0(nsXULPDGlobalObject)
+ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsXULPDGlobalObject)
+   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mContext)
+ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+ 
+ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsXULPDGlobalObject)
+   NS_INTERFACE_MAP_ENTRY(nsIScriptGlobalObject)
+   NS_INTERFACE_MAP_ENTRY(nsIScriptObjectPrincipal)
++  NS_INTERFACE_MAP_ENTRY(nsIGlobalObject)
+   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIScriptGlobalObject)
+ NS_INTERFACE_MAP_END
+ 
+ NS_IMPL_CYCLE_COLLECTING_ADDREF(nsXULPDGlobalObject)
+ NS_IMPL_CYCLE_COLLECTING_RELEASE(nsXULPDGlobalObject)
+ 
+ //----------------------------------------------------------------------
+ //
+diff --git a/dom/base/Makefile.in b/dom/base/Makefile.in
+--- a/dom/base/Makefile.in
++++ b/dom/base/Makefile.in
+@@ -37,16 +37,17 @@ EXPORTS = \
+   nsDOMCID.h \
+   nsDOMClassInfoClasses.h \
+   nsDOMClassInfoID.h \
+   nsDOMJSUtils.h \
+   nsDOMScriptObjectHolder.h \
+   nsDOMString.h \
+   nsIDOMClassInfo.h \
+   nsIDOMScriptObjectFactory.h \
++  nsIGlobalObject.h \
+   nsIJSEventListener.h \
+   nsIJSNativeInitializer.h \
+   nsIScriptContext.h	\
+   nsIScriptExternalNameSet.h \
+   nsIScriptGlobalObject.h \
+   nsIScriptGlobalObjectOwner.h \
+   nsIScriptNameSpaceManager.h \
+   nsIScriptObjectPrincipal.h \
+diff --git a/dom/base/nsGlobalWindow.cpp b/dom/base/nsGlobalWindow.cpp
+--- a/dom/base/nsGlobalWindow.cpp
++++ b/dom/base/nsGlobalWindow.cpp
+@@ -1442,16 +1442,17 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(
+     if (!sWarnedAboutWindowInternal) {
+       sWarnedAboutWindowInternal = true;
+       nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                       "Extensions", mDoc,
+                                       nsContentUtils::eDOM_PROPERTIES,
+                                       "nsIDOMWindowInternalWarning");
+     }
+   } else
++  NS_INTERFACE_MAP_ENTRY(nsIGlobalObject)
+   NS_INTERFACE_MAP_ENTRY(nsIScriptGlobalObject)
+   NS_INTERFACE_MAP_ENTRY(nsIScriptObjectPrincipal)
+   NS_INTERFACE_MAP_ENTRY(nsIDOMEventTarget)
+   NS_INTERFACE_MAP_ENTRY(mozilla::dom::EventTarget)
+   NS_INTERFACE_MAP_ENTRY(nsPIDOMWindow)
+   NS_INTERFACE_MAP_ENTRY(nsIDOMStorageIndexedDB)
+   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
+   NS_INTERFACE_MAP_ENTRY(nsIInterfaceRequestor)
+diff --git a/dom/base/nsGlobalWindow.h b/dom/base/nsGlobalWindow.h
+--- a/dom/base/nsGlobalWindow.h
++++ b/dom/base/nsGlobalWindow.h
+@@ -248,17 +248,16 @@ struct IdleObserverHolder
+ // object's lists also contain its outer and all other inner windows
+ // belonging to the same outer window, but that's an unimportant
+ // side effect of inheriting PRCList).
+ 
+ class nsGlobalWindow : public mozilla::dom::EventTarget,
+                        public nsPIDOMWindow,
+                        public nsIScriptGlobalObject,
+                        public nsIDOMJSWindow,
+-                       public nsIScriptObjectPrincipal,
+                        public nsIDOMStorageIndexedDB,
+                        public nsSupportsWeakReference,
+                        public nsIInterfaceRequestor,
+                        public PRCListStr,
+                        public nsIDOMWindowPerformance,
+                        public nsITouchEventReceiver,
+                        public nsIInlineEventHandlers
+ #ifdef MOZ_B2G
+diff --git a/dom/base/nsIGlobalObject.h b/dom/base/nsIGlobalObject.h
+new file mode 100644
+--- /dev/null
++++ b/dom/base/nsIGlobalObject.h
+@@ -0,0 +1,29 @@
++/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef nsIGlobalObject_h__
++#define nsIGlobalObject_h__
++
++#include "nsISupports.h"
++#include "nsIScriptObjectPrincipal.h"
++
++class JSObject;
++
++#define NS_IGLOBALOBJECT_IID \
++{ 0x8503e9a9, 0x530, 0x4b26,  \
++{ 0xae, 0x24, 0x18, 0xca, 0x38, 0xe5, 0xed, 0x17 } }
++
++class nsIGlobalObject : public nsIScriptObjectPrincipal
++{
++public:
++  NS_DECLARE_STATIC_IID_ACCESSOR(NS_IGLOBALOBJECT_IID)
++
++  virtual JSObject* GetGlobalJSObject() = 0;
++};
++
++NS_DEFINE_STATIC_IID_ACCESSOR(nsIGlobalObject,
++                              NS_IGLOBALOBJECT_IID)
++
++#endif // nsIGlobalObject_h__
+diff --git a/dom/base/nsIScriptGlobalObject.h b/dom/base/nsIScriptGlobalObject.h
+--- a/dom/base/nsIScriptGlobalObject.h
++++ b/dom/base/nsIScriptGlobalObject.h
+@@ -5,16 +5,17 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #ifndef nsIScriptGlobalObject_h__
+ #define nsIScriptGlobalObject_h__
+ 
+ #include "nsISupports.h"
+ #include "nsEvent.h"
+ #include "nsIProgrammingLanguage.h"
++#include "nsIGlobalObject.h"
+ 
+ class nsIScriptContext;
+ class nsIDOMEvent;
+ class nsIScriptGlobalObjectOwner;
+ class nsIArray;
+ class nsScriptErrorEvent;
+ class nsIScriptGlobalObject;
+ class JSObject; // until we finally remove GetGlobalJSObject...
+@@ -55,25 +56,27 @@ class JSObject; // until we finally remo
+ // aStatus will be filled in with the status.
+ bool
+ NS_HandleScriptError(nsIScriptGlobalObject *aScriptGlobal,
+                      nsScriptErrorEvent *aErrorEvent,
+                      nsEventStatus *aStatus);
+ 
+ 
+ #define NS_ISCRIPTGLOBALOBJECT_IID \
+-{ 0x92569431, 0x6e6e, 0x408a, \
+-  { 0xa8, 0x8c, 0x45, 0x28, 0x5c, 0x1c, 0x85, 0x73 } }
++{ 0xde24b30a, 0x12c6, 0x4e5f, \
++  { 0xa8, 0x5e, 0x90, 0xcd, 0xfb, 0x6c, 0x54, 0x51 } }
+ 
+ /**
+  * The global object which keeps a script context for each supported script
+  * language. This often used to store per-window global state.
++ * This is a heavyweight interface implemented only by DOM globals, and
++ * it might go away some time in the future.
+  */
+ 
+-class nsIScriptGlobalObject : public nsISupports
++class nsIScriptGlobalObject : public nsIGlobalObject
+ {
+ public:
+   NS_DECLARE_STATIC_IID_ACCESSOR(NS_ISCRIPTGLOBALOBJECT_IID)
+ 
+   /**
+    * Ensure that the script global object is initialized for working with the
+    * specified script language ID.  This will set up the nsIScriptContext
+    * and 'script global' for that language, allowing these to be fetched
+@@ -82,18 +85,16 @@ public:
+    * has not been registered, as well as 'normal' errors, such as
+    * out-of-memory
+    */
+   virtual nsresult EnsureScriptEnvironment() = 0;
+   /**
+    * Get a script context (WITHOUT added reference) for the specified language.
+    */
+   virtual nsIScriptContext *GetScriptContext() = 0;
+-  
+-  virtual JSObject* GetGlobalJSObject() = 0;
+ 
+   nsIScriptContext* GetContext() {
+     return GetScriptContext();
+   }
+ 
+   /**
+    * Called when the global script for a language is finalized, typically as
+    * part of its GC process.  By the time this call is made, the

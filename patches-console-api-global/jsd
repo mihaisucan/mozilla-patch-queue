@@ -1,0 +1,132 @@
+# HG changeset patch
+# Parent 8b7c503bce20c2e10ec7d8ec0be419818a7a3f25
+# User Gabor Krizsanits <gkrizsanits@mozilla.com>
+SandboxPrivate for jsd global
+
+diff --git a/js/jsd/jsd_high.cpp b/js/jsd/jsd_high.cpp
+--- a/js/jsd/jsd_high.cpp
++++ b/js/jsd/jsd_high.cpp
+@@ -32,20 +32,33 @@ void JSD_ASSERT_VALID_CONTEXT(JSDContext
+ {
+     JS_ASSERT(jsdc->inited);
+     JS_ASSERT(jsdc->jsrt);
+     JS_ASSERT(jsdc->dumbContext);
+     JS_ASSERT(jsdc->glob);
+ }
+ #endif
+ 
++/***************************************************************************/
++/* xpconnect related utility functions implemented in jsd_xpc.cpp */
++
++extern void
++global_finalize(JSFreeOp* fop, JSObject* obj);
++
++extern JSObject*
++CreateJSDGlobal(JSContext *cx, JSClass *clasp);
++
++/***************************************************************************/
++
++
+ static JSClass global_class = {
+-    "JSDGlobal", JSCLASS_GLOBAL_FLAGS,
++    "JSDGlobal", JSCLASS_GLOBAL_FLAGS |
++    JSCLASS_HAS_PRIVATE | JSCLASS_PRIVATE_IS_NSISUPPORTS,
+     JS_PropertyStub,  JS_PropertyStub,  JS_PropertyStub,  JS_StrictPropertyStub,
+-    JS_EnumerateStub, JS_ResolveStub,   JS_ConvertStub
++    JS_EnumerateStub, JS_ResolveStub,   JS_ConvertStub,   global_finalize
+ };
+ 
+ static JSBool
+ _validateUserCallbacks(JSD_UserCallbacks* callbacks)
+ {
+     return !callbacks ||
+            (callbacks->size && callbacks->size <= sizeof(JSD_UserCallbacks));
+ }    
+@@ -103,17 +116,17 @@ static JSDContext*
+ 
+     jsdc->dumbContext = JS_NewContext(jsdc->jsrt, 256);
+     if( ! jsdc->dumbContext )
+         goto label_newJSDContext_failure;
+ 
+     JS_BeginRequest(jsdc->dumbContext);
+     JS_SetOptions(jsdc->dumbContext, JS_GetOptions(jsdc->dumbContext));
+ 
+-    jsdc->glob = JS_NewGlobalObject(jsdc->dumbContext, &global_class, NULL);
++    jsdc->glob = CreateJSDGlobal(jsdc->dumbContext, &global_class);
+ 
+     if( ! jsdc->glob )
+         goto label_newJSDContext_failure;
+ 
+     oldCompartment = JS_EnterCompartment(jsdc->dumbContext, jsdc->glob);
+ 
+     if ( ! JS_AddNamedObjectRoot(jsdc->dumbContext, &jsdc->glob, "JSD context global") )
+         goto label_newJSDContext_failure;
+diff --git a/js/jsd/jsd_xpc.cpp b/js/jsd/jsd_xpc.cpp
+--- a/js/jsd/jsd_xpc.cpp
++++ b/js/jsd/jsd_xpc.cpp
+@@ -25,16 +25,18 @@
+ #include "nsReadableUtils.h"
+ #include "nsCRT.h"
+ #include "nsCycleCollectionParticipant.h"
+ #include "mozilla/Attributes.h"
+ 
+ /* XXX DOM dependency */
+ #include "nsIScriptContext.h"
+ #include "nsIJSContextStack.h"
++#include "SandboxPrivate.h"
++#include "nsJSPrincipals.h"
+ 
+ /*
+  * defining CAUTIOUS_SCRIPTHOOK makes jsds disable GC while calling out to the
+  * script hook.  This was a hack to avoid some js engine problems that should
+  * be fixed now (see Mozilla bug 77636).
+  */
+ #undef CAUTIOUS_SCRIPTHOOK
+ 
+@@ -3428,16 +3430,46 @@ static const mozilla::Module::ContractID
+ static const mozilla::Module kJSDModule = {
+     mozilla::Module::kVersion,
+     kJSDCIDs,
+     kJSDContracts
+ };
+ 
+ NSMODULE_DEFN(JavaScript_Debugger) = &kJSDModule;
+ 
++void
++global_finalize(JSFreeOp *aFop, JSObject *aObj)
++{
++    nsIScriptObjectPrincipal *sop =
++        static_cast<nsIScriptObjectPrincipal *>(js::GetObjectPrivate(aObj));
++    MOZ_ASSERT(sop);
++    static_cast<SandboxPrivate *>(sop)->ForgetGlobalObject();
++    NS_IF_RELEASE(sop);
++}
++
++JSObject *
++CreateJSDGlobal(JSContext *aCx, JSClass *aClasp)
++{
++    nsresult rv;
++    nsCOMPtr<nsIPrincipal> nullPrin = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
++    NS_ENSURE_SUCCESS(rv, nullptr);
++
++    JSPrincipals *jsPrin = nsJSPrincipals::get(nullPrin);
++    JSObject *global = JS_NewGlobalObject(aCx, aClasp, jsPrin);
++    NS_ENSURE_TRUE(global, nullptr);
++
++    // We have created a new global let's attach a private to it
++    // that implements nsIGlobalObject.
++    nsCOMPtr<nsIScriptObjectPrincipal> sbp =
++        new SandboxPrivate(nullPrin, global);
++    JS_SetPrivate(global, sbp.forget().get());
++
++    return global;
++}
++
+ /********************************************************************************
+  ********************************************************************************
+  * graveyard
+  */
+ 
+ #if 0
+ /* Thread States */
+ NS_IMPL_THREADSAFE_ISUPPORTS1(jsdThreadState, jsdIThreadState); 

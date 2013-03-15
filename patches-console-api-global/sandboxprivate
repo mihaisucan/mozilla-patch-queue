@@ -1,0 +1,327 @@
+# HG changeset patch
+# Parent 42822ca1756323bf40c8b456acfd22a1da47fbcb
+# User Gabor Krizsanits <gkrizsanits@mozilla.com>
+SandboxPrivate
+
+diff --git a/js/xpconnect/public/Makefile.in b/js/xpconnect/public/Makefile.in
+--- a/js/xpconnect/public/Makefile.in
++++ b/js/xpconnect/public/Makefile.in
+@@ -12,11 +12,12 @@ include $(DEPTH)/config/autoconf.mk
+ 
+ MODULE		= xpconnect
+ 
+ EXPORTS		= \
+ 		nsAXPCNativeCallContext.h \
+ 		xpc_map_end.h \
+ 		nsAutoJSValHolder.h \
+ 		nsTArrayHelpers.h \
++		SandboxPrivate.h \
+ 		$(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/js/xpconnect/public/SandboxPrivate.h b/js/xpconnect/public/SandboxPrivate.h
+new file mode 100644
+--- /dev/null
++++ b/js/xpconnect/public/SandboxPrivate.h
+@@ -0,0 +1,45 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
++ * You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef __SANDBOXPRIVATE_H__
++#define __SANDBOXPRIVATE_H__
++
++#include "nsIGlobalObject.h"
++#include "nsIPrincipal.h"
++
++// This interface is public only because it is used in jsd.
++// Once jsd is gone this file should be moved back to xpconnect/src.
++
++class SandboxPrivate : public nsIGlobalObject
++{
++public:
++    SandboxPrivate(nsIPrincipal *principal, JSObject *global)
++        : mPrincipal(principal)
++        , mGlobalJSObject(global)
++    {
++    }
++    virtual ~SandboxPrivate() { }
++
++    NS_DECL_ISUPPORTS
++
++    nsIPrincipal *GetPrincipal()
++    {
++        return mPrincipal;
++    }
++
++    JSObject *GetGlobalJSObject()
++    {
++        return mGlobalJSObject;
++    }
++
++    void ForgetGlobalObject()
++    {
++        mGlobalJSObject = NULL;
++    }
++private:
++    nsCOMPtr<nsIPrincipal> mPrincipal;
++    JSObject *mGlobalJSObject;
++};
++
++#endif // __SANDBOXPRIVATE_H__
+\ No newline at end of file
+diff --git a/js/xpconnect/src/XPCComponents.cpp b/js/xpconnect/src/XPCComponents.cpp
+--- a/js/xpconnect/src/XPCComponents.cpp
++++ b/js/xpconnect/src/XPCComponents.cpp
+@@ -2832,23 +2832,17 @@ nsXPCComponents_Utils::ReportError(const
+     return NS_OK;
+ }
+ 
+ #include "nsIScriptSecurityManager.h"
+ #include "nsIURI.h"
+ #include "nsNetUtil.h"
+ const char kScriptSecurityManagerContractID[] = NS_SCRIPTSECURITYMANAGER_CONTRACTID;
+ 
+-NS_IMPL_THREADSAFE_ISUPPORTS1(PrincipalHolder, nsIScriptObjectPrincipal)
+-
+-nsIPrincipal *
+-PrincipalHolder::GetPrincipal()
+-{
+-    return mHoldee;
+-}
++NS_IMPL_THREADSAFE_ISUPPORTS2(SandboxPrivate, nsIScriptObjectPrincipal, nsIGlobalObject)
+ 
+ static JSBool
+ SandboxDump(JSContext *cx, unsigned argc, jsval *vp)
+ {
+     JSString *str;
+     if (!argc)
+         return true;
+ 
+@@ -2982,17 +2976,19 @@ sandbox_resolve(JSContext *cx, JSHandleO
+     JSBool resolved;
+     return JS_ResolveStandardClass(cx, obj, id, &resolved);
+ }
+ 
+ static void
+ sandbox_finalize(JSFreeOp *fop, JSObject *obj)
+ {
+     nsIScriptObjectPrincipal *sop =
+-        (nsIScriptObjectPrincipal *)xpc_GetJSPrivate(obj);
++        static_cast<nsIScriptObjectPrincipal *>(xpc_GetJSPrivate(obj));
++    MOZ_ASSERT(sop);
++    static_cast<SandboxPrivate *>(sop)->ForgetGlobalObject();
+     NS_IF_RELEASE(sop);
+     DestroyProtoAndIfaceCache(obj);
+ }
+ 
+ static JSBool
+ sandbox_convert(JSContext *cx, JSHandleObject obj, JSType type, JSMutableHandleValue vp)
+ {
+     if (type == JSTYPE_OBJECT) {
+@@ -3246,42 +3242,37 @@ nsresult
+ xpc_CreateSandboxObject(JSContext *cx, jsval *vp, nsISupports *prinOrSop, SandboxOptions& options)
+ {
+     // Create the sandbox global object
+     nsresult rv;
+     nsCOMPtr<nsIXPConnect> xpc(do_GetService(nsIXPConnect::GetCID(), &rv));
+     if (NS_FAILED(rv))
+         return NS_ERROR_XPC_UNEXPECTED;
+ 
+-    nsCOMPtr<nsIScriptObjectPrincipal> sop(do_QueryInterface(prinOrSop));
+-
+-    if (!sop) {
+-        nsCOMPtr<nsIPrincipal> principal(do_QueryInterface(prinOrSop));
+-
+-        if (!principal) {
++
++    nsCOMPtr<nsIPrincipal> principal = do_QueryInterface(prinOrSop);
++    if (!principal) {
++        nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(prinOrSop);
++        if (sop) {
++            principal = sop->GetPrincipal();
++        } else {
+             principal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
+             NS_ASSERTION(NS_FAILED(rv) || principal,
+                          "Bad return from do_CreateInstance");
+ 
+             if (!principal || NS_FAILED(rv)) {
+                 if (NS_SUCCEEDED(rv)) {
+                     rv = NS_ERROR_FAILURE;
+                 }
+ 
+                 return rv;
+             }
+         }
+-
+-        sop = new PrincipalHolder(principal);
+-        if (!sop)
+-            return NS_ERROR_OUT_OF_MEMORY;
++        MOZ_ASSERT(principal);
+     }
+-
+-    nsIPrincipal *principal = sop->GetPrincipal();
+-
+     JSObject *sandbox;
+ 
+     sandbox = xpc::CreateGlobalObject(cx, &SandboxClass, principal);
+     if (!sandbox)
+         return NS_ERROR_FAILURE;
+ 
+     // Set up the wantXrays flag, which indicates whether xrays are desired even
+     // for same-origin access.
+@@ -3326,18 +3317,21 @@ xpc_CreateSandboxObject(JSContext *cx, j
+                     return NS_ERROR_OUT_OF_MEMORY;
+             }
+ 
+             ok = JS_SetPrototype(cx, sandbox, options.proto);
+             if (!ok)
+                 return NS_ERROR_XPC_UNEXPECTED;
+         }
+ 
+-        // Pass on ownership of sop to |sandbox|.
+-        JS_SetPrivate(sandbox, sop.forget().get());
++        nsCOMPtr<nsIScriptObjectPrincipal> sbp =
++            new SandboxPrivate(principal, sandbox);
++
++        // Pass on ownership of sbp to |sandbox|.
++        JS_SetPrivate(sandbox, sbp.forget().get());
+ 
+         XPCCallContext ccx(NATIVE_CALLER, cx);
+         if (!ccx.IsValid())
+             return NS_ERROR_XPC_UNEXPECTED;
+ 
+         {
+           JSAutoCompartment ac(ccx, sandbox);
+           if (options.wantComponents &&
+diff --git a/js/xpconnect/src/XPCJSContextStack.cpp b/js/xpconnect/src/XPCJSContextStack.cpp
+--- a/js/xpconnect/src/XPCJSContextStack.cpp
++++ b/js/xpconnect/src/XPCJSContextStack.cpp
+@@ -119,18 +119,19 @@ SafeGlobalResolve(JSContext *cx, JSHandl
+ {
+     JSBool resolved;
+     return JS_ResolveStandardClass(cx, obj, id, &resolved);
+ }
+ 
+ static void
+ SafeFinalize(JSFreeOp *fop, JSObject* obj)
+ {
+-    nsIScriptObjectPrincipal* sop =
+-        static_cast<nsIScriptObjectPrincipal*>(xpc_GetJSPrivate(obj));
++    SandboxPrivate* sop =
++        static_cast<SandboxPrivate*>(xpc_GetJSPrivate(obj));
++    sop->ForgetGlobalObject();
+     NS_IF_RELEASE(sop);
+     DestroyProtoAndIfaceCache(obj);
+ }
+ 
+ static JSClass global_class = {
+     "global_for_XPCJSContextStack_SafeJSContext",
+     XPCONNECT_GLOBAL_FLAGS,
+     JS_PropertyStub, JS_PropertyStub, JS_PropertyStub, JS_StrictPropertyStub,
+@@ -151,18 +152,16 @@ XPCJSContextStack::GetSafeJSContext()
+ 
+     // Start by getting the principal holder and principal for this
+     // context.  If we can't manage that, don't bother with the rest.
+     nsRefPtr<nsNullPrincipal> principal = new nsNullPrincipal();
+     nsresult rv = principal->Init();
+     if (NS_FAILED(rv))
+         return NULL;
+ 
+-    nsCOMPtr<nsIScriptObjectPrincipal> sop = new PrincipalHolder(principal);
+-
+     nsRefPtr<nsXPConnect> xpc = nsXPConnect::GetXPConnect();
+     if (!xpc)
+         return NULL;
+ 
+     XPCJSRuntime* xpcrt = xpc->GetRuntime();
+     if (!xpcrt)
+         return NULL;
+ 
+@@ -185,19 +184,18 @@ XPCJSContextStack::GetSafeJSContext()
+ 
+         if (glob) {
+             // Make sure the context is associated with a proper compartment
+             // and not the default compartment.
+             JS_SetGlobalObject(mSafeJSContext, glob);
+ 
+             // Note: make sure to set the private before calling
+             // InitClasses
+-            nsIScriptObjectPrincipal* priv = nullptr;
+-            sop.swap(priv);
+-            JS_SetPrivate(glob, priv);
++            nsCOMPtr<nsIScriptObjectPrincipal> sop = new SandboxPrivate(principal, glob);
++            JS_SetPrivate(glob, sop.forget().get());
+         }
+ 
+         // After this point either glob is null and the
+         // nsIScriptObjectPrincipal ownership is either handled by the
+         // nsCOMPtr or dealt with, or we'll release in the finalize
+         // hook.
+         if (glob && NS_FAILED(xpc->InitClasses(mSafeJSContext, glob))) {
+             glob = nullptr;
+diff --git a/js/xpconnect/src/xpcprivate.h b/js/xpconnect/src/xpcprivate.h
+--- a/js/xpconnect/src/xpcprivate.h
++++ b/js/xpconnect/src/xpcprivate.h
+@@ -173,16 +173,18 @@
+ 
+ #include "nsIPrincipal.h"
+ #include "nsJSPrincipals.h"
+ #include "nsIScriptObjectPrincipal.h"
+ #include "nsISecurityCheckedComponent.h"
+ #include "xpcObjectHelper.h"
+ #include "nsIThreadInternal.h"
+ 
++#include "SandboxPrivate.h"
++
+ #ifdef XP_WIN
+ // Nasty MS defines
+ #ifdef GetClassInfo
+ #undef GetClassInfo
+ #endif
+ #ifdef GetClassName
+ #undef GetClassName
+ #endif
+@@ -4180,42 +4182,16 @@ public:
+ 
+     virtual ~XPCTraceableVariant();
+ 
+     void TraceJS(JSTracer* trc);
+     static void GetTraceName(JSTracer* trc, char *buf, size_t bufsize);
+ };
+ 
+ /***************************************************************************/
+-
+-#define PRINCIPALHOLDER_IID \
+-{0xbf109f49, 0xf94a, 0x43d8, {0x93, 0xdb, 0xe4, 0x66, 0x49, 0xc5, 0xd9, 0x7d}}
+-
+-class PrincipalHolder : public nsIScriptObjectPrincipal
+-{
+-public:
+-    NS_DECLARE_STATIC_IID_ACCESSOR(PRINCIPALHOLDER_IID)
+-
+-    PrincipalHolder(nsIPrincipal *holdee)
+-        : mHoldee(holdee)
+-    {
+-    }
+-    virtual ~PrincipalHolder() { }
+-
+-    NS_DECL_ISUPPORTS
+-
+-    nsIPrincipal *GetPrincipal();
+-
+-private:
+-    nsCOMPtr<nsIPrincipal> mHoldee;
+-};
+-
+-NS_DEFINE_STATIC_IID_ACCESSOR(PrincipalHolder, PRINCIPALHOLDER_IID)
+-
+-/***************************************************************************/
+ // Utilities
+ 
+ inline void *
+ xpc_GetJSPrivate(JSObject *obj)
+ {
+     return js::GetObjectPrivate(obj);
+ }
+ 
