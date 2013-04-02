@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 7cc974e3a6a3a8e3fb08cbef3638e0685d0481c4
+# Parent c89599ac6867e5142e4e5b0a212231e0d136edfa
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1363367007 25200
+# Date 1364933964 -10800
 Bug 587757 - (global-console) Implement Browser Console
 
 diff --git a/browser/base/content/browser-appmenu.inc b/browser/base/content/browser-appmenu.inc
@@ -92,7 +92,7 @@ diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browse
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 --- a/browser/base/content/browser.js
 +++ b/browser/base/content/browser.js
-@@ -1549,29 +1549,37 @@ var gBrowserInit = {
+@@ -1563,29 +1563,37 @@ var gBrowserInit = {
  
        // Show the toolbar if it was previously visible
        if (gPrefService.getBoolPref("devtools.toolbar.visible")) {
@@ -135,7 +135,7 @@ diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/HUDService.jsm
-@@ -5,38 +5,48 @@
+@@ -5,38 +5,51 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  "use strict";
@@ -172,6 +172,9 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  XPCOMUtils.defineLazyModuleGetter(this, "Promise",
      "resource://gre/modules/commonjs/sdk/core/promise.js");
  
++XPCOMUtils.defineLazyModuleGetter(this, "ViewHelpers",
++    "resource:///modules/devtools/ViewHelpers.jsm");
++
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
  let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
  
@@ -185,30 +188,52 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
  function HUD_SERVICE()
  {
    this.hudReferences = {};
-@@ -68,26 +78,25 @@ HUD_SERVICE.prototype =
-     return Services.wm.getMostRecentWindow("navigator:browser");
-   },
+@@ -70,24 +83,49 @@ HUD_SERVICE.prototype =
  
    /**
     * Open a Web Console for the given target.
     *
     * @see devtools/framework/Target.jsm for details about targets.
     *
--   * @param object aTarget
--   *        The target that the web console will connect to.
+    * @param object aTarget
+    *        The target that the web console will connect to.
 -   * @param nsIDOMElement aIframe
 -   *        The iframe element into which to place the web console.
-+   * @param object aOptions
-+   *        The options for opening the web console, see the WebConsole
-+   *        constructor.
++   * @param nsIDOMWindow aIframeWindow
++   *        The window where the web console UI is already loaded.
++   * @param nsIDOMWindow aChromeWindow
++   *        The window of the web console owner.
     * @return object
     *         A Promise object for the opening of the new WebConsole instance.
     */
 -  openWebConsole: function HS_openWebConsole(aTarget, aIframe)
-+  openWebConsole: function HS_openWebConsole(aOptions)
++  openWebConsole:
++  function HS_openWebConsole(aTarget, aIframeWindow, aChromeWindow)
    {
 -    let hud = new WebConsole(aTarget, aIframe);
-+    let hud = new WebConsole(aOptions);
++    let hud = new WebConsole(aTarget, aIframeWindow, aChromeWindow);
++    this.hudReferences[hud.hudId] = hud;
++    return hud.init();
++  },
++
++  /**
++   * Open a Browser Console for the given target.
++   *
++   * @see devtools/framework/Target.jsm for details about targets.
++   *
++   * @param object aTarget
++   *        The target that the browser console will connect to.
++   * @param nsIDOMWindow aIframeWindow
++   *        The window where the browser console UI is already loaded.
++   * @param nsIDOMWindow aChromeWindow
++   *        The window of the browser console owner.
++   * @return object
++   *         A Promise object for the opening of the new BrowserConsole instance.
++   */
++  openBrowserConsole:
++  function HS_openBrowserConsole(aTarget, aIframeWindow, aChromeWindow)
++  {
++    let hud = new BrowserConsole(aTarget, aIframeWindow, aChromeWindow);
      this.hudReferences[hud.hudId] = hud;
      return hud.init();
    },
@@ -217,50 +242,46 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Returns the HeadsUpDisplay object associated to a content window.
     *
     * @param nsIDOMWindow aContentWindow
-@@ -142,43 +151,49 @@ HUD_SERVICE.prototype =
+@@ -139,46 +177,49 @@ HUD_SERVICE.prototype =
+ };
+ 
+ 
  /**
   * A WebConsole instance is an interactive console initialized *per target*
   * that displays console log data as well as provides an interactive terminal to
   * manipulate the target's document content.
   *
-  * This object only wraps the iframe that holds the Web Console UI.
+- * This object only wraps the iframe that holds the Web Console UI.
++ * This object only wraps the iframe that holds the Web Console UI. This is
++ * meant to be an integration point between the Firefox UI and the Web Console
++ * UI and features.
   *
   * @constructor
-- * @param object aTarget
-- *        The target that the web console will connect to.
+  * @param object aTarget
+  *        The target that the web console will connect to.
 - * @param nsIDOMElement aIframe
 - *        iframe into which we should create the WebConsole UI.
-+ *
-+ * @param object aOptions
-+ *        The options for opening the web console:
-+ *        - target: the target that the web console will connect to.
-+ *        - window: the window where the web console UI is already loaded.
-+ *        - chromeWindow: the window of the web console owner.
-+ *        - browserConsole: boolean that tells if this is a browser
-+ *        console or not.
++ * @param nsIDOMWindow aIframeWindow
++ *        The window where the web console UI is already loaded.
++ * @param nsIDOMWindow aChromeWindow
++ *        The window of the web console owner.
   */
 -function WebConsole(aTarget, aIframe)
-+function WebConsole(aOptions)
++function WebConsole(aTarget, aIframeWindow, aChromeWindow)
  {
 -  this.iframe = aIframe;
 -  this.iframe.className = "web-console-frame";
 -  this.chromeDocument = this.iframe.ownerDocument;
 -  this.chromeWindow = this.chromeDocument.defaultView;
-+  this.iframeWindow = aOptions.window;
-+  this.chromeWindow = aOptions.chromeWindow;
++  this.iframeWindow = aIframeWindow;
++  this.chromeWindow = aChromeWindow;
    this.hudId = "hud_" + Date.now();
--  this.target = aTarget;
-+  this.target = aOptions.target;
-+  this._browserConsole = aOptions.browserConsole;
+   this.target = aTarget;
  
    this.browserWindow = this.chromeWindow.top;
--  let element = this.browserWindow.document.documentElement;
--  if (element.getAttribute("windowtype") != "navigator:browser") {
 +
-+  let element = this.browserWindow ?
-+                this.browserWindow.document.documentElement : null;
-+  if (element &&
-+      element.getAttribute("windowtype") != "navigator:browser") {
+   let element = this.browserWindow.document.documentElement;
+   if (element.getAttribute("windowtype") != "navigator:browser") {
      this.browserWindow = HUDService.currentContext();
    }
  }
@@ -281,7 +302,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @see HUDService.lastFinishedRequestCallback
     * @type function
     */
-@@ -207,47 +222,21 @@ WebConsole.prototype = {
+@@ -207,47 +248,18 @@ WebConsole.prototype = {
    /**
     * Initialize the Web Console instance.
     *
@@ -321,11 +342,8 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 -      this.iframe.addEventListener("load", onIframeLoad, true);
 -    }
 -    return deferred.promise;
-+    Promise._reportErrors = true;
 +    this.ui = new this.iframeWindow.WebConsoleFrame(this);
-+    return this.ui.init().then(function() {
-+      return this;
-+    }.bind(this));
++    return this.ui.init().then(() => this);
    },
  
    /**
@@ -334,7 +352,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @return string
     *         The Web Console panel title.
     */
-@@ -355,16 +344,20 @@ WebConsole.prototype = {
+@@ -355,16 +367,20 @@ WebConsole.prototype = {
     */
    viewSourceInDebugger:
    function WC_viewSourceInDebugger(aSourceURL, aSourceLine)
@@ -355,7 +373,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
                                    function afterSourcesAdded() {
          toolboxWin.removeEventListener("Debugger:AfterSourcesAdded",
                                         afterSourcesAdded);
-@@ -431,16 +424,23 @@ WebConsole.prototype = {
+@@ -465,37 +481,96 @@ WebConsole.prototype = {
        try {
          let tabWindow = this.target.isLocalTab ? this.target.window : null;
          tabWindow && tabWindow.focus();
@@ -367,10 +385,6 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      this.iframeWindow = null;
 +      this.chromeWindow = null;
 +
-+      if (this._browserConsole) {
-+        HeadsUpDisplayUICommands._browserConsoleID = null;
-+      }
-+
        let id = WebConsoleUtils.supportsString(this.hudId);
        Services.obs.notifyObservers(id, "web-console-destroyed", null);
        this._destroyer.resolve(null);
@@ -379,10 +393,67 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
      if (this.ui) {
        this.ui.destroy().then(onDestroy);
      }
-@@ -452,16 +452,19 @@ WebConsole.prototype = {
+     else {
+       onDestroy();
+     }
+ 
+     return this._destroyer.promise;
    },
  };
  
++
++/**
++ * A BrowserConsole instance is an interactive console initialized *per target*
++ * that displays console log data as well as provides an interactive terminal to
++ * manipulate the target's document content.
++ *
++ * This object only wraps the iframe that holds the Browser Console UI. This is
++ * meant to be an integration point between the Firefox UI and the Browser Console
++ * UI and features.
++ *
++ * @constructor
++ * @param object aTarget
++ *        The target that the browser console will connect to.
++ * @param nsIDOMWindow aIframeWindow
++ *        The window where the browser console UI is already loaded.
++ * @param nsIDOMWindow aChromeWindow
++ *        The window of the browser console owner.
++ */
++function BrowserConsole()
++{
++  WebConsole.apply(this, arguments);
++}
++
++
++ViewHelpers.create({ constructor: BrowserConsole, proto: WebConsole.prototype },
++{
++  _browserConsole: true,
++  _bc_destroyer: null,
++
++  $destroy: WebConsole.prototype.destroy,
++
++  /**
++   * Destroy the object.
++   *
++   * @return object
++   *         A Promise object that is resolved once the Browser Console is closed.
++   */
++  destroy: function BC_destroy()
++  {
++    if (this._bc_destroyer) {
++      return this._bc_destroyer;
++    }
++
++    this._bc_destroyer = this.$destroy().then(() => {
++      HeadsUpDisplayUICommands._browserConsoleID = null;
++      this.chromeWindow.close();
++    });
++
++    return this._bc_destroyer;
++  },
++});
++
++
  //////////////////////////////////////////////////////////////////////////
  // HeadsUpDisplayUICommands
  //////////////////////////////////////////////////////////////////////////
@@ -399,7 +470,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *         Console, or a Promise for the closing of the toolbox.
     */
    toggleHUD: function UIC_toggleHUD()
-@@ -488,11 +491,97 @@ var HeadsUpDisplayUICommands = {
+@@ -522,11 +597,87 @@ var HeadsUpDisplayUICommands = {
      if (!tab || !TargetFactory.isKnownTab(tab)) {
        return null;
      }
@@ -435,11 +506,10 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      }
 +
 +      let client = new DebuggerClient(DebuggerServer.connectPipe());
-+      client.connect(function() {
-+        client.listTabs(function(aResponse) {
-+          deferred.resolve({form: aResponse, client: client});
-+        });
-+      });
++      client.connect(() =>
++        client.listTabs((aResponse) =>
++          deferred.resolve({ form: aResponse, client: client })
++        ));
 +
 +      return deferred.promise;
 +    }
@@ -471,22 +541,13 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      return deferred.promise;
 +    }
 +
-+    let self = this;
-+    connect().then(getTarget).then(openWindow).then(function(aWindow) {
-+      let options = {
-+        target: target,
-+        window: aWindow,
-+        chromeWindow: aWindow,
-+        browserConsole: true,
-+      };
-+
-+      HUDService.openWebConsole(options).then(function(aWebConsole) {
-+        self._browserConsoleID = aWebConsole.hudId;
-+
-+        self._browserConsoleDefer.resolve(aWebConsole);
-+        self._browserConsoleDefer = null;
-+      });
-+    });
++    connect().then(getTarget).then(openWindow).then((aWindow) =>
++      HUDService.openBrowserConsole(target, aWindow, aWindow)
++        .then((aBrowserConsole) => {
++          this._browserConsoleID = aBrowserConsole.hudId;
++          this._browserConsoleDefer.resolve(aBrowserConsole);
++          this._browserConsoleDefer = null;
++        }));
 +
 +    return this._browserConsoleDefer.promise;
 +  },
@@ -500,25 +561,23 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/webconsole/WebConsolePanel.jsm
 --- a/browser/devtools/webconsole/WebConsolePanel.jsm
 +++ b/browser/devtools/webconsole/WebConsolePanel.jsm
-@@ -36,29 +36,52 @@ WebConsolePanel.prototype = {
+@@ -34,38 +34,65 @@ WebConsolePanel.prototype = {
+   /**
+    * Open is effectively an asynchronous constructor.
     *
     * @return object
     *         A Promise that is resolved when the Web Console completes opening.
     */
    open: function WCP_open()
    {
++    Promise._reportErrors = true; // FIXME: DEBUG ONLY
      let parentDoc = this._toolbox.doc;
      let iframe = parentDoc.getElementById("toolbox-panel-iframe-webconsole");
 -    let promise;
 +    iframe.className = "web-console-frame";
 +
++    // Make sure the iframe content window is ready.
 +    let deferredIframe = Promise.defer();
-+
-+    let onIframeLoad = function() {
-+      iframe.removeEventListener("load", onIframeLoad, true);
-+      deferredIframe.resolve(null);
-+    }.bind(this);
-+
 +    let win, doc;
 +    if ((win = iframe.contentWindow) &&
 +        (doc = win.document) &&
@@ -526,38 +585,174 @@ diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/
 +      deferredIframe.resolve(null);
 +    }
 +    else {
-+      iframe.addEventListener("load", onIframeLoad, true);
++      iframe.addEventListener("load", function onIframeLoad() {
++        iframe.removeEventListener("load", onIframeLoad, true);
++        deferredIframe.resolve(null);
++      }, true);
 +    }
  
      // Local debugging needs to make the target remote.
 +    let promiseTarget;
      if (!this.target.isRemote) {
 -      promise = this.target.makeRemote();
-+      promiseTarget = this.target.makeRemote();
-     } else {
+-    } else {
 -      promise = Promise.resolve(this.target);
++      promiseTarget = this.target.makeRemote();
++    }
++    else {
 +      promiseTarget = Promise.resolve(this.target);
      }
  
 -    return promise
-+    return deferredIframe.promise.then(function() promiseTarget)
-       .then(function(aTarget) {
+-      .then(function(aTarget) {
++    // 1. Wait for the iframe to load.
++    // 2. Wait for the remote target.
++    // 3. Open the Web Console.
++    return deferredIframe.promise
++      .then(() => promiseTarget)
++      .then((aTarget) => {
          this._frameWindow._remoteTarget = aTarget;
 -        return HUDService.openWebConsole(this.target, iframe);
-+        let options = {
-+          target: this.target,
-+          window: iframe.contentWindow.wrappedJSObject,
-+          chromeWindow: iframe.ownerDocument.defaultView,
-+        };
-+        return HUDService.openWebConsole(options);
-       }.bind(this))
-       .then(function onSuccess(aWebConsole) {
+-      }.bind(this))
+-      .then(function onSuccess(aWebConsole) {
++
++        let webConsoleUIWindow = iframe.contentWindow.wrappedJSObject;
++        let chromeWindow = iframe.ownerDocument.defaultView;
++
++        return HUDService.openWebConsole(this.target, webConsoleUIWindow,
++                                         chromeWindow);
++      })
++      .then((aWebConsole) => {
          this.hud = aWebConsole;
          this._isReady = true;
          this.emit("ready");
          return this;
-       }.bind(this), function onError(aReason) {
+-      }.bind(this), function onError(aReason) {
++      }, (aReason) => {
          let msg = "WebConsolePanel open failed. " +
+                   aReason.error + ": " + aReason.message;
+         dump(msg + "\n");
+         Cu.reportError(msg);
+       });
+   },
+ 
+   get target() this._toolbox.target,
+@@ -75,15 +102,13 @@ WebConsolePanel.prototype = {
+ 
+   destroy: function WCP_destroy()
+   {
+     if (this._destroyer) {
+       return this._destroyer;
+     }
+ 
+     this._destroyer = this.hud.destroy();
+-    this._destroyer.then(function() {
+-      this.emit("destroyed");
+-    }.bind(this));
++    this._destroyer.then(() => this.emit("destroyed"));
+ 
+     return this._destroyer;
+   },
+ };
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -113,16 +113,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_console_log_inspectable_object.js \
+ 	browser_bug_638949_copy_link_location.js \
+ 	browser_output_longstring_expand.js \
+ 	browser_netpanel_longstring_expand.js \
+ 	browser_repeated_messages_accuracy.js \
+ 	browser_eval_in_debugger_stackframe.js \
+ 	browser_console_variables_view.js \
+ 	browser_console_variables_view_while_debugging.js \
++	browser_console.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+         browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devtools/webconsole/test/browser_console.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console.js
+@@ -0,0 +1,73 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Test the basic features of the Browser Console.
++
++const TEST_URI = "about:mozilla";
++
++function test()
++{
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    HUDConsoleUI.toggleBrowserConsole().then(consoleOpened);
++  }, true);
++}
++
++function consoleOpened(hud)
++{
++  let jsterm = hud.jsterm;
++
++  // Add a message from a chrome window.
++  window.console.log("bug587757a");
++
++  // Add a message from a content window.
++  content.console.log("bug587757b");
++
++  jsterm.execute("document.title");
++
++  content.location.reload();
++
++  let chromeConsole = -1;
++  let contentConsole = -1;
++  let execValue = -1;
++  let fileRequest;
++
++  let output = hud.outputNode;
++  function performChecks()
++  {
++    let text = output.textContent;
++    chromeConsole = text.indexOf("bug587757a");
++    contentConsole = text.indexOf("bug587757b");
++    execValue = text.indexOf("The Book of Mozilla");
++    fileRequest = output.querySelector(".webconsole-msg-url");
++  }
++
++  function showResults()
++  {
++    isnot(chromeConsole, -1, "chrome window console.log() is displayed");
++    isnot(contentConsole, -1, "content window console.log() is displayed");
++    isnot(execValue, -1, "jsterm eval result is displayed");
++    ok(fileRequest, "file request is displayed");
++    isnot(fileRequest.value.indexOf("mozilla.xhtml"), -1,
++          "file request url is displayed");
++
++    executeSoon(finishTest);
++  }
++
++  waitForSuccess({
++    name: "messages displayed",
++    validatorFn: () => {
++      performChecks();
++      return chromeConsole > -1 &&
++             contentConsole > -1 &&
++             execValue > -1 &&
++             fileRequest;
++    },
++    successFn: showResults,
++    failureFn: showResults,
++  });
++}
++
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
@@ -630,10 +825,72 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_chrome.js b/bro
    ok(hud.outputNode, "we have an output node");
  
    // Test typing 'docu'.
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -229,38 +229,58 @@ function waitForOpenContextMenu(aContext
+   EventUtils.synthesizeMouse(targetElement, 2, 2,
+                              eventDetails, targetElement.ownerDocument.defaultView);
+ }
+ 
+ function finishTest()
+ {
+   browser = hudId = hud = filterBox = outputNode = cs = null;
+ 
++  dump("finishTest\n");
++
++  if (HUDConsoleUI.browserConsole) {
++    dump("finishTest browserConsole\n");
++    HUDConsoleUI.toggleBrowserConsole().then(finishTest);
++    return;
++  }
++  return;
++
++  dump("finishTest 2\n");
++
+   let hud = HUDService.getHudByWindow(content);
+   if (!hud) {
+     finish();
+     return;
+   }
+   if (hud.jsterm) {
+     hud.jsterm.clearOutput(true);
+   }
+ 
+   closeConsole(hud.target.tab, finish);
+ 
+   hud = null;
++  dump("finishTest end\n");
+ }
+ 
+ function tearDown()
+ {
++  dump("tearDown\n");
++  if (HUDConsoleUI.browserConsole) {
++    dump("tearDown browserConsole\n");
++    HUDConsoleUI.toggleBrowserConsole();
++  }
++
++  dump("tearDown 2\n");
+   let target = TargetFactory.forTab(gBrowser.selectedTab);
+   gDevTools.closeToolbox(target);
+   while (gBrowser.tabs.length > 1) {
+     gBrowser.removeCurrentTab();
+   }
+   WCU_l10n = tab = browser = hudId = hud = filterBox = outputNode = cs = null;
++  dump("tearDown end\n");
+ }
+ 
+ registerCleanupFunction(tearDown);
+ 
+ waitForExplicitFinish();
+ 
+ /**
+  * Polls a given function waiting for it to become true.
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -398,16 +398,24 @@ WebConsoleFrame.prototype = {
+@@ -413,16 +413,26 @@ WebConsoleFrame.prototype = {
    _initUI: function WCF__initUI()
    {
      // Remember that this script is loaded in the webconsole.xul context:
@@ -646,8 +903,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      let title = this.rootElement.getAttribute("browserConsoleTitle");
 +      this.rootElement.setAttribute("title", title);
 +
-+      let onClose = this.owner.destroy.bind(this.owner);
-+      this.window.addEventListener("unload", onClose);
++      this.window.addEventListener("unload", function onClose() {
++        this.window.removeEventListener("unload", onClose);
++        this.owner.destroy();
++      }.bind(this));
 +    }
 +
      this._initDefaultFilterPrefs();
@@ -658,7 +917,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      let doc = this.document;
  
-@@ -2725,17 +2733,17 @@ JSTerm.prototype = {
+@@ -2680,17 +2690,17 @@ JSTerm.prototype = {
    COMPLETE_BACKWARD: 1,
    COMPLETE_HINT_ONLY: 2,
  
@@ -677,9 +936,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        position: "before_start",
        theme: "light",
        direction: "ltr",
-@@ -3754,17 +3762,17 @@ JSTerm.prototype = {
-   destroy: function JST_destroy()
-   {
+@@ -4141,17 +4151,17 @@ JSTerm.prototype = {
+     }
+ 
      this.clearCompletion();
      this.clearOutput();
  
@@ -696,7 +955,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.inputNode.removeEventListener("keypress", this._keyPress, false);
      this.inputNode.removeEventListener("input", this._inputEventHandler, false);
      this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
-@@ -3932,16 +3940,18 @@ CommandController.prototype = {
+@@ -4319,16 +4329,18 @@ CommandController.prototype = {
          let selectedItem = this.owner.outputNode.selectedItem;
          return selectedItem && selectedItem.url;
        }
@@ -715,7 +974,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      switch (aCommand) {
        case "cmd_copy":
          this.copy();
-@@ -3959,16 +3969,19 @@ CommandController.prototype = {
+@@ -4346,16 +4358,19 @@ CommandController.prototype = {
          this.owner.changeFontSize("+");
          break;
        case "cmd_fontSizeReduce":
