@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 97e74fd58ee2e7fd9f94fd1f5db4b3e2f9cf67a8
+# Parent 969ce5cc93e95d109c842960214f08133fab0b2e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1365099923 -10800
+# Date 1365190774 -10800
 Bug 587757 - (global-console) Implement Browser Console; r=past,jwalker,Mossop; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
 
 diff --git a/browser/base/content/browser-appmenu.inc b/browser/base/content/browser-appmenu.inc
@@ -245,7 +245,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * Returns the HeadsUpDisplay object associated to a content window.
     *
     * @param nsIDOMWindow aContentWindow
-@@ -139,46 +177,49 @@ HUD_SERVICE.prototype =
+@@ -139,46 +177,50 @@ HUD_SERVICE.prototype =
  };
  
  
@@ -293,6 +293,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +  iframeWindow: null,
    chromeWindow: null,
 -  chromeDocument: null,
++  browserWindow: null,
    hudId: null,
    target: null,
 -  iframe: null,
@@ -305,7 +306,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @see HUDService.lastFinishedRequestCallback
     * @type function
     */
-@@ -207,47 +248,18 @@ WebConsole.prototype = {
+@@ -207,47 +249,18 @@ WebConsole.prototype = {
    /**
     * Initialize the Web Console instance.
     *
@@ -355,7 +356,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     * @return string
     *         The Web Console panel title.
     */
-@@ -355,16 +367,20 @@ WebConsole.prototype = {
+@@ -355,16 +368,20 @@ WebConsole.prototype = {
     */
    viewSourceInDebugger:
    function WC_viewSourceInDebugger(aSourceURL, aSourceLine)
@@ -376,26 +377,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
                                    function afterSourcesAdded() {
          toolboxWin.removeEventListener("Debugger:AfterSourcesAdded",
                                         afterSourcesAdded);
-@@ -465,37 +481,126 @@ WebConsole.prototype = {
-       try {
-         let tabWindow = this.target.isLocalTab ? this.target.window : null;
-         tabWindow && tabWindow.focus();
-       }
-       catch (ex) {
-         // Tab focus can fail if the tab or target is closed.
-       }
- 
-+      this.iframeWindow = null;
-+      this.chromeWindow = null;
-+
-       let id = WebConsoleUtils.supportsString(this.hudId);
-       Services.obs.notifyObservers(id, "web-console-destroyed", null);
-       this._destroyer.resolve(null);
-     }.bind(this);
- 
-     if (this.ui) {
-       this.ui.destroy().then(onDestroy);
-     }
+@@ -481,21 +498,112 @@ WebConsole.prototype = {
      else {
        onDestroy();
      }
@@ -447,15 +429,16 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +      return this._bc_init;
 +    }
 +
++    let window = this.iframeWindow;
++    let onClose = () => {
++      window.removeEventListener("unload", onClose);
++      this.destroy();
++    };
++    window.addEventListener("unload", onClose);
++
 +    this._bc_init = this.$init().then((aReason) => {
 +      let title = this.ui.rootElement.getAttribute("browserConsoleTitle");
 +      this.ui.rootElement.setAttribute("title", title);
-+
-+      this.ui.window.addEventListener("unload", function onClose() {
-+        this.ui.window.removeEventListener("unload", onClose);
-+        this.destroy();
-+      }.bind(this));
-+
 +      return aReason;
 +    });
 +
@@ -473,16 +456,20 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 +  destroy: function BC_destroy()
 +  {
 +    if (this._bc_destroyer) {
-+      return this._bc_destroyer;
++      return this._bc_destroyer.promise;
 +    }
 +
-+    let chromeWindow = this.chromeWindow;
-+    this._bc_destroyer = this.$destroy().then(() => {
-+      HeadsUpDisplayUICommands._browserConsoleID = null;
-+      chromeWindow.close();
-+    });
++    this._bc_destroyer = Promise.defer();
 +
-+    return this._bc_destroyer;
++    let chromeWindow = this.chromeWindow;
++    this.$destroy().then(() =>
++      this.target.client.close(() => {
++        HeadsUpDisplayUICommands._browserConsoleID = null;
++        chromeWindow.close();
++        this._bc_destroyer.resolve(null);
++      }));
++
++    return this._bc_destroyer.promise;
 +  },
 +});
 +
@@ -503,7 +490,7 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
     *         Console, or a Promise for the closing of the toolbox.
     */
    toggleHUD: function UIC_toggleHUD()
-@@ -522,11 +627,87 @@ var HeadsUpDisplayUICommands = {
+@@ -522,11 +630,87 @@ var HeadsUpDisplayUICommands = {
      if (!tab || !TargetFactory.isKnownTab(tab)) {
        return null;
      }
@@ -709,7 +696,7 @@ diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devto
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_console.js
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,93 @@
 +/*
 + * Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/
@@ -752,7 +739,7 @@ new file mode 100644
 +  let contentConsole = -1;
 +  let execValue = -1;
 +  let exception = -1;
-+  let xhrRequest;
++  let xhrRequest = false;
 +
 +  let output = hud.outputNode;
 +  function performChecks()
@@ -762,7 +749,15 @@ new file mode 100644
 +    contentConsole = text.indexOf("bug587757b");
 +    execValue = text.indexOf("browser.xul");
 +    exception = text.indexOf("foobarExceptionBug587757");
-+    xhrRequest = output.querySelector(".webconsole-msg-url");
++
++    xhrRequest = false;
++    let urls = output.querySelectorAll(".webconsole-msg-url");
++    for (let url of urls) {
++      if (url.value.indexOf(TEST_URI) > -1) {
++        xhrRequest = true;
++        break;
++      }
++    }
 +  }
 +
 +  function showResults()
@@ -772,8 +767,6 @@ new file mode 100644
 +    isnot(execValue, -1, "jsterm eval result is displayed");
 +    isnot(exception, -1, "exception is displayed");
 +    ok(xhrRequest, "xhr request is displayed");
-+    xhrRequest && isnot(xhrRequest.value.indexOf(TEST_URI), -1,
-+                        "xhr request url is displayed");
 +  }
 +
 +  waitForSuccess({
@@ -792,10 +785,7 @@ new file mode 100644
 +    },
 +    failureFn: () => {
 +      showResults();
-+
-+      xhrRequest && info("xhrRequest: " + xhrRequest.value);
 +      info("output: " + output.textContent);
-+
 +      executeSoon(finishTest);
 +    },
 +  });
