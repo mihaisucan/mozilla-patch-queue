@@ -1,0 +1,168 @@
+# HG changeset patch
+# Parent f9c515c8bddf71b8fa88670a22508da58f149300
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1365452472 -10800
+
+Bug 859170 - Trying to select [...] for a very long message printed to the web console will hang Firefox; r=past
+
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -166,16 +166,19 @@ const OUTPUT_INTERVAL = 50; // milliseco
+ const THROTTLE_UPDATES = 1000; // milliseconds
+ 
+ // The preference prefix for all of the Web Console filters.
+ const FILTER_PREFS_PREFIX = "devtools.webconsole.filter.";
+ 
+ // The minimum font size.
+ const MIN_FONT_SIZE = 10;
+ 
++// The maximum length of strings to be displayed by the Web Console.
++const MAX_LONG_STRING_LENGTH = 500000;
++
+ const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
+ 
+ /**
+  * A WebConsoleFrame instance is an interactive console initialized *per target*
+  * that displays console log data as well as provides an interactive terminal to
+  * manipulate the target's document content.
+  *
+  * The WebConsoleFrame is responsible for the actual Web Console UI
+@@ -1311,27 +1314,37 @@ WebConsoleFrame.prototype = {
+    *        The file URI that was requested.
+    */
+   handleFileActivity: function WCF_handleFileActivity(aFileURI)
+   {
+     this.outputMessage(CATEGORY_NETWORK, this.logFileActivity, [aFileURI]);
+   },
+ 
+   /**
+-   * Inform user that the Web Console API has been replaced by a script
++   * Inform user that the window.console API has been replaced by a script
+    * in a content page.
+    */
+   logWarningAboutReplacedAPI: function WCF_logWarningAboutReplacedAPI()
+   {
+     let node = this.createMessageNode(CATEGORY_JS, SEVERITY_WARNING,
+                                       l10n.getStr("ConsoleAPIDisabled"));
+     this.outputMessage(CATEGORY_JS, node);
+   },
+ 
+   /**
++   * Inform user that the string he tries to view is too long.
++   */
++  logWarningAboutStringTooLong: function WCF_logWarningAboutStringTooLong()
++  {
++    let node = this.createMessageNode(CATEGORY_JS, SEVERITY_WARNING,
++                                      l10n.getStr("longStringTooLong"));
++    this.outputMessage(CATEGORY_JS, node);
++  },
++
++  /**
+    * Handle the network events coming from the remote Web Console.
+    *
+    * @param object aActor
+    *        The NetworkEventActor grip.
+    */
+   handleNetworkEvent: function WCF_handleNetworkEvent(aActor)
+   {
+     let networkInfo = {
+@@ -2236,33 +2249,38 @@ WebConsoleFrame.prototype = {
+   {
+     aEvent.preventDefault();
+ 
+     if (!aFormatter) {
+       aFormatter = function(s) s;
+     }
+ 
+     let longString = this.webConsoleClient.longString(aActor);
+-    longString.substring(longString.initial.length, longString.length,
++    let toIndex = Math.min(longString.length, MAX_LONG_STRING_LENGTH);
++    longString.substring(longString.initial.length, toIndex,
+       function WCF__onSubstring(aResponse) {
+         if (aResponse.error) {
+           Cu.reportError("WCF__longStringClick substring failure: " +
+                          aResponse.error);
+           return;
+         }
+ 
+         let node = aEllipsis.previousSibling;
+         node.textContent = aFormatter(longString.initial + aResponse.substring);
+         aEllipsis.parentNode.removeChild(aEllipsis);
+ 
+         if (aMessage.category == CATEGORY_WEBDEV ||
+             aMessage.category == CATEGORY_OUTPUT) {
+           aMessage.clipboardText = aMessage.textContent;
+         }
+-      });
++
++        if (toIndex != longString.length) {
++          this.logWarningAboutStringTooLong();
++        }
++      }.bind(this));
+   },
+ 
+   /**
+    * Creates the XUL label that displays the textual location of an incoming
+    * message.
+    *
+    * @param string aSourceURL
+    *        The URL of the source file responsible for the error.
+@@ -3458,27 +3476,32 @@ JSTerm.prototype = {
+     aVar._fetched = true;
+ 
+     let grip = aVar.value;
+     if (!grip) {
+       throw new Error("No long string actor grip was given for the variable.");
+     }
+ 
+     let client = this.webConsoleClient.longString(grip);
+-    client.substring(grip.initial.length, grip.length, (aResponse) => {
++    let toIndex = Math.min(grip.length, MAX_LONG_STRING_LENGTH);
++    client.substring(grip.initial.length, toIndex, (aResponse) => {
+       if (aResponse.error) {
+         Cu.reportError("JST__fetchVarLongString substring failure: " +
+                        aResponse.error + ": " + aResponse.message);
+         return;
+       }
+ 
+       aVar.onexpand = null;
+       aVar.setGrip(grip.initial + aResponse.substring);
+       aVar.hideArrow();
+       aVar._retrieved = true;
++
++      if (toIndex != grip.length) {
++        this.hud.logWarningAboutStringTooLong();
++      }
+     });
+   },
+ 
+   /**
+    * Writes a JS object to the JSTerm outputNode.
+    *
+    * @param string aOutputMessage
+    *        The message to display.
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -175,16 +175,20 @@ ToolboxWebconsole.label=Web Console
+ # displayed inside the developer tools window.
+ ToolboxWebconsole.tooltip=Web Console
+ 
+ # LOCALIZATION NOTE (longStringEllipsis): The string displayed after a long
+ # string. This string is clickable such that the rest of the string is retrieved
+ # from the server.
+ longStringEllipsis=[…]
+ 
++# LOCALIZATION NOTE (longStringTooLong): The string displayed after the user
++# tries to expand a long string.
++longStringTooLong=The string you are trying to view is too long to be displayed by the Web Console.
++
+ # LOCALIZATION NOTE (executeEmptyInput): This is displayed when the user tries
+ # to execute code, but the input is empty.
+ executeEmptyInput=No value to execute.
+ 
+ # LOCALIZATION NOTE (NetworkPanel.fetchRemainingResponseContentLink): This is
+ # displayed in the network panel when the response body is only partially
+ # available.
+ NetworkPanel.fetchRemainingResponseContentLink=Fetch the remaining %1$S bytes
