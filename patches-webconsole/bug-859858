@@ -1,0 +1,893 @@
+# HG changeset patch
+# Parent 9d5f05a6d497f968fd1580f6af8f84486323b0c3
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1365540071 -10800
+
+Bug 859858 - Fix for intermittent browser_bug664688_sandbox_update_after_navigation.js | Timed out while waiting for: window.location.href result is displayed after goBack(), browser_repeated_messages_accuracy.js | Timed out while waiting for: messages displayed; r=past; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser_bug664688_sandbox_update_after_navigation.js b/browser/devtools/webconsole/test/browser_bug664688_sandbox_update_after_navigation.js
+--- a/browser/devtools/webconsole/test/browser_bug664688_sandbox_update_after_navigation.js
++++ b/browser/devtools/webconsole/test/browser_bug664688_sandbox_update_after_navigation.js
+@@ -8,122 +8,106 @@
+ // created for a different origin.
+ 
+ function test()
+ {
+   const TEST_URI1 = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+   const TEST_URI2 = "http://example.org/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+   let hud;
++  let msgForLocation1;
+ 
+   waitForExplicitFinish();
+ 
+   gBrowser.selectedTab = gBrowser.addTab(TEST_URI1);
+   gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
+     gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
+     openConsole(gBrowser.selectedTab, pageLoad1);
+   }, true);
+ 
+-
+   function pageLoad1(aHud)
+   {
+     hud = aHud;
+ 
+     hud.jsterm.clearOutput();
+     hud.jsterm.execute("window.location.href");
+ 
+-    waitForSuccess(waitForLocation1);
+-  }
++    info("wait for window.location.href");
+ 
+-  let waitForLocation1 = {
+-    name: "window.location.href result is displayed",
+-    validatorFn: function()
+-    {
+-      let node = hud.outputNode.getElementsByClassName("webconsole-msg-output")[0];
+-      return node && node.textContent.indexOf(TEST_URI1) > -1;
+-    },
+-    successFn: function()
+-    {
+-      let node = hud.outputNode.getElementsByClassName("webconsole-msg-input")[0];
+-      isnot(node.textContent.indexOf("window.location.href"), -1,
+-            "jsterm input is also displayed");
++    msgForLocation1 = {
++      webconsole: hud,
++      messages: [
++        {
++          name: "window.location.href jsterm input",
++          text: "window.location.href",
++          category: CATEGORY_INPUT,
++        },
++        {
++          name: "window.location.href result is displayed",
++          text: TEST_URI1,
++          category: CATEGORY_OUTPUT,
++        },
++      ]
++    };
+ 
+-      is(hud.outputNode.textContent.indexOf("Permission denied"), -1,
+-         "no permission denied errors");
+-
++    waitForMessages(msgForLocation1).then(() => {
+       gBrowser.selectedBrowser.addEventListener("load", onPageLoad2, true);
+       content.location = TEST_URI2;
+-    },
+-    failureFn: finishTestWithError,
+-  };
++    });
++  }
+ 
+   function onPageLoad2() {
+     gBrowser.selectedBrowser.removeEventListener("load", onPageLoad2, true);
+ 
++    is(hud.outputNode.textContent.indexOf("Permission denied"), -1,
++       "no permission denied errors");
++
+     hud.jsterm.clearOutput();
+     hud.jsterm.execute("window.location.href");
+ 
+-    waitForSuccess(waitForLocation2);
+-  }
++    info("wait for window.location.href after page navigation");
+ 
+-  let waitForLocation2 = {
+-    name: "window.location.href result is displayed after page navigation",
+-    validatorFn: function()
+-    {
+-      let node = hud.outputNode.getElementsByClassName("webconsole-msg-output")[0];
+-      return node && node.textContent.indexOf(TEST_URI2) > -1;
+-    },
+-    successFn: function()
+-    {
+-      let node = hud.outputNode.getElementsByClassName("webconsole-msg-input")[0];
+-      isnot(node.textContent.indexOf("window.location.href"), -1,
+-            "jsterm input is also displayed");
++    waitForMessages({
++      webconsole: hud,
++      messages: [
++        {
++          name: "window.location.href jsterm input",
++          text: "window.location.href",
++          category: CATEGORY_INPUT,
++        },
++        {
++          name: "window.location.href result is displayed",
++          text: TEST_URI2,
++          category: CATEGORY_OUTPUT,
++        },
++      ]
++    }).then(() => {
+       is(hud.outputNode.textContent.indexOf("Permission denied"), -1,
+          "no permission denied errors");
+ 
+       gBrowser.goBack();
+       waitForSuccess(waitForBack);
+-    },
+-    failureFn: finishTestWithError,
+-  };
++    });
++  }
+ 
+   let waitForBack = {
+     name: "go back",
+     validatorFn: function()
+     {
+       return content.location.href == TEST_URI1;
+     },
+     successFn: function()
+     {
+       hud.jsterm.clearOutput();
+-      hud.jsterm.execute("window.location.href");
++      executeSoon(() => {
++        hud.jsterm.execute("window.location.href");
++      });
+ 
+-      waitForSuccess(waitForLocation3);
++      info("wait for window.location.href after goBack()");
++      waitForMessages(msgForLocation1).then(() => executeSoon(() => {
++        is(hud.outputNode.textContent.indexOf("Permission denied"), -1,
++           "no permission denied errors");
++        finishTest();
++      }));
+     },
+-    failureFn: finishTestWithError,
++    failureFn: finishTest,
+   };
+-
+-  let waitForLocation3 = {
+-    name: "window.location.href result is displayed after goBack()",
+-    validatorFn: function()
+-    {
+-      let node = hud.outputNode.getElementsByClassName("webconsole-msg-output")[0];
+-      return node && node.textContent.indexOf(TEST_URI1) > -1;
+-    },
+-    successFn: function()
+-    {
+-      let node = hud.outputNode.getElementsByClassName("webconsole-msg-input")[0];
+-      isnot(node.textContent.indexOf("window.location.href"), -1,
+-            "jsterm input is also displayed");
+-      is(hud.outputNode.textContent.indexOf("Permission denied"), -1,
+-         "no permission denied errors");
+-
+-      executeSoon(finishTest);
+-    },
+-    failureFn: finishTestWithError,
+-  };
+-
+-  function finishTestWithError()
+-  {
+-    info("output content: " + hud.outputNode.textContent);
+-    finishTest();
+-  }
+ }
+diff --git a/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js b/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js
+--- a/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js
++++ b/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js
+@@ -15,105 +15,102 @@ function test() {
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+ }
+ 
+ function consoleOpened(hud) {
+   // Check that css warnings are not coalesced if they come from different lines.
+-  waitForSuccess({
+-    name: "css warnings displayed",
+-    validatorFn: function()
+-    {
+-      return hud.outputNode.querySelectorAll(".webconsole-msg-cssparser")
+-             .length == 2;
+-    },
+-    successFn: testCSSRepeats.bind(null, hud),
+-    failureFn: finishTest,
+-  });
+-}
++  info("waiting for 2 css warnings");
+ 
+-function repeatCountForNode(aNode) {
+-  return aNode.querySelector(".webconsole-msg-repeat").getAttribute("value");
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      name: "two css warnings",
++      category: CATEGORY_CSS,
++      count: 2,
++      repeats: 1,
++    }],
++  }).then(testCSSRepeats.bind(null, hud));
+ }
+ 
+ function testCSSRepeats(hud) {
+-  let msgs = hud.outputNode.querySelectorAll(".webconsole-msg-cssparser");
+-  is(repeatCountForNode(msgs[0]), 1, "no repeats for the first css warning");
+-  is(repeatCountForNode(msgs[1]), 1, "no repeats for the second css warning");
+-
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+-    testAfterReload(hud);
++
++    info("wait for repeats after page reload");
++
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        name: "two css warnings, repeated twice",
++        category: CATEGORY_CSS,
++        repeats: 2,
++        count: 2,
++      }],
++    }).then(testCSSRepeatsAfterReload.bind(null, hud));
+   }, true);
+   content.location.reload();
+ }
+ 
+-function testAfterReload(hud) {
+-  let repeats;
+-  waitForSuccess({
+-    name: "message repeats increased",
+-    validatorFn: () => {
+-      repeats = hud.outputNode.querySelectorAll(".webconsole-msg-cssparser " +
+-                                                ".webconsole-msg-repeat");
+-      return repeats.length == 2 &&
+-             repeats[0].getAttribute("value") == 2 &&
+-             repeats[1].getAttribute("value") == 2;
+-    },
+-    successFn: testCSSRepeatsAfterReload.bind(null, hud),
+-    failureFn: () => {
+-      let repeats0 = repeats[0] ? repeats[0].getAttribute("value") : "undefined";
+-      let repeats1 = repeats[1] ? repeats[1].getAttribute("value") : "undefined";
+-      info("repeats.length " + repeats.length);
+-      info("repeats[0] value " + repeats0);
+-      info("repeats[1] value " + repeats1);
+-      finishTest();
+-    },
+-  });
+-}
+-
+ function testCSSRepeatsAfterReload(hud) {
+-  let msgs = hud.outputNode.querySelectorAll(".webconsole-msg-cssparser");
+-  is(msgs.length, 2, "two css warnings after reload");
+-  is(repeatCountForNode(msgs[0]), 2, "two repeats for the first css warning");
+-  is(repeatCountForNode(msgs[1]), 2, "two repeats for the second css warning");
+-
+-  hud.jsterm.clearOutput();
++  hud.jsterm.clearOutput(true);
+   content.wrappedJSObject.testConsole();
+ 
+-  waitForSuccess({
+-    name: "console API messages displayed",
+-    validatorFn: function()
+-    {
+-      return hud.outputNode.querySelectorAll(".webconsole-msg-console")
+-             .length == 3;
+-    },
+-    successFn: testConsoleRepeats.bind(null, hud),
+-    failureFn: finishTest,
+-  });
++  info("wait for repeats with the console API");
++
++  waitForMessages({
++    webconsole: hud,
++    messages: [
++      {
++        name: "console.log 'foo repeat' repeated twice",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++        repeats: 2,
++      },
++      {
++        name: "console.log 'foo repeat' repeated once",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++        repeats: 1,
++      },
++      {
++        name: "console.error 'foo repeat' repeated once",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_ERROR,
++        repeats: 1,
++      },
++    ],
++  }).then(testConsoleRepeats.bind(null, hud));
+ }
+ 
+ function testConsoleRepeats(hud) {
+-  let msgs = hud.outputNode.querySelectorAll(".webconsole-msg-console");
+-  is(repeatCountForNode(msgs[0]), 2, "repeats for the first console message");
+-  is(repeatCountForNode(msgs[1]), 1,
+-     "no repeats for the second console log message");
+-  is(repeatCountForNode(msgs[2]), 1, "no repeats for the console.error message");
+-
+-  hud.jsterm.clearOutput();
++  hud.jsterm.clearOutput(true);
+   hud.jsterm.execute("undefined");
+   content.console.log("undefined");
+ 
+-  waitForSuccess({
+-    name: "messages displayed",
+-    validatorFn: function()
+-    {
+-      return hud.outputNode.querySelector(".webconsole-msg-console");
+-    },
+-    successFn: function() {
+-      is(hud.outputNode.childNodes.length, 3,
+-         "correct number of messages displayed");
+-      executeSoon(finishTest);
+-    },
+-    failureFn: finishTest,
+-  });
++  info("make sure console API messages are not coalesced with jsterm output");
++
++  waitForMessages({
++    webconsole: hud,
++    messages: [
++      {
++        name: "'undefined' jsterm input message",
++        text: "undefined",
++        category: CATEGORY_INPUT,
++        repeats: 1,
++      },
++      {
++        name: "'undefined' jsterm output message",
++        text: "undefined",
++        category: CATEGORY_OUTPUT,
++        repeats: 1,
++      },
++      {
++        name: "'undefined' console.log message",
++        text: "undefined",
++        category: CATEGORY_WEBDEV,
++        repeats: 1,
++      },
++    ],
++  }).then(finishTest);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js b/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
+@@ -5,18 +5,16 @@
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ // Tests that the Web Console limits the number of lines displayed according to
+ // the user's preferences.
+ 
+ const TEST_URI = "data:text/html;charset=utf-8,<p>test for bug 642108.";
+ const LOG_LIMIT = 20;
+-const CATEGORY_CSS = 1;
+-const SEVERITY_WARNING = 1;
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad(){
+     browser.removeEventListener("load", onLoad, false);
+ 
+     Services.prefs.setIntPref("devtools.hud.loglimit.cssparser", LOG_LIMIT);
+ 
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -11,16 +11,32 @@ let WebConsoleUtils = tempScope.WebConso
+ Cu.import("resource:///modules/devtools/gDevTools.jsm", tempScope);
+ let gDevTools = tempScope.gDevTools;
+ Cu.import("resource:///modules/devtools/Target.jsm", tempScope);
+ let TargetFactory = tempScope.TargetFactory;
+ Components.utils.import("resource://gre/modules/devtools/Console.jsm", tempScope);
+ let console = tempScope.console;
+ let Promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
+ 
++let gPendingOutputTest = 0;
++
++// The various categories of messages.
++const CATEGORY_NETWORK = 0;
++const CATEGORY_CSS = 1;
++const CATEGORY_JS = 2;
++const CATEGORY_WEBDEV = 3;
++const CATEGORY_INPUT = 4;
++const CATEGORY_OUTPUT = 5;
++
++// The possible message severities.
++const SEVERITY_ERROR = 0;
++const SEVERITY_WARNING = 1;
++const SEVERITY_INFO = 2;
++const SEVERITY_LOG = 3;
++
+ const WEBCONSOLE_STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let WCU_l10n = new WebConsoleUtils.l10n(WEBCONSOLE_STRINGS_URI);
+ 
+ function log(aMsg)
+ {
+   dump("*** WebConsoleTest: " + aMsg + "\n");
+ }
+ 
+@@ -225,41 +241,86 @@ function waitForOpenContextMenu(aContext
+   }, timeout);
+ 
+   // open a context menu.
+   let eventDetails = { type : "contextmenu", button : 2};
+   EventUtils.synthesizeMouse(targetElement, 2, 2,
+                              eventDetails, targetElement.ownerDocument.defaultView);
+ }
+ 
++/**
++ * Dump the output of all open Web Consoles - used only for debugging purposes.
++ */
++function dumpConsoles()
++{
++  if (gPendingOutputTest) {
++    console.log("dumpConsoles");
++    for each (let hud in HUDService.hudReferences) {
++      if (!hud.outputNode) {
++        console.debug("no output content for", hud.hudId);
++        continue;
++      }
++
++      console.debug("output content for", hud.hudId);
++      for (let elem of hud.outputNode.childNodes) {
++        let text = getMessageElementText(elem);
++        let repeats = elem.querySelector(".webconsole-msg-repeat");
++        if (repeats) {
++          repeats = repeats.getAttribute("value");
++        }
++        console.debug("date", elem.timestamp,
++                      "class", elem.className,
++                      "category", elem.category,
++                      "severity", elem.severity,
++                      "repeats", repeats,
++                      "clipboardText", elem.clipboardText,
++                      "text", text);
++      }
++    }
++
++    gPendingOutputTest = 0;
++  }
++}
++
+ function finishTest()
+ {
+   browser = hudId = hud = filterBox = outputNode = cs = null;
+ 
++  dumpConsoles();
++
+   if (HUDConsoleUI.browserConsole) {
++    let hud = HUDConsoleUI.browserConsole;
++
++    if (hud.jsterm) {
++      hud.jsterm.clearOutput(true);
++    }
++
+     HUDConsoleUI.toggleBrowserConsole().then(finishTest);
+     return;
+   }
+ 
+   let hud = HUDService.getHudByWindow(content);
+   if (!hud) {
+     finish();
+     return;
+   }
++
+   if (hud.jsterm) {
+     hud.jsterm.clearOutput(true);
+   }
+ 
+   closeConsole(hud.target.tab, finish);
+ 
+   hud = null;
+ }
+ 
+ function tearDown()
+ {
++  dumpConsoles();
++
+   if (HUDConsoleUI.browserConsole) {
+     HUDConsoleUI.toggleBrowserConsole();
+   }
+ 
+   let target = TargetFactory.forTab(gBrowser.selectedTab);
+   gDevTools.closeToolbox(target);
+   while (gBrowser.tabs.length > 1) {
+     gBrowser.removeCurrentTab();
+@@ -762,8 +823,166 @@ function openDebugger(aOptions = {})
+   }, function onFailure(aReason) {
+     console.debug("failed to open the toolbox for 'jsdebugger'", aReason);
+     deferred.reject(aReason);
+   });
+ 
+   return deferred.promise;
+ }
+ 
++/**
++ * Get the full text displayed by a Web Console message.
++ *
++ * @param nsIDOMElement aElement
++ *        The message element from the Web Console output.
++ * @return string
++ *         The full text displayed by the given message element.
++ */
++function getMessageElementText(aElement)
++{
++  let text = aElement.textContent;
++  let labels = aElement.querySelectorAll("label");
++  for (let label of labels) {
++    text += " " + label.getAttribute("value");
++  }
++  return text;
++}
++
++/**
++ * Wait for messages in the Web Console output.
++ *
++ * @param object aOptions
++ *        Options for what you want to wait for:
++ *        - webconsole: the webconsole instance you work with.
++ *        - messages: an array of objects that tells which messages to wait for.
++ *        Properties:
++ *            - text: string or RegExp to match the textContent of each new
++ *            message.
++ *            - repeats: the number of message repeats, as displayed by the Web
++ *            Console.
++ *            - category: match message category. See CATEGORY_* constants at
++ *            the top of this file.
++ *            - severity: match message severity. See SEVERITY_* constants at
++ *            the top of this file.
++ *            - count: how many unique web console messages should be matched by
++ *            this rule.
++ * @return object
++ *         A Promise object is returned once the messages you want are found.
++ */
++function waitForMessages(aOptions)
++{
++  gPendingOutputTest++;
++  let webconsole = aOptions.webconsole;
++  let rules = WebConsoleUtils.cloneObject(aOptions.messages, true);
++  let rulesMatched = 0;
++  let listenerAdded = false;
++  let deferred = Promise.defer();
++
++  function checkMessage(aRule, aElement)
++  {
++    if (aRule.text) {
++      let elemText = getMessageElementText(aElement);
++      let matched = false;
++      if (typeof aRule.text == "string") {
++        matched = elemText.indexOf(aRule.text) > -1;
++      }
++      else if (aRule.text instanceof RegExp) {
++        matched = aRule.text.test(elemText);
++      }
++      if (!matched) {
++        return false;
++      }
++    }
++
++    if (aRule.category) {
++      if (aElement.category != aRule.category) {
++        return false;
++      }
++    }
++
++    if (aRule.severity) {
++      if (aElement.severity != aRule.severity) {
++        return false;
++      }
++    }
++
++    if (aRule.repeats) {
++      let repeats = aElement.querySelector(".webconsole-msg-repeat");
++      if (!repeats || repeats.getAttribute("value") != aRule.repeats) {
++        return false;
++      }
++    }
++
++    let count = aRule.count || 1;
++    if (!aRule.matched) {
++      aRule.matched = new Set();
++    }
++    aRule.matched.add(aElement);
++
++    return aRule.matched.size == count;
++  }
++
++  function onMessagesAdded(aEvent, aNewElements)
++  {
++    for (let elem of aNewElements) {
++      for (let rule of rules) {
++        if (rule._ruleMatched) {
++          continue;
++        }
++
++        let matched = checkMessage(rule, elem);
++        if (matched) {
++          rule._ruleMatched = true;
++          rulesMatched++;
++          ok(1, "matched rule: " + displayRule(rule));
++          if (maybeDone()) {
++            return;
++          }
++        }
++      }
++    }
++  }
++
++  function maybeDone()
++  {
++    if (rulesMatched == rules.length) {
++      if (listenerAdded) {
++        webconsole.ui.off("messages-added", onMessagesAdded);
++      }
++      gPendingOutputTest--;
++      deferred.resolve(rules);
++      return true;
++    }
++    return false;
++  }
++
++  function testCleanup() {
++    if (rulesMatched == rules.length) {
++      return;
++    }
++
++    if (webconsole.ui) {
++      webconsole.ui.off("messages-added", onMessagesAdded);
++    }
++
++    for (let rule of rules) {
++      if (!rule._ruleMatched) {
++        console.log("failed to match rule: " + displayRule(rule));
++      }
++    }
++  }
++
++  function displayRule(aRule)
++  {
++    return aRule.name || aRule.text;
++  }
++
++  executeSoon(() => {
++    onMessagesAdded("messages-added", webconsole.outputNode.childNodes);
++    if (rulesMatched != rules.length) {
++      listenerAdded = true;
++      registerCleanupFunction(testCleanup);
++      webconsole.ui.on("messages-added", onMessagesAdded);
++    }
++  });
++
++  return deferred.promise;
++}
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -194,16 +194,18 @@ function WebConsoleFrame(aWebConsoleOwne
+   this._pruneCategoriesQueue = {};
+   this._networkRequests = {};
+ 
+   this._toggleFilter = this._toggleFilter.bind(this);
+   this._flushMessageQueue = this._flushMessageQueue.bind(this);
+ 
+   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+   this._outputTimerInitialized = false;
++
++  EventEmitter.decorate(this);
+ }
+ 
+ WebConsoleFrame.prototype = {
+   /**
+    * The WebConsole instance that owns this frame.
+    * @see HUDService.jsm::WebConsole
+    * @type object
+    */
+@@ -874,24 +876,25 @@ WebConsoleFrame.prototype = {
+   },
+ 
+   /**
+    * Filter the message node from the output if it is a repeat.
+    *
+    * @private
+    * @param nsIDOMNode aNode
+    *        The message node to be filtered or not.
+-   * @returns boolean
+-   *          True if the message is filtered, false otherwise.
++   * @returns nsIDOMNode|null
++   *          Returns the duplicate node if the message was filtered, null
++   *          otherwise.
+    */
+   _filterRepeatedMessage: function WCF__filterRepeatedMessage(aNode)
+   {
+     let repeatNode = aNode.getElementsByClassName("webconsole-msg-repeat")[0];
+     if (!repeatNode) {
+-      return false;
++      return null;
+     }
+ 
+     let uid = repeatNode._uid;
+     let dupeNode = null;
+ 
+     if (aNode.classList.contains("webconsole-msg-cssparser")) {
+       dupeNode = this._cssNodes[uid];
+       if (!dupeNode) {
+@@ -900,32 +903,32 @@ WebConsoleFrame.prototype = {
+     }
+     else if (!aNode.classList.contains("webconsole-msg-network") &&
+              !aNode.classList.contains("webconsole-msg-inspector") &&
+              (aNode.classList.contains("webconsole-msg-console") ||
+               aNode.classList.contains("webconsole-msg-exception") ||
+               aNode.classList.contains("webconsole-msg-error"))) {
+       let lastMessage = this.outputNode.lastChild;
+       if (!lastMessage) {
+-        return false;
++        return null;
+       }
+ 
+       let lastRepeatNode = lastMessage
+                            .getElementsByClassName("webconsole-msg-repeat")[0];
+       if (lastRepeatNode && lastRepeatNode._uid == uid) {
+         dupeNode = lastMessage;
+       }
+     }
+ 
+     if (dupeNode) {
+       this.mergeFilteredMessageNode(dupeNode, aNode);
+-      return true;
++      return dupeNode;
+     }
+ 
+-    return false;
++    return null;
+   },
+ 
+   /**
+    * Display cached messages that may have been collected before the UI is
+    * displayed.
+    *
+    * @param array aRemoteMessages
+    *        Array of cached messages coming from the remote Web Console
+@@ -1687,20 +1690,24 @@ WebConsoleFrame.prototype = {
+     let outputNode = this.outputNode;
+     let lastVisibleNode = null;
+     let scrolledToBottom = Utils.isOutputScrolledToBottom(outputNode);
+     let scrollBox = outputNode.scrollBoxObject.element;
+ 
+     let hudIdSupportsString = WebConsoleUtils.supportsString(this.hudId);
+ 
+     // Output the current batch of messages.
++    let newOrUpdatedNodes = new Set();
+     for (let item of batch) {
+-      let node = this._outputMessageFromQueue(hudIdSupportsString, item);
+-      if (node) {
+-        lastVisibleNode = node;
++      let result = this._outputMessageFromQueue(hudIdSupportsString, item);
++      if (result) {
++        newOrUpdatedNodes.add(result.isRepeated || result.node);
++        if (result.visible && result.node == this.outputNode.lastChild) {
++          lastVisibleNode = result.node;
++        }
+       }
+     }
+ 
+     let oldScrollHeight = 0;
+ 
+     // Prune messages if needed. We do not do this for every flush call to
+     // improve performance.
+     let removedNodes = 0;
+@@ -1731,16 +1738,18 @@ WebConsoleFrame.prototype = {
+     }
+     else if (!scrolledToBottom && removedNodes > 0 &&
+              oldScrollHeight != scrollBox.scrollHeight) {
+       // If there were pruned messages and if scroll is not at the bottom, then
+       // we need to adjust the scroll location.
+       scrollBox.scrollTop -= oldScrollHeight - scrollBox.scrollHeight;
+     }
+ 
++    this.emit("messages-added", newOrUpdatedNodes);
++
+     // If the queue is not empty, schedule another flush.
+     if (this._outputQueue.length > 0) {
+       this._initOutputTimer();
+     }
+     else {
+       this._outputTimerInitialized = false;
+       this._flushCallback && this._flushCallback();
+     }
+@@ -1767,61 +1776,66 @@ WebConsoleFrame.prototype = {
+   /**
+    * Output a message from the queue.
+    *
+    * @private
+    * @param nsISupportsString aHudIdSupportsString
+    *        The HUD ID as an nsISupportsString.
+    * @param array aItem
+    *        An item from the output queue - this item represents a message.
+-   * @return nsIDOMElement|undefined
+-   *         The DOM element of the message if the message is visible, undefined
+-   *         otherwise.
++   * @return object
++   *         An object that holds the following properties:
++   *         - node: the DOM element of the message.
++   *         - isRepeated: the DOM element of the original message, if this is
++   *         a repeated message, otherwise null.
++   *         - visible: boolean that tells if the message is visible.
+    */
+   _outputMessageFromQueue:
+   function WCF__outputMessageFromQueue(aHudIdSupportsString, aItem)
+   {
+     let [category, methodOrNode, args] = aItem;
+ 
+     let node = typeof methodOrNode == "function" ?
+                methodOrNode.apply(this, args || []) :
+                methodOrNode;
+     if (!node) {
+-      return;
++      return null;
+     }
+ 
+     let afterNode = node._outputAfterNode;
+     if (afterNode) {
+       delete node._outputAfterNode;
+     }
+ 
+     let isFiltered = this.filterMessageNode(node);
+ 
+     let isRepeated = this._filterRepeatedMessage(node);
+ 
+-    let lastVisible = !isRepeated && !isFiltered;
++    let visible = !isRepeated && !isFiltered;
+     if (!isRepeated) {
+       this.outputNode.insertBefore(node,
+                                    afterNode ? afterNode.nextSibling : null);
+       this._pruneCategoriesQueue[node.category] = true;
+-      if (afterNode) {
+-        lastVisible = this.outputNode.lastChild == node;
+-      }
++
++      let nodeID = node.getAttribute("id");
++      Services.obs.notifyObservers(aHudIdSupportsString,
++                                   "web-console-message-created", nodeID);
++
+     }
+ 
+     if (node._onOutput) {
+       node._onOutput();
+       delete node._onOutput;
+     }
+ 
+-    let nodeID = node.getAttribute("id");
+-    Services.obs.notifyObservers(aHudIdSupportsString,
+-                                 "web-console-message-created", nodeID);
+-
+-    return lastVisible ? node : null;
++    return {
++      visible: visible,
++      node: node,
++      isRepeated: isRepeated,
++    };
+   },
+ 
+   /**
+    * Prune the queue of messages to display. This avoids displaying messages
+    * that will be removed at the end of the queue anyway.
+    * @private
+    */
+   _pruneOutputQueue: function WCF__pruneOutputQueue()
