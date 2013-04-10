@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 9d5f05a6d497f968fd1580f6af8f84486323b0c3
+# Parent 458bbef2075c89fe0a48ddd57fa965be523bf99a
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1365540071 -10800
+# Date 1365607349 -10800
 
-Bug 859858 - Fix for intermittent browser_bug664688_sandbox_update_after_navigation.js | Timed out while waiting for: window.location.href result is displayed after goBack(), browser_repeated_messages_accuracy.js | Timed out while waiting for: messages displayed; r=past; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+Bug 859858 - Fix for intermittent browser_bug664688_sandbox_update_after_navigation.js | Timed out while waiting for: window.location.href result is displayed after goBack(), browser_repeated_messages_accuracy.js | Timed out while waiting for: messages displayed; r=past
 
 diff --git a/browser/devtools/webconsole/test/browser_bug664688_sandbox_update_after_navigation.js b/browser/devtools/webconsole/test/browser_bug664688_sandbox_update_after_navigation.js
 --- a/browser/devtools/webconsole/test/browser_bug664688_sandbox_update_after_navigation.js
@@ -182,6 +182,28 @@ diff --git a/browser/devtools/webconsole/test/browser_bug664688_sandbox_update_a
 -    finishTest();
 -  }
  }
+diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devtools/webconsole/test/browser_console.js
+--- a/browser/devtools/webconsole/test/browser_console.js
++++ b/browser/devtools/webconsole/test/browser_console.js
+@@ -27,17 +27,17 @@ function consoleOpened(hud)
+   // Add a message from a content window.
+   content.console.log("bug587757b");
+ 
+   // Test eval.
+   hud.jsterm.execute("document.location.href");
+ 
+   // Check for network requests.
+   let xhr = new XMLHttpRequest();
+-  xhr.onload = () => info("xhr loaded, status is: " + xhr.status);
++  xhr.onload = () => console.log("xhr loaded, status is: " + xhr.status);
+   xhr.open("get", TEST_URI, true);
+   xhr.send();
+ 
+   let chromeConsole = -1;
+   let contentConsole = -1;
+   let execValue = -1;
+   let exception = -1;
+   let xhrRequest = false;
 diff --git a/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js b/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js
 --- a/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js
 +++ b/browser/devtools/webconsole/test/browser_repeated_messages_accuracy.js
@@ -365,6 +387,106 @@ diff --git a/browser/devtools/webconsole/test/browser_repeated_messages_accuracy
 +    ],
 +  }).then(finishTest);
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_bodies_checkbox.js
+@@ -71,16 +71,18 @@ function onpopupshown2(aEvent)
+   ok(!huds[1].ui.saveRequestAndResponseBodies, "bodies are not logged");
+ 
+   // Enable body logging.
+   huds[1].ui.saveRequestAndResponseBodies = true;
+ 
+   menupopups[1].addEventListener("popuphidden", function _onhidden(aEvent) {
+     menupopups[1].removeEventListener(aEvent.type, _onhidden, false);
+ 
++    info("menupopups[1] hidden");
++
+     // Reopen the context menu.
+     menupopups[1].addEventListener("popupshown", onpopupshown2b, false);
+     executeSoon(function() {
+       menupopups[1].openPopup();
+     });
+   }, false);
+ 
+   waitForSuccess({
+@@ -100,31 +102,33 @@ function onpopupshown2(aEvent)
+ function onpopupshown2b(aEvent)
+ {
+   menupopups[1].removeEventListener(aEvent.type, onpopupshown2b, false);
+   is(menuitems[1].getAttribute("checked"), "true", "menuitems[1] is checked");
+ 
+   menupopups[1].addEventListener("popuphidden", function _onhidden(aEvent) {
+     menupopups[1].removeEventListener(aEvent.type, _onhidden, false);
+ 
++    info("menupopups[1] hidden");
++
+     // Switch to tab 1 and open the Web Console context menu from there.
+     gBrowser.selectedTab = tabs[runCount*2];
+     waitForFocus(function() {
+       // Find the relevant elements in the Web Console of tab 1.
+       let win1 = tabs[runCount*2].linkedBrowser.contentWindow;
+       let hudId1 = HUDService.getHudIdByWindow(win1);
+       huds[0] = HUDService.hudReferences[hudId1];
+ 
+       info("iframe1 root height " + huds[0].ui.rootElement.clientHeight);
+ 
+       menuitems[0] = huds[0].ui.rootElement.querySelector("#saveBodies");
+       menupopups[0] = huds[0].ui.rootElement.querySelector("menupopup");
+ 
+       menupopups[0].addEventListener("popupshown", onpopupshown1, false);
+-      menupopups[0].openPopup();
++      executeSoon(() => menupopups[0].openPopup());
+     }, tabs[runCount*2].linkedBrowser.contentWindow);
+   }, false);
+ 
+   executeSoon(function() {
+     menupopups[1].hidePopup();
+   });
+ }
+ 
+@@ -138,16 +142,18 @@ function onpopupshown1(aEvent)
+ 
+   // Enable body logging for tab 1 as well.
+   huds[0].ui.saveRequestAndResponseBodies = true;
+ 
+   // Close the menu, and switch back to tab 2.
+   menupopups[0].addEventListener("popuphidden", function _onhidden(aEvent) {
+     menupopups[0].removeEventListener(aEvent.type, _onhidden, false);
+ 
++    info("menupopups[0] hidden");
++
+     gBrowser.selectedTab = tabs[runCount*2 + 1];
+     waitForFocus(function() {
+       // Reopen the context menu from tab 2.
+       menupopups[1].addEventListener("popupshown", onpopupshown2c, false);
+       menupopups[1].openPopup();
+     }, tabs[runCount*2 + 1].linkedBrowser.contentWindow);
+   }, false);
+ 
+@@ -169,20 +175,23 @@ function onpopupshown2c(aEvent)
+ {
+   menupopups[1].removeEventListener(aEvent.type, onpopupshown2c, false);
+ 
+   is(menuitems[1].getAttribute("checked"), "true", "menuitems[1] is checked");
+ 
+   menupopups[1].addEventListener("popuphidden", function _onhidden(aEvent) {
+     menupopups[1].removeEventListener(aEvent.type, _onhidden, false);
+ 
++    info("menupopups[1] hidden");
++
+     // Done if on second run
+     closeConsole(gBrowser.selectedTab, function() {
+       if (runCount == 0) {
+         runCount++;
++        info("start second run");
+         executeSoon(test);
+       }
+       else {
+         gBrowser.removeCurrentTab();
+         gBrowser.selectedTab = tabs[2];
+         gBrowser.removeCurrentTab();
+         gBrowser.selectedTab = tabs[1];
+         gBrowser.removeCurrentTab();
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js b/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js

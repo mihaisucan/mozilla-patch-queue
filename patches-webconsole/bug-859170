@@ -1,10 +1,138 @@
 # HG changeset patch
-# Parent f9c515c8bddf71b8fa88670a22508da58f149300
+# Parent f4ba94a32270f692883d504ba2d93b834ce90dbf
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1365452472 -10800
+# Date 1365596071 -10800
 
 Bug 859170 - Trying to select [...] for a very long message printed to the web console will hang Firefox; r=past
 
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -115,16 +115,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_output_longstring_expand.js \
+ 	browser_netpanel_longstring_expand.js \
+ 	browser_repeated_messages_accuracy.js \
+ 	browser_webconsole_bug_821877_csp_errors.js \
+ 	browser_eval_in_debugger_stackframe.js \
+ 	browser_console_variables_view.js \
+ 	browser_console_variables_view_while_debugging.js \
+ 	browser_console.js \
++	browser_longstring_hang.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+         browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_longstring_hang.js b/browser/devtools/webconsole/test/browser_longstring_hang.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_longstring_hang.js
+@@ -0,0 +1,102 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Test that very long strings do not hang the browser.
++
++function test()
++{
++  waitForExplicitFinish();
++
++  let DebuggerServer = Cu.import("resource://gre/modules/devtools/dbg-server.jsm",
++                                 {}).DebuggerServer;
++
++  let longString = "foobar" +
++                   (new Array(DebuggerServer.LONG_STRING_LENGTH + 4)).join("a") +
++                   "foobaz";
++
++  let veryLongString = "abbababazomglolztest";
++  for (let i = 0; i < 14; i++) {
++    veryLongString += veryLongString + veryLongString;
++  }
++
++  longString += veryLongString + "boom!";
++
++  addTab("data:text/html;charset=utf8,test for bug 859170 - check that very long strings do not hang the browser.");
++
++  let hud = null;
++
++  gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
++    gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
++    openConsole(null, performTest);
++  }, true);
++
++  function performTest(aHud)
++  {
++    hud = aHud;
++
++    content.wrappedJSObject.longString = longString;
++
++    hud.jsterm.clearOutput(true);
++    hud.jsterm.execute("console.log(window.longString)");
++
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "foobar",
++        category: CATEGORY_WEBDEV,
++      }],
++    }).then(onInitialString);
++  }
++
++  function onInitialString(aResults)
++  {
++    let msg = [...aResults[0].matched][0];
++    ok(msg, "message element");
++    is(msg.textContent.indexOf("foobaz"), -1,
++       "foobaz is not shown");
++
++    let clickable = msg.querySelector(".longStringEllipsis");
++    ok(clickable, "long string ellipsis is shown");
++
++    scrollToVisible(clickable);
++
++    executeSoon(() => {
++      EventUtils.synthesizeMouse(clickable, 2, 2, {}, hud.iframeWindow);
++      waitForSuccess(waitForFullString);
++    });
++  }
++
++  let waitForFullString = {
++    name: "full string shown",
++    validatorFn: function()
++    {
++      let msg = hud.outputNode.querySelector(".webconsole-msg-log");
++      return msg.textContent.indexOf("foobaz") > -1;
++    },
++    successFn: function()
++    {
++      let msg = hud.outputNode.querySelector(".webconsole-msg-log");
++      ist(msg.textContent.indexOf("boom!"), -1,
++          "boom is not shown");
++
++      let clickable = msg.querySelector(".longStringEllipsis");
++      ok(!clickable, "long string ellipsis is not shown");
++
++      executeSoon(finishTest);
++    },
++    failureFn: finishTest,
++  };
++
++  function scrollToVisible(aNode)
++  {
++    let richListBoxNode = aNode.parentNode;
++    while (richListBoxNode.tagName != "richlistbox") {
++      richListBoxNode = richListBoxNode.parentNode;
++    }
++
++    let boxObject = richListBoxNode.scrollBoxObject;
++    let nsIScrollBoxObject = boxObject.QueryInterface(Ci.nsIScrollBoxObject);
++    nsIScrollBoxObject.ensureElementIsVisible(aNode);
++  }
++}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -28,7 +156,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
   * manipulate the target's document content.
   *
   * The WebConsoleFrame is responsible for the actual Web Console UI
-@@ -1311,27 +1314,37 @@ WebConsoleFrame.prototype = {
+@@ -1314,27 +1317,37 @@ WebConsoleFrame.prototype = {
     *        The file URI that was requested.
     */
    handleFileActivity: function WCF_handleFileActivity(aFileURI)
@@ -67,7 +195,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    handleNetworkEvent: function WCF_handleNetworkEvent(aActor)
    {
      let networkInfo = {
-@@ -2236,33 +2249,38 @@ WebConsoleFrame.prototype = {
+@@ -2250,33 +2263,38 @@ WebConsoleFrame.prototype = {
    {
      aEvent.preventDefault();
  
@@ -108,7 +236,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string aSourceURL
     *        The URL of the source file responsible for the error.
-@@ -3458,27 +3476,32 @@ JSTerm.prototype = {
+@@ -3472,27 +3490,32 @@ JSTerm.prototype = {
      aVar._fetched = true;
  
      let grip = aVar.value;
