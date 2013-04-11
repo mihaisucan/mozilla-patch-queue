@@ -1,9 +1,90 @@
 # HG changeset patch
-# Parent c53701edc79911691b42116b9116b9cda87b15fb
+# Parent 1f278035873ee8026fa50bd97c30ea97fbb0cfc8
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1363286030 25200
+# Date 1365712061 -10800
 Bug 851231 - Output Console.jsm API calls to the browser console
 
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -116,16 +116,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_netpanel_longstring_expand.js \
+ 	browser_repeated_messages_accuracy.js \
+ 	browser_webconsole_bug_821877_csp_errors.js \
+ 	browser_eval_in_debugger_stackframe.js \
+ 	browser_console_variables_view.js \
+ 	browser_console_variables_view_while_debugging.js \
+ 	browser_console.js \
+ 	browser_longstring_hang.js \
++	browser_console_consolejsm_output.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+         browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_console_consolejsm_output.js b/browser/devtools/webconsole/test/browser_console_consolejsm_output.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console_consolejsm_output.js
+@@ -0,0 +1,55 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Test that Console.jsm outputs messages to the Browser Console, bug 851231.
++
++function test()
++{
++  HUDConsoleUI.toggleBrowserConsole().then(consoleOpened);
++  let hud = null;
++
++  function consoleOpened(aHud)
++  {
++    hud = aHud;
++    hud.jsterm.clearOutput(true);
++
++    let console = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).console;
++
++    console.time("foobarTimer");
++    let foobar = { bug851231c: "bug851231d" };
++
++    console.log("bug851231a");
++    console.error("bug851231b", foobar);
++    console.trace();
++    console.dir(document);
++    console.timeEnd("foobarTimer");
++
++    waitForMessages({
++      webconsole: hud,
++      messages: [
++        {
++          name: "console.log output",
++          text: "bug851231a",
++          category: CATEGORY_WEBDEV,
++          severity: SEVERITY_LOG,
++        },
++        {
++          name: "console.error output",
++          text: "bug851231b",
++          category: CATEGORY_WEBDEV,
++          severity: SEVERITY_ERROR,
++        },
++        {
++          name: "console.trace output",
++          text: /Stack trace.+\bconsoleOpened\b/,
++          stacktrace: "consoleOpened",
++          category: CATEGORY_WEBDEV,
++          severity: SEVERITY_LOG,
++        },
++      ],
++    }).then(finishTest);
++  }
++}
++
 diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 --- a/toolkit/devtools/Console.jsm
 +++ b/toolkit/devtools/Console.jsm
@@ -29,8 +110,26 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
   * @param {string} aStr
   *        The string to format to the correct length
   * @param {number} aMaxLen
-@@ -289,16 +294,37 @@ function getStack(aFrame) {
-       line: aFrame.lineNumber,
+@@ -274,17 +279,17 @@ function parseStack(aStack) {
+   return trace;
+ }
+ 
+ /**
+  * parseStack() takes output from an exception from which it creates the an
+  * array of stack frame objects, this has the same output but using data from
+  * Components.stack
+  *
+- * @param {string} aFrame
++ * @param {object} aFrame
+  *        The stack frame from which to begin the walk
+  * @return {object[]}
+  *        Array of { file: "...", line: NNN, call: "..." } objects
+  */
+ function getStack(aFrame) {
+   if (!aFrame) {
+     aFrame = Components.stack.caller;
+   }
+@@ -296,16 +301,49 @@ function getStack(aFrame) {
        call: aFrame.name
      });
      aFrame = aFrame.caller;
@@ -38,7 +137,19 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
    return trace;
  }
  
-+
+ /**
++ * Format a frame coming from Components.stack such that it can be used by the
++ * Browser Console, via console-api-log-event notifications.
++ *
++ * @param {object} aFrame
++ *        The stack frame from which to begin the walk.
++ * @param {number=0} aMaxDepth
++ *        Maximum stack trace depth. Default is 0 - no depth limit.
++ * @return {object[]}
++ *         An array of {filename, lineNumber, functionName, language} objects.
++ *         These objects follow the same format as other console-api-log-event
++ *         messages.
++ */
 +function getStackForConsoleAPI(aFrame, aMaxDepth = 0) {
 +  if (!aFrame) {
 +    aFrame = Components.stack.caller;
@@ -59,7 +170,7 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 +  return trace;
 +}
 +
- /**
++/**
   * Take the output from parseStack() and convert it to nice readable
   * output
   *
@@ -67,7 +178,8 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
   *        Array of trace objects as created by parseStack()
   * @return {string} Multi line report of the stack trace
   */
-@@ -308,29 +334,82 @@ function formatTrace(aTrace) {
+ function formatTrace(aTrace) {
+@@ -314,29 +352,70 @@ function formatTrace(aTrace) {
      reply += fmt(frame.file, 20, 20, { truncate: "start" }) + " " +
               fmt(frame.line, 5, 5) + " " +
               fmt(frame.call, 75, 75) + "\n";
@@ -78,20 +190,17 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
  /**
 + * Create a new timer by recording the current time under the specified name.
 + *
-+ * @param string aName
++ * @param {string} aName
 + *        The name of the timer.
-+ * @param number [aTimestamp=Date.now()]
++ * @param {number} [aTimestamp=Date.now()]
 + *        Optional timestamp that tells when the timer was originally started.
-+ * @return object
-+ *        The name property holds the timer name and the started property
-+ *        holds the time the timer was started. In case of error, it returns
-+ *        an object with the single property "error" that contains the key
-+ *        for retrieving the localized error message.
++ * @return {object}
++ *         The name property holds the timer name and the started property
++ *         holds the time the timer was started. In case of error, it returns
++ *         an object with the single property "error" that contains the key
++ *         for retrieving the localized error message.
 + */
 +function startTimer(aName, aTimestamp) {
-+  if (!aName) {
-+    return;
-+  }
 +  let key = aName.toString();
 +  if (!gTimerRegistry.has(key)) {
 +    gTimerRegistry.set(key, aTimestamp || Date.now());
@@ -102,22 +211,16 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 +/**
 + * Stop the timer with the specified name and retrieve the elapsed time.
 + *
-+ * @param string aName
++ * @param {string} aName
 + *        The name of the timer.
-+ * @param number [aTimestamp=Date.now()]
++ * @param {number} [aTimestamp=Date.now()]
 + *        Optional timestamp that tells when the timer was originally stopped.
-+ * @return object
-+ *        The name property holds the timer name and the duration property
-+ *        holds the number of milliseconds since the timer was started.
++ * @return {object}
++ *         The name property holds the timer name and the duration property
++ *         holds the number of milliseconds since the timer was started.
 + */
 +function stopTimer(aName, aTimestamp) {
-+  if (!aName) {
-+    return;
-+  }
 +  let key = aName.toString();
-+  if (!gTimerRegistry.has(key)) {
-+    return;
-+  }
 +  let duration = (aTimestamp || Date.now()) - gTimerRegistry.get(key);
 +  gTimerRegistry.delete(key);
 +  return { name: aName, duration: duration };
@@ -137,11 +240,8 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
  function createDumper(aLevel) {
    return function() {
      let args = Array.prototype.slice.call(arguments, 0);
-+    sendConsoleAPIMessage({
-+      level: aLevel,
-+      frame: getStackForConsoleAPI(Components.stack.caller, 1),
-+      args: args,
-+    });
++    let frame = getStackForConsoleAPI(Components.stack.caller, 1);
++    sendConsoleAPIMessage(aLevel, frame, args);
      let data = args.map(function(arg) {
        return stringify(arg);
      });
@@ -150,7 +250,7 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
  }
  
  /**
-@@ -343,37 +422,114 @@ function createDumper(aLevel) {
+@@ -349,37 +428,117 @@ function createDumper(aLevel) {
   * @return {function}
   *        A logging function
   * @see createDumper()
@@ -159,34 +259,48 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
    return function() {
      dump("console." + aLevel + ": \n");
      let args = Array.prototype.slice.call(arguments, 0);
-+    sendConsoleAPIMessage({
-+      level: aLevel,
-+      frame: getStackForConsoleAPI(Components.stack.caller, 1),
-+      args: args,
-+    });
++    let frame = getStackForConsoleAPI(Components.stack.caller, 1);
++    sendConsoleAPIMessage(aLevel, frame, args);
      args.forEach(function(arg) {
        dump(log(arg));
      });
    };
  }
  
-+function sendConsoleAPIMessage(aOptions)
+ /**
++ * Send a Console API message. This function will send a console-api-log-event
++ * notification through the nsIObserverService.
++ *
++ * @param {string} aLevel
++ *        Message severity level. This is usually the name of the console method
++ *        that was called.
++ * @param {object} aFrame
++ *        The youngest stack frame coming from Components.stack, as formatted by
++ *        getStackForConsoleAPI().
++ * @param {array} aArgs
++ *        The arguments given to the console method.
++ * @param {object} aOptions
++ *        Object properties depend on the console method that was invoked:
++ *        - timer: for time() and timeEnd(). Holds the timer information.
++ *        - groupName: for group(), groupCollapsed() and groupEnd().
++ *        - stacktrace: for trace(). Holds the array of stack frames as given by
++ *        getStackForConsoleAPI().
++ */
++function sendConsoleAPIMessage(aLevel, aFrame, aArgs, aOptions = {})
 +{
-+  let {level, frame, args} = aOptions;
-+
 +  let consoleEvent = {
-+    ID: frame.filename,
-+    level: level,
-+    filename: frame.filename,
-+    lineNumber: frame.lineNumber,
-+    functionName: frame.functionName,
++    ID: aFrame.filename,
++    level: aLevel,
++    filename: aFrame.filename,
++    lineNumber: aFrame.lineNumber,
++    functionName: aFrame.functionName,
 +    timeStamp: Date.now(),
-+    arguments: args,
++    arguments: aArgs,
 +  };
 +
 +  consoleEvent.wrappedJSObject = consoleEvent;
 +
-+  switch (level) {
++  switch (aLevel) {
 +    case "trace":
 +      consoleEvent.stacktrace = aOptions.stacktrace;
 +      break;
@@ -198,7 +312,7 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 +    case "groupCollapsed":
 +    case "groupEnd":
 +      try {
-+        consoleEvent.groupName = Array.prototype.join.call(args, " ");
++        consoleEvent.groupName = Array.prototype.join.call(aArgs, " ");
 +      }
 +      catch (ex) {
 +        Cu.reportError(ex);
@@ -211,7 +325,7 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 +  Services.obs.notifyObservers(consoleEvent, "console-api-log-event", null);
 +}
 +
- /**
++/**
   * This creates a console object that somewhat replicates Firebug's console
   * object. It currently writes to dump(), but should write to the web
   * console's chrome error section (when it has one)
@@ -226,14 +340,11 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
    trace: function Console_trace() {
 +    let args = Array.prototype.slice.call(arguments, 0);
      let trace = getStack(Components.stack.caller);
+-    dump(formatTrace(trace) + "\n");
 +    let traceForConsoleAPI = getStackForConsoleAPI(Components.stack.caller);
-+    sendConsoleAPIMessage({
-+      level: "trace",
-+      frame: traceForConsoleAPI[0],
-+      args: args,
-+      stacktrace: traceForConsoleAPI,
-+    });
-     dump(formatTrace(trace) + "\n");
++    sendConsoleAPIMessage("trace", traceForConsoleAPI[0], args,
++                          { stacktrace: traceForConsoleAPI });
++    dump("console.trace:\n" + formatTrace(trace) + "\n");
    },
    clear: function Console_clear() {},
  
@@ -245,24 +356,17 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 +
 +  time: function Console_time() {
 +    let args = Array.prototype.slice.call(arguments, 0);
-+    sendConsoleAPIMessage({
-+      level: "time",
-+      frame: getStackForConsoleAPI(Components.stack.caller, 1),
-+      args: args,
-+      timer: startTimer(args[0]),
-+    });
-+    dump("console.time: '" + args[0] + "' @ " + (new Date()) + "\n");
++    let frame = getStackForConsoleAPI(Components.stack.caller, 1);
++    let timer = startTimer(args[0]);
++    sendConsoleAPIMessage("time", frame, args, { timer: timer });
++    dump("console.time: '" + timer.name + "' @ " + (new Date()) + "\n");
 +  },
 +
 +  timeEnd: function Console_timeEnd() {
 +    let args = Array.prototype.slice.call(arguments, 0);
++    let frame = getStackForConsoleAPI(Components.stack.caller, 1);
 +    let timer = stopTimer(args[0]);
-+    sendConsoleAPIMessage({
-+      level: "timeEnd",
-+      frame: getStackForConsoleAPI(Components.stack.caller, 1),
-+      args: args,
-+      timer: timer,
-+    });
++    sendConsoleAPIMessage("timeEnd", frame, args, { timer: timer });
 +    dump("console.timeEnd: '" + timer.name + "' " + timer.duration + "ms\n");
 +  },
  };

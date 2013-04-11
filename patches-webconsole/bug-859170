@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 70e94a4be8121717419bc1f095fc900d39b7c4e4
+# Parent 81a19b8070c0a641c11a61314cc8fa38460effbf
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1365626467 -10800
+# Date 1365683269 -10800
 
-Bug 859170 - Trying to select [...] for a very long message printed to the web console will hang Firefox; r=past; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+Bug 859170 - Trying to select [...] for a very long message printed to the web console will hang Firefox; r=past
 
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
@@ -26,11 +26,24 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
          browser_webconsole_bug_804845_ctrl_key_nav.js \
          $(NULL)
  endif
+@@ -216,11 +217,12 @@ MOCHITEST_BROWSER_FILES += \
+ 	test-bug-737873-mixedcontent.html \
+ 	test-repeated-messages.html \
+ 	test-bug-766001-console-log.js \
+ 	test-bug-766001-js-console-links.html \
+ 	test-bug-766001-js-errors.js \
+ 	test-bug-821877-csperrors.html \
+ 	test-bug-821877-csperrors.html^headers^ \
+ 	test-eval-in-stackframe.html \
++	test-bug-859170-longstring-hang.html \
+ 	$(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
 diff --git a/browser/devtools/webconsole/test/browser_longstring_hang.js b/browser/devtools/webconsole/test/browser_longstring_hang.js
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_longstring_hang.js
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,88 @@
 +/* vim:set ts=2 sw=2 sts=2 et: */
 +/* Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/ */
@@ -44,18 +57,7 @@ new file mode 100644
 +  let DebuggerServer = Cu.import("resource://gre/modules/devtools/dbg-server.jsm",
 +                                 {}).DebuggerServer;
 +
-+  let longString = "foobar" +
-+                   (new Array(DebuggerServer.LONG_STRING_LENGTH + 4)).join("a") +
-+                   "foobaz";
-+
-+  let veryLongString = "abbababazomglolztest";
-+  for (let i = 0; i < 14; i++) {
-+    veryLongString += veryLongString + veryLongString;
-+  }
-+
-+  longString += veryLongString + "boom!";
-+
-+  addTab("data:text/html;charset=utf8,test for bug 859170 - check that very long strings do not hang the browser.");
++  addTab("http://example.com/browser/browser/devtools/webconsole/test/test-bug-859170-longstring-hang.html");
 +
 +  let hud = null;
 +
@@ -68,21 +70,11 @@ new file mode 100644
 +  {
 +    hud = aHud;
 +
-+    content.wrappedJSObject.longString = longString;
-+
-+    hud.jsterm.clearOutput(true);
-+    hud.jsterm.execute("console.log(window.longString)");
-+
-+    info("wait for console.log() result");
++    info("wait for the initial long string");
 +
 +    waitForMessages({
 +      webconsole: hud,
 +      messages: [
-+        {
-+          text: "console.log(window.longString)",
-+          category: CATEGORY_INPUT,
-+          longString: false,
-+        },
 +        {
 +          name: "find 'foobar', no 'foobaz', in long string output",
 +          text: "foobar",
@@ -96,7 +88,7 @@ new file mode 100644
 +
 +  function onInitialString(aResults)
 +  {
-+    let msg = [...aResults[1].matched][0];
++    let msg = [...aResults[0].matched][0];
 +    ok(msg, "console.log result message element");
 +
 +    let clickable = msg.querySelector(".longStringEllipsis");
@@ -234,7 +226,24 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      return false;
    }
  
-@@ -976,13 +990,14 @@ function waitForMessages(aOptions)
+@@ -960,29 +974,30 @@ function waitForMessages(aOptions)
+     }
+ 
+     if (webconsole.ui) {
+       webconsole.ui.off("messages-added", onMessagesAdded);
+     }
+ 
+     for (let rule of rules) {
+       if (!rule._ruleMatched) {
+-        console.log("failed to match rule: " + displayRule(rule));
++        ok(false, "failed to match rule: " + displayRule(rule));
+       }
+     }
+   }
+ 
+   function displayRule(aRule)
+   {
+     return aRule.name || aRule.text;
    }
  
    executeSoon(() => {
@@ -249,6 +258,34 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  
    return deferred.promise;
  }
+diff --git a/browser/devtools/webconsole/test/test-bug-859170-longstring-hang.html b/browser/devtools/webconsole/test/test-bug-859170-longstring-hang.html
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/test-bug-859170-longstring-hang.html
+@@ -0,0 +1,23 @@
++<!DOCTYPE html>
++<html lang="en">
++  <head><meta charset="utf-8">
++    <title>Web Console test for bug 859170 - very long strings hang the browser</title>
++    <!-- Any copyright is dedicated to the Public Domain.
++         http://creativecommons.org/publicdomain/zero/1.0/ -->
++<script type="application/javascript">
++(function() {
++var longString = "abbababazomglolztest";
++for (var i = 0; i < 10; i++) {
++  longString += longString + longString;
++}
++
++longString = "foobar" + (new Array(20000)).join("a") + "foobaz" +
++             longString + "boom!";
++console.log(longString);
++})();
++</script>
++  </head>
++  <body>
++    <p>Web Console test for bug 859170 - very long strings hang the browser.</p>
++  </body>
++</html>
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -262,7 +299,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  const MIN_FONT_SIZE = 10;
  
 +// The maximum length of strings to be displayed by the Web Console.
-+const MAX_LONG_STRING_LENGTH = 500000;
++const MAX_LONG_STRING_LENGTH = 200000;
 +
  const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
  
@@ -408,7 +445,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string aSourceURL
     *        The URL of the source file responsible for the error.
-@@ -3472,27 +3503,32 @@ JSTerm.prototype = {
+@@ -3462,27 +3493,32 @@ JSTerm.prototype = {
      aVar._fetched = true;
  
      let grip = aVar.value;
