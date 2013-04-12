@@ -1,8 +1,8 @@
 # HG changeset patch
-# Parent 1f278035873ee8026fa50bd97c30ea97fbb0cfc8
+# Parent aae000f9e3cb69d03450078a23a3522cff362943
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1365712061 -10800
-Bug 851231 - Output Console.jsm API calls to the browser console
+# Date 1365792474 -10800
+Bug 851231 - Output Console.jsm API calls to the browser console; r=jwalker; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
 
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
@@ -29,7 +29,7 @@ diff --git a/browser/devtools/webconsole/test/browser_console_consolejsm_output.
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_console_consolejsm_output.js
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,118 @@
 +/*
 + * Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/
@@ -50,41 +50,507 @@ new file mode 100644
 +    let console = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).console;
 +
 +    console.time("foobarTimer");
-+    let foobar = { bug851231c: "bug851231d" };
++    let foobar = { bug851231prop: "bug851231value" };
 +
-+    console.log("bug851231a");
-+    console.error("bug851231b", foobar);
++    console.log("bug851231-log");
++    console.info("bug851231-info");
++    console.warn("bug851231-warn");
++    console.error("bug851231-error", foobar);
++    console.debug("bug851231-debug");
 +    console.trace();
 +    console.dir(document);
 +    console.timeEnd("foobarTimer");
++
++    info("wait for the Console.jsm messages");
 +
 +    waitForMessages({
 +      webconsole: hud,
 +      messages: [
 +        {
 +          name: "console.log output",
-+          text: "bug851231a",
++          text: "bug851231-log",
 +          category: CATEGORY_WEBDEV,
 +          severity: SEVERITY_LOG,
++        },
++        {
++          name: "console.info output",
++          text: "bug851231-info",
++          category: CATEGORY_WEBDEV,
++          severity: SEVERITY_INFO,
++        },
++        {
++          name: "console.warn output",
++          text: "bug851231-warn",
++          category: CATEGORY_WEBDEV,
++          severity: SEVERITY_WARNING,
 +        },
 +        {
 +          name: "console.error output",
-+          text: "bug851231b",
++          text: /\bbug851231-error\b.+\[object Object\]/,
 +          category: CATEGORY_WEBDEV,
 +          severity: SEVERITY_ERROR,
++          objects: true,
 +        },
 +        {
-+          name: "console.trace output",
-+          text: /Stack trace.+\bconsoleOpened\b/,
-+          stacktrace: "consoleOpened",
++          name: "console.debug output",
++          text: "bug851231-debug",
 +          category: CATEGORY_WEBDEV,
 +          severity: SEVERITY_LOG,
 +        },
++        {
++          name: "console.trace output",
++          consoleTrace: {
++            file: "browser_console_consolejsm_output.js",
++            fn: "consoleOpened",
++          },
++        },
++        {
++          name: "console.dir output",
++          consoleDir: "[object XULDocument]",
++        },
++        {
++          name: "console.time output",
++          consoleTime: "foobarTimer",
++        },
++        {
++          name: "console.timeEnd output",
++          consoleTimeEnd: "foobarTimer",
++        },
 +      ],
-+    }).then(finishTest);
++    }).then((aResults) => {
++      let consoleErrorMsg = aResults[3];
++      ok(consoleErrorMsg, "console.error message element found");
++      let clickable = consoleErrorMsg.clickableElements[0];
++      ok(clickable, "clickable object found for console.error");
++
++      let onFetch = (aEvent, aVar) => {
++        // Skip the notification from console.dir variablesview-fetched.
++        if (aVar._variablesView != hud.jsterm._variablesView) {
++          return;
++        }
++        hud.jsterm.off("variablesview-fetched", onFetch);
++
++        ok(aVar, "object inspector opened on click");
++
++        findVariableViewProperties(aVar, [{
++          name: "bug851231prop",
++          value: "bug851231value",
++        }], { webconsole: hud }).then(finishTest);
++      };
++
++      hud.jsterm.on("variablesview-fetched", onFetch);
++
++      scrollOutputToNode(clickable);
++
++      info("wait for variablesview-fetched");
++      executeSoon(() =>
++        EventUtils.synthesizeMouse(clickable, 2, 2, {}, hud.iframeWindow));
++    });
 +  }
 +}
+diff --git a/browser/devtools/webconsole/test/browser_longstring_hang.js b/browser/devtools/webconsole/test/browser_longstring_hang.js
+--- a/browser/devtools/webconsole/test/browser_longstring_hang.js
++++ b/browser/devtools/webconsole/test/browser_longstring_hang.js
+@@ -37,23 +37,20 @@ function test()
+           longString: true,
+         },
+       ],
+     }).then(onInitialString);
+   }
+ 
+   function onInitialString(aResults)
+   {
+-    let msg = [...aResults[0].matched][0];
+-    ok(msg, "console.log result message element");
+-
+-    let clickable = msg.querySelector(".longStringEllipsis");
++    let clickable = aResults[0].longStrings[0];
+     ok(clickable, "long string ellipsis is shown");
+ 
+-    scrollToVisible(clickable);
++    scrollOutputToNode(clickable);
+ 
+     executeSoon(() => {
+       EventUtils.synthesizeMouse(clickable, 2, 2, {}, hud.iframeWindow);
+ 
+       info("wait for long string expansion");
+ 
+       waitForMessages({
+         webconsole: hud,
+@@ -68,21 +65,9 @@ function test()
+           {
+             text: "too long to be displayed",
+             longString: false,
+           },
+         ],
+       }).then(finishTest);
+     });
+   }
+-
+-  function scrollToVisible(aNode)
+-  {
+-    let richListBoxNode = aNode.parentNode;
+-    while (richListBoxNode.tagName != "richlistbox") {
+-      richListBoxNode = richListBoxNode.parentNode;
+-    }
+-
+-    let boxObject = richListBoxNode.scrollBoxObject;
+-    let nsIScrollBoxObject = boxObject.QueryInterface(Ci.nsIScrollBoxObject);
+-    nsIScrollBoxObject.ensureElementIsVisible(aNode);
+-  }
+ }
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -246,44 +246,57 @@ function waitForOpenContextMenu(aContext
+ }
+ 
+ /**
+  * Dump the output of all open Web Consoles - used only for debugging purposes.
+  */
+ function dumpConsoles()
+ {
+   if (gPendingOutputTest) {
+-    console.log("dumpConsoles");
++    console.log("dumpConsoles start");
+     for each (let hud in HUDService.hudReferences) {
+       if (!hud.outputNode) {
+         console.debug("no output content for", hud.hudId);
+         continue;
+       }
+ 
+       console.debug("output content for", hud.hudId);
+       for (let elem of hud.outputNode.childNodes) {
+-        let text = getMessageElementText(elem);
+-        let repeats = elem.querySelector(".webconsole-msg-repeat");
+-        if (repeats) {
+-          repeats = repeats.getAttribute("value");
+-        }
+-        console.debug("date", elem.timestamp,
+-                      "class", elem.className,
+-                      "category", elem.category,
+-                      "severity", elem.severity,
+-                      "repeats", repeats,
+-                      "clipboardText", elem.clipboardText,
+-                      "text", text);
++        dumpMessageElement(elem);
+       }
+     }
++    console.log("dumpConsoles end");
+ 
+     gPendingOutputTest = 0;
+   }
+ }
+ 
++/**
++ * Dump to output debug information for the given webconsole message.
++ *
++ * @param nsIDOMNode aMessage
++ *        The message element you want to display.
++ */
++function dumpMessageElement(aMessage)
++{
++  let text = getMessageElementText(aMessage);
++  let repeats = aMessage.querySelector(".webconsole-msg-repeat");
++  if (repeats) {
++    repeats = repeats.getAttribute("value");
++  }
++  console.debug("id", aMessage.getAttribute("id"),
++                "date", aMessage.timestamp,
++                "class", aMessage.className,
++                "category", aMessage.category,
++                "severity", aMessage.severity,
++                "repeats", repeats,
++                "clipboardText", aMessage.clipboardText,
++                "text", text);
++}
 +
+ function finishTest()
+ {
+   browser = hudId = hud = filterBox = outputNode = cs = null;
+ 
+   dumpConsoles();
+ 
+   if (HUDConsoleUI.browserConsole) {
+     let hud = HUDConsoleUI.browserConsole;
+@@ -882,64 +895,220 @@ function waitForMessages(aOptions)
+       result = aText.indexOf(aRule) > -1;
+     }
+     else if (aRule instanceof RegExp) {
+       result = aRule.test(aText);
+     }
+     return result;
+   }
+ 
++  function checkConsoleTrace(aRule, aElement)
++  {
++    let elemText = getMessageElementText(aElement);
++    let trace = aRule.consoleTrace;
++
++    if (!checkText("Stack trace from ", elemText)) {
++      return false;
++    }
++
++    let clickable = aElement.querySelector(".hud-clickable");
++    if (!clickable) {
++      ok(false, "console.trace() message is missing .hud-clickable");
++      displayErrorContext(aRule, aElement);
++      return false;
++    }
++    aRule.clickableElements = [clickable];
++
++    if (trace.file &&
++        !checkText("from " + trace.file + ", ", elemText)) {
++      ok(false, "console.trace() message is missing the file name: " +
++                trace.file);
++      displayErrorContext(aRule, aElement);
++      return false;
++    }
++
++    if (trace.fn &&
++        !checkText(", function " + trace.fn + ", ", elemText)) {
++      ok(false, "console.trace() message is missing the function name: " +
++                trace.fn);
++      displayErrorContext(aRule, aElement);
++      return false;
++    }
++
++    if (trace.line &&
++        !checkText(", line " + trace.line + ".", elemText)) {
++      ok(false, "console.trace() message is missing the line number: " +
++                trace.line);
++      displayErrorContext(aRule, aElement);
++      return false;
++    }
++
++    aRule.category = CATEGORY_WEBDEV;
++    aRule.severity = SEVERITY_LOG;
++
++    return true;
++  }
++
++  function checkConsoleTime(aRule, aElement)
++  {
++    let elemText = getMessageElementText(aElement);
++    let time = aRule.consoleTime;
++
++    if (!checkText(time + ": timer started", elemText)) {
++      return false;
++    }
++
++    aRule.category = CATEGORY_WEBDEV;
++    aRule.severity = SEVERITY_LOG;
++
++    return true;
++  }
++
++  function checkConsoleTimeEnd(aRule, aElement)
++  {
++    let elemText = getMessageElementText(aElement);
++    let time = aRule.consoleTimeEnd;
++    let regex = new RegExp(time + ": \\d+ms");
++
++    if (!checkText(regex, elemText)) {
++      return false;
++    }
++
++    aRule.category = CATEGORY_WEBDEV;
++    aRule.severity = SEVERITY_LOG;
++
++    return true;
++  }
++
++  function checkConsoleDir(aRule, aElement)
++  {
++    if (!aElement.classList.contains("webconsole-msg-inspector")) {
++      return false;
++    }
++
++    let elemText = getMessageElementText(aElement);
++    if (!checkText(aRule.consoleDir, elemText)) {
++      return false;
++    }
++
++    let iframe = aElement.querySelector("iframe");
++    if (!iframe) {
++      ok(false, "console.dir message has no iframe");
++      return false;
++    }
++
++    return true;
++  }
++
+   function checkMessage(aRule, aElement)
+   {
+     let elemText = getMessageElementText(aElement);
+ 
+     if (aRule.text && !checkText(aRule.text, elemText)) {
+       return false;
+     }
+ 
+     if (aRule.noText && checkText(aRule.noText, elemText)) {
+       return false;
+     }
+ 
+-    if (aRule.category) {
+-      if (aElement.category != aRule.category) {
+-        return false;
+-      }
++    if (aRule.consoleTrace && !checkConsoleTrace(aRule, aElement)) {
++      return false;
+     }
+ 
+-    if (aRule.severity) {
+-      if (aElement.severity != aRule.severity) {
+-        return false;
++    if (aRule.consoleTime && !checkConsoleTime(aRule, aElement)) {
++      return false;
++    }
++
++    if (aRule.consoleTimeEnd && !checkConsoleTimeEnd(aRule, aElement)) {
++      return false;
++    }
++
++    if (aRule.consoleDir && !checkConsoleDir(aRule, aElement)) {
++      return false;
++    }
++
++    let partialMatch = !!(aRule.consoleTrace || aRule.consoleTime ||
++                          aRule.consoleTimeEnd);
++
++    if (aRule.category && aElement.category != aRule.category) {
++      if (partialMatch) {
++        is(aElement.category, aRule.category,
++           "message category for rule: " + displayRule(aRule));
++        displayErrorContext(aRule, aElement);
+       }
++      return false;
++    }
++
++    if (aRule.severity && aElement.severity != aRule.severity) {
++      if (partialMatch) {
++        is(aElement.severity, aRule.severity,
++           "message severity for rule: " + displayRule(aRule));
++        displayErrorContext(aRule, aElement);
++      }
++      return false;
+     }
+ 
+     if (aRule.repeats) {
+       let repeats = aElement.querySelector(".webconsole-msg-repeat");
+       if (!repeats || repeats.getAttribute("value") != aRule.repeats) {
+         return false;
+       }
+     }
+ 
+-    let longString = !!aElement.querySelector(".longStringEllipsis");
+-    if ("longString" in aRule && aRule.longString != longString) {
+-      return false;
++    if ("longString" in aRule) {
++      let longStrings = aElement.querySelectorAll(".longStringEllipsis");
++      if (aRule.longString != !!longStrings[0]) {
++        if (partialMatch) {
++          is(!!longStrings[0], aRule.longString,
++             "long string existence check failed for message rule: " +
++             displayRule(aRule));
++          displayErrorContext(aRule, aElement);
++        }
++        return false;
++      }
++      aRule.longStrings = longStrings;
++    }
++
++    if ("objects" in aRule) {
++      let clickables = aElement.querySelectorAll(".hud-clickable");
++      if (aRule.objects != !!clickables[0]) {
++        if (partialMatch) {
++          is(!!clickables[0], aRule.objects,
++             "objects existence check failed for message rule: " +
++             displayRule(aRule));
++          displayErrorContext(aRule, aElement);
++        }
++        return false;
++      }
++      aRule.clickableElements = clickables;
+     }
+ 
+     let count = aRule.count || 1;
+     if (!aRule.matched) {
+       aRule.matched = new Set();
+     }
+     aRule.matched.add(aElement);
+ 
+     return aRule.matched.size == count;
+   }
+ 
+   function onMessagesAdded(aEvent, aNewElements)
+   {
+     for (let elem of aNewElements) {
++      let location = elem.querySelector(".webconsole-location");
++      if (location) {
++        let url = location.getAttribute("title");
++        // Prevent recursion with the browser console and any potential
++        // messages coming from head.js.
++        if (url.indexOf("browser/devtools/webconsole/test/head.js") != -1) {
++          continue;
++        }
++      }
++
+       for (let rule of rules) {
+         if (rule._ruleMatched) {
+           continue;
+         }
+ 
+         let matched = checkMessage(rule, elem);
+         if (matched) {
+           rule._ruleMatched = true;
+@@ -983,20 +1152,46 @@ function waitForMessages(aOptions)
+     }
+   }
+ 
+   function displayRule(aRule)
+   {
+     return aRule.name || aRule.text;
+   }
+ 
++  function displayErrorContext(aRule, aElement)
++  {
++    console.log("error occured during rule " + displayRule(aRule));
++    console.log("while checking the following message");
++    dumpMessageElement(aElement);
++  }
++
+   executeSoon(() => {
+     onMessagesAdded("messages-added", webconsole.outputNode.childNodes);
+     if (rulesMatched != rules.length) {
+       listenerAdded = true;
+       registerCleanupFunction(testCleanup);
+       webconsole.ui.on("messages-added", onMessagesAdded);
+       webconsole.ui.on("messages-updated", onMessagesAdded);
+     }
+   });
+ 
+   return deferred.promise;
+ }
++
++
++/**
++ * Scroll the Web Console output to the given node.
++ *
++ * @param nsIDOMNode aNode
++ *        The node to scroll to.
++ */
++function scrollOutputToNode(aNode)
++{
++  let richListBoxNode = aNode.parentNode;
++  while (richListBoxNode.tagName != "richlistbox") {
++    richListBoxNode = richListBoxNode.parentNode;
++  }
++
++  let boxObject = richListBoxNode.scrollBoxObject;
++  let nsIScrollBoxObject = boxObject.QueryInterface(Ci.nsIScrollBoxObject);
++  nsIScrollBoxObject.ensureElementIsVisible(aNode);
++}
 diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 --- a/toolkit/devtools/Console.jsm
 +++ b/toolkit/devtools/Console.jsm
@@ -240,7 +706,7 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
  function createDumper(aLevel) {
    return function() {
      let args = Array.prototype.slice.call(arguments, 0);
-+    let frame = getStackForConsoleAPI(Components.stack.caller, 1);
++    let frame = getStackForConsoleAPI(Components.stack.caller, 1)[0];
 +    sendConsoleAPIMessage(aLevel, frame, args);
      let data = args.map(function(arg) {
        return stringify(arg);
@@ -259,7 +725,7 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
    return function() {
      dump("console." + aLevel + ": \n");
      let args = Array.prototype.slice.call(arguments, 0);
-+    let frame = getStackForConsoleAPI(Components.stack.caller, 1);
++    let frame = getStackForConsoleAPI(Components.stack.caller, 1)[0];
 +    sendConsoleAPIMessage(aLevel, frame, args);
      args.forEach(function(arg) {
        dump(log(arg));
@@ -356,7 +822,7 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 +
 +  time: function Console_time() {
 +    let args = Array.prototype.slice.call(arguments, 0);
-+    let frame = getStackForConsoleAPI(Components.stack.caller, 1);
++    let frame = getStackForConsoleAPI(Components.stack.caller, 1)[0];
 +    let timer = startTimer(args[0]);
 +    sendConsoleAPIMessage("time", frame, args, { timer: timer });
 +    dump("console.time: '" + timer.name + "' @ " + (new Date()) + "\n");
@@ -364,7 +830,7 @@ diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
 +
 +  timeEnd: function Console_timeEnd() {
 +    let args = Array.prototype.slice.call(arguments, 0);
-+    let frame = getStackForConsoleAPI(Components.stack.caller, 1);
++    let frame = getStackForConsoleAPI(Components.stack.caller, 1)[0];
 +    let timer = stopTimer(args[0]);
 +    sendConsoleAPIMessage("timeEnd", frame, args, { timer: timer });
 +    dump("console.timeEnd: '" + timer.name + "' " + timer.duration + "ms\n");

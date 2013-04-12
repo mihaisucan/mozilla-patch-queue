@@ -1,0 +1,96 @@
+# HG changeset patch
+# Parent 2b63f2db523c51b14710685c245b8636e5be9431
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1365798849 -10800
+
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -117,16 +117,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_repeated_messages_accuracy.js \
+ 	browser_webconsole_bug_821877_csp_errors.js \
+ 	browser_eval_in_debugger_stackframe.js \
+ 	browser_console_variables_view.js \
+ 	browser_console_variables_view_while_debugging.js \
+ 	browser_console.js \
+ 	browser_longstring_hang.js \
+ 	browser_console_consolejsm_output.js \
++	browser_webconsole_perftest.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+         browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_perftest.js b/browser/devtools/webconsole/test/browser_webconsole_perftest.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_perftest.js
+@@ -0,0 +1,65 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Test that very long strings do not hang the browser.
++
++function test()
++{
++  waitForExplicitFinish();
++  requestLongerTimeout(10);
++
++  addTab("data:text/html;charset=utf8,dumb performance test");
++
++  let messages_count = 100000;
++  let testStartTime = null;
++  let loopEndTime = null;
++  let expectedMessage = null;
++  let hud = null;
++
++  gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
++    gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
++    openConsole(null, performTest);
++  }, true);
++
++  function performTest(aHud)
++  {
++    hud = aHud;
++
++    testStartTime = new Date();
++    for (let i = 0; i <= messages_count; i++) {
++        content.console.log("foo " + i);
++    }
++    loopEndTime = new Date();
++
++    info("wait for the last message");
++
++    expectedMessage = "foo " + messages_count;
++
++    hud.ui.on("messages-added", onMessagesAdded);
++  }
++
++  function onMessagesAdded(aEvent, aMessages)
++  {
++    for (let msg of aMessages) {
++      if (msg.textContent.indexOf(expectedMessage) > -1) {
++        testEnd();
++        return;
++      }
++    }
++  }
++
++  function testEnd()
++  {
++    let totalDuration = (new Date()).getTime() - testStartTime.getTime();
++    let loopDuration = loopEndTime.getTime() - testStartTime.getTime();
++
++    console.log("test start", testStartTime,
++                "loop end time", loopEndTime,
++                "loop duration", loopDuration + "ms",
++                "messages count", messages_count,
++                "time from test start to last message", totalDuration + "ms");
++
++    executeSoon(finishTest);
++  }
++}
