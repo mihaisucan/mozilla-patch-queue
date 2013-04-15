@@ -1,12 +1,13 @@
 # HG changeset patch
-# Parent 2b63f2db523c51b14710685c245b8636e5be9431
+# Parent 04a766415411f75c952969d9d25f5dcf6f4a361b
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1365798849 -10800
+# Date 1366026532 -10800
+experimental performance tests for the web console. NOT READY for primetime
 
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
 +++ b/browser/devtools/webconsole/test/Makefile.in
-@@ -117,16 +117,17 @@ MOCHITEST_BROWSER_FILES = \
+@@ -117,16 +117,20 @@ MOCHITEST_BROWSER_FILES = \
  	browser_repeated_messages_accuracy.js \
  	browser_webconsole_bug_821877_csp_errors.js \
  	browser_eval_in_debugger_stackframe.js \
@@ -16,6 +17,9 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
  	browser_longstring_hang.js \
  	browser_console_consolejsm_output.js \
 +	browser_webconsole_perftest.js \
++	browser_consoleapi_perftest.js \
++	browser_webconsole_output_perftest.js \
++	browser_webconsole_protocol_perftest.js \
  	head.js \
  	$(NULL)
  
@@ -24,6 +28,123 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
          browser_webconsole_bug_804845_ctrl_key_nav.js \
          $(NULL)
  endif
+diff --git a/browser/devtools/webconsole/test/browser_consoleapi_perftest.js b/browser/devtools/webconsole/test/browser_consoleapi_perftest.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_consoleapi_perftest.js
+@@ -0,0 +1,38 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Test for the window.console API performance.
++
++function test()
++{
++  waitForExplicitFinish();
++
++  addTab("data:text/html;charset=utf8,console API perf test");
++
++  let messages_count = 100000;
++
++  gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
++    gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
++    performTest();
++  }, true);
++
++  function performTest()
++  {
++    let testStartTime = new Date();
++    for (let i = 0; i <= messages_count; i++) {
++        content.console.log("foo " + i);
++    }
++    let testEndTime = new Date();
++
++    let totalDuration = testEndTime - testStartTime.getTime();
++    ok(true, "test duration: " + totalDuration + "ms");
++
++    console.log("test start", testStartTime,
++                "test end", testEndTime,
++                "messages count", messages_count,
++                "test duration", totalDuration + "ms");
++
++    executeSoon(finishTest);
++  }
++}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_perftest.js b/browser/devtools/webconsole/test/browser_webconsole_output_perftest.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_perftest.js
+@@ -0,0 +1,69 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Test for the web console message output performance.
++
++function test()
++{
++  waitForExplicitFinish();
++  requestLongerTimeout(10);
++
++  addTab("data:text/html;charset=utf8,simple output performance test");
++
++  let messages_count = 100000;
++  let testStartTime = null;
++  let loopEndTime = null;
++  let expectedMessage = null;
++  let hud = null;
++
++  gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
++    gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
++    openConsole(null, performTest);
++  }, true);
++
++  function performTest(aHud)
++  {
++    hud = aHud;
++
++    testStartTime = new Date();
++    for (let i = 0; i <= messages_count; i++) {
++      let node = hud.ui.createMessageNode(CATEGORY_WEBDEV, SEVERITY_LOG,
++                                          "foo " +i);
++      hud.ui.outputMessage(CATEGORY_JS, node);
++    }
++    loopEndTime = new Date();
++
++    info("wait for the last message");
++
++    expectedMessage = "foo " + messages_count;
++
++    hud.ui.on("messages-added", onMessagesAdded);
++  }
++
++  function onMessagesAdded(aEvent, aMessages)
++  {
++    for (let msg of aMessages) {
++      if (msg.textContent.indexOf(expectedMessage) > -1) {
++        testEnd();
++        return;
++      }
++    }
++  }
++
++  function testEnd()
++  {
++    let totalDuration = (new Date()).getTime() - testStartTime.getTime();
++    let loopDuration = loopEndTime.getTime() - testStartTime.getTime();
++
++    ok(true, "total time:" + totalDuration + "ms");
++
++    console.log("test start", testStartTime,
++                "loop end time", loopEndTime,
++                "loop duration", loopDuration + "ms",
++                "messages count", messages_count,
++                "time from test start to last message", totalDuration + "ms");
++
++    executeSoon(finishTest);
++  }
++}
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_perftest.js b/browser/devtools/webconsole/test/browser_webconsole_perftest.js
 new file mode 100644
 --- /dev/null
@@ -33,14 +154,14 @@ new file mode 100644
 +/* Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/ */
 +
-+// Test that very long strings do not hang the browser.
++// Test for the web console message output performance.
 +
 +function test()
 +{
 +  waitForExplicitFinish();
 +  requestLongerTimeout(10);
 +
-+  addTab("data:text/html;charset=utf8,dumb performance test");
++  addTab("data:text/html;charset=utf8,simple performance test");
 +
 +  let messages_count = 100000;
 +  let testStartTime = null;
@@ -94,3 +215,156 @@ new file mode 100644
 +    executeSoon(finishTest);
 +  }
 +}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_protocol_perftest.js b/browser/devtools/webconsole/test/browser_webconsole_protocol_perftest.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_protocol_perftest.js
+@@ -0,0 +1,77 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Test for the debugger protocol performance, via web console client APIs.
++
++function test()
++{
++  waitForExplicitFinish();
++  requestLongerTimeout(10);
++
++  addTab("data:text/html;charset=utf8,simple protocol performance test");
++
++  let messages_count = 100000;
++  let testStartTime = null;
++  let loopDuration = null;
++  let responseTime = null;
++  let lastMessageReceived = false;
++  let hud = null;
++
++  gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
++    gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
++    openConsole(null, performTest);
++  }, true);
++
++  function performTest(aHud)
++  {
++    hud = aHud;
++
++    hud.ui.proxy.client.addListener("perfTestMessage", onMessageReceived);
++
++    testStartTime = new Date();
++    hud.ui.proxy.client.request({
++      to: hud.ui.proxy._consoleActor,
++      type: "doPerformanceTest",
++      messagesCount: messages_count,
++    }, (aPacket) => {
++      responseTime = new Date();
++      loopDuration = aPacket.loopDuration;
++      testEnd();
++    });
++
++    info("wait for the last message");
++  }
++
++  function onMessageReceived(aType, aPacket)
++  {
++    if (aPacket.messageId == messages_count) {
++      lastMessageReceived = new Date();
++      testEnd();
++    }
++  }
++
++  function testEnd()
++  {
++    if (!lastMessageReceived || !responseTime) {
++      return;
++    }
++    hud.ui.proxy.client.removeListener("perfTestMessage", onMessageReceived);
++
++    let totalDuration = (new Date()).getTime() - testStartTime.getTime();
++    let responseDuration = responseTime.getTime() - testStartTime.getTime();
++    let timeToLastMessage = lastMessageReceived.getTime() - testStartTime.getTime();
++
++    ok(true, "total time: " + totalDuration + "ms");
++
++    console.log("test start", testStartTime,
++                "messages count", messages_count,
++                "request-response duration", responseDuration + "ms",
++                "server-side loop duration", loopDuration + "ms",
++                "time from test start to last message", timeToLastMessage + "ms",
++                "total test duration", totalDuration + "ms");
++
++    executeSoon(finishTest);
++  }
++}
++
+diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
+--- a/toolkit/devtools/debugger/dbg-client.jsm
++++ b/toolkit/devtools/debugger/dbg-client.jsm
+@@ -177,16 +177,17 @@ const UnsolicitedNotifications = {
+   "networkEvent": "networkEvent",
+   "networkEventUpdate": "networkEventUpdate",
+   "newGlobal": "newGlobal",
+   "newScript": "newScript",
+   "newSource": "newSource",
+   "tabDetached": "tabDetached",
+   "tabNavigated": "tabNavigated",
+   "pageError": "pageError",
++  "perfTestMessage": "perfTestMessage",
+   "webappsEvent": "webappsEvent"
+ };
+ 
+ /**
+  * Set of pause types that are sent by the server and not as an immediate
+  * response to a client request.
+  */
+ const UnsolicitedPauses = {
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -940,27 +940,46 @@ WebConsoleActor.prototype =
+     }
+     catch (ex) {
+       // The above can fail because chromeEventHandler is not available for all
+       // kinds of |this.window|.
+     }
+ 
+     return window;
+   },
++
++  doPerformanceTest: function WCA_doPerformanceTest(aRequest)
++  {
++    let loopStart = new Date();
++    for (let i = 0; i <= aRequest.messagesCount; i++) {
++      let packet = {
++        from: this.actorID,
++        type: "perfTestMessage",
++        messageId: i,
++      };
++
++      this.conn.send(packet);
++    }
++
++    return {
++      loopDuration: (new Date()).getTime() - loopStart.getTime(),
++    };
++  },
+ };
+ 
+ WebConsoleActor.prototype.requestTypes =
+ {
+   startListeners: WebConsoleActor.prototype.onStartListeners,
+   stopListeners: WebConsoleActor.prototype.onStopListeners,
+   getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
+   evaluateJS: WebConsoleActor.prototype.onEvaluateJS,
+   autocomplete: WebConsoleActor.prototype.onAutocomplete,
+   clearMessagesCache: WebConsoleActor.prototype.onClearMessagesCache,
+   setPreferences: WebConsoleActor.prototype.onSetPreferences,
++  doPerformanceTest: WebConsoleActor.prototype.doPerformanceTest,
+ };
+ 
+ /**
+  * Creates an actor for a network event.
+  *
+  * @constructor
+  * @param object aNetworkEvent
+  *        The network event you want to use the actor for.
