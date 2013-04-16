@@ -1,10 +1,123 @@
 # HG changeset patch
-# Parent 2cecd940c2193dd35cb33ca47b8b36cc6449200e
+# Parent 4572a726100e97a20fbf147be519ff955329d47b
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1366056065 -10800
+# Date 1366131070 -10800
 
-Bug 862024 - Warning about replaced window.console API shows when content scripts do not change the object; r=past
+Bug 862024 - Warning about replaced window.console API shows when content scripts do not change the object; r=past; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-bc,mochitest-o -t none
 
+diff --git a/browser/devtools/webconsole/test/browser_warn_user_about_replaced_api.js b/browser/devtools/webconsole/test/browser_warn_user_about_replaced_api.js
+--- a/browser/devtools/webconsole/test/browser_warn_user_about_replaced_api.js
++++ b/browser/devtools/webconsole/test/browser_warn_user_about_replaced_api.js
+@@ -1,48 +1,75 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ const TEST_REPLACED_API_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console-replaced-api.html";
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/testscript.js";
+ 
+ function test() {
+   waitForExplicitFinish();
+ 
+-  // First test that the warning does not appear on a normal page (about:blank)
+-  addTab("about:blank");
++  // First test that the warning does not appear on a page that doesn't override
++  // the window.console object.
++  addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+-    testOpenWebConsole(false);
++    openConsole(null, testWarningNotPresent);
+   }, true);
++
++  function testWarningNotPresent(hud)
++  {
++    is(hud.outputNode.textContent.indexOf("logging API"), -1,
++       "no warning displayed");
++
++    // Bug 862024: make sure the warning doesn't show after page reload.
++    info("reload " + TEST_URI);
++    executeSoon(() => content.location.reload());
++
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "testscript.js",
++        category: CATEGORY_NETWORK,
++      }],
++    }).then(() => executeSoon(() => {
++      is(hud.outputNode.textContent.indexOf("logging API"), -1,
++         "no warning displayed");
++
++      closeConsole(null, loadTestPage);
++    }));
++  }
++
++  function loadTestPage()
++  {
++    info("load test " + TEST_REPLACED_API_URI);
++    browser.addEventListener("load", function onLoad() {
++      browser.removeEventListener("load", onLoad, true);
++      openConsole(null, testWarningPresent);
++    }, true);
++    content.location = TEST_REPLACED_API_URI;
++  }
++
++  function testWarningPresent(hud)
++  {
++    info("wait for the warning to show");
++    let warning = {
++      webconsole: hud,
++      messages: [{
++        text: /logging API .+ disabled by a script/,
++        category: CATEGORY_JS,
++        severity: SEVERITY_WARNING,
++      }],
++    };
++
++    waitForMessages(warning).then(() => {
++      hud.jsterm.clearOutput();
++
++      executeSoon(() => {
++        info("reload the test page and wait for the warning to show");
++        waitForMessages(warning).then(finishTest);
++        content.location.reload();
++      });
++    });
++  }
+ }
+-
+-function testWarningPresent() {
+-  // Then test that the warning does appear on a page that replaces the API
+-  browser.addEventListener("load", function onLoad() {
+-    browser.removeEventListener("load", onLoad, true);
+-    testOpenWebConsole(true);
+-  }, true);
+-  browser.contentWindow.location = TEST_REPLACED_API_URI;
+-}
+-
+-function testOpenWebConsole(shouldWarn) {
+-  openConsole(null, function(hud) {
+-    waitForSuccess({
+-      name: (shouldWarn ? "no " : "") + "API replacement warning",
+-      validatorFn: function()
+-      {
+-        let pos = hud.outputNode.textContent.indexOf("disabled by");
+-        return shouldWarn ? pos > -1 : pos == -1;
+-      },
+-      successFn: function() {
+-        if (shouldWarn) {
+-          finishTest();
+-        }
+-        else {
+-          closeConsole(null, testWarningPresent);
+-        }
+-      },
+-      failureFn: finishTest,
+-    });
+-  });
+-}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -28,3 +141,22 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
      this._attachConsole();
  
+@@ -4728,17 +4727,17 @@ WebConsoleConnectionProxy.prototype = {
+     if (!this.owner) {
+       return;
+     }
+ 
+     if (aPacket.url) {
+       this.owner.onLocationChange(aPacket.url, aPacket.title);
+     }
+ 
+-    if (aType == "navigate" && !aPacket.nativeConsoleAPI) {
++    if (aPacket.state == "stop" && !aPacket.nativeConsoleAPI) {
+       this.owner.logWarningAboutReplacedAPI();
+     }
+   },
+ 
+   /**
+    * Release an object actor.
+    *
+    * @param string aActor
