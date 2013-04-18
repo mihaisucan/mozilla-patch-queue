@@ -1,0 +1,201 @@
+# HG changeset patch
+# Parent 286cf3d332816b0bd3d043b332e1f0815ada2878
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1366299750 -10800
+
+Bug 855763 - [Responsive Mode] Fix for intermittent browser_responsiveuiaddcustompreset.js | Test timed out, | Found a tab after previous test timed out: data:text/html,foo, browser_Services.js | Services.prompt is an nsIPromptService; r=jwalker
+
+diff --git a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcustompreset.js b/browser/devtools/responsivedesign/test/browser_responsiveuiaddcustompreset.js
+--- a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcustompreset.js
++++ b/browser/devtools/responsivedesign/test/browser_responsiveuiaddcustompreset.js
+@@ -8,46 +8,50 @@ function test() {
+   waitForExplicitFinish();
+ 
+   gBrowser.selectedTab = gBrowser.addTab();
+   gBrowser.selectedBrowser.addEventListener("load", function onload() {
+     gBrowser.selectedBrowser.removeEventListener("load", onload, true);
+     waitForFocus(startTest, content);
+   }, true);
+ 
+-  content.location = "data:text/html,foo";
++  content.location = "data:text/html;charset=utf8,test custom presets in responsive mode";
+ 
+   function startTest() {
+     // Mocking prompt
+     oldPrompt = Services.prompt;
+     Services.prompt = {
+       value: "",
+       returnBool: true,
+       prompt: function(aParent, aDialogTitle, aText, aValue, aCheckMsg, aCheckState) {
+         aValue.value = this.value;
+         return this.returnBool;
+       }
+     };
+ 
++    registerCleanupFunction(() => Services.prompt = oldPrompt);
++
++    info("test started, waiting for responsive mode to activate");
++
+     document.getElementById("Tools:ResponsiveUI").removeAttribute("disabled");
+     mgr.once("on", onUIOpen);
+     synthesizeKeyFromKeyTag("key_responsiveUI");
+   }
+ 
+   function onUIOpen() {
+     // Is it open?
+     let container = gBrowser.getBrowserContainer();
+     is(container.getAttribute("responsivemode"), "true", "In responsive mode.");
+ 
+     instance = gBrowser.selectedTab.__responsiveUI;
+     ok(instance, "instance of the module is attached to the tab.");
+ 
+     instance.transitionsEnabled = false;
+ 
+-    testAddCustomPreset();
++    executeSoon(testAddCustomPreset);
+   }
+ 
+   function testAddCustomPreset() {
+     // Tries to add a custom preset and cancel the prompt
+     let idx = instance.menulist.selectedIndex;
+     let presetCount = instance.presets.length;
+ 
+     Services.prompt.value = "";
+@@ -62,34 +66,32 @@ function test() {
+ 
+     // Adds the custom preset with "Testing preset"
+     Services.prompt.value = "Testing preset";
+     Services.prompt.returnBool = true;
+     instance.addbutton.doCommand();
+ 
+     instance.menulist.selectedIndex = 1;
+ 
+-    mgr.once("off", restart);
+-
+-    // We're still in the loop of initializing the responsive mode.
+-    // Let's wait next loop to stop it.
+-    executeSoon(function() {
++    executeSoon(() => {
++      info("waiting for responsive mode to turn off");
++      mgr.once("off", restart);
+       EventUtils.synthesizeKey("VK_ESCAPE", {});
+     });
+   }
+ 
+   function restart() {
+     info("Restarting Responsive Mode");
+     mgr.once("on", function() {
+       let container = gBrowser.getBrowserContainer();
+       is(container.getAttribute("responsivemode"), "true", "In responsive mode.");
+ 
+       instance = gBrowser.selectedTab.__responsiveUI;
+ 
+-      testCustomPresetInList();
++      executeSoon(testCustomPresetInList);
+     });
+ 
+     // We're still in the loop of destroying the responsive mode.
+     // Let's wait next loop to start it.
+     executeSoon(function() {
+       synthesizeKeyFromKeyTag("key_responsiveUI");
+     });
+   }
+@@ -98,56 +100,59 @@ function test() {
+     let customPresetIndex = getPresetIndex("456x123 (Testing preset)");
+     ok(customPresetIndex >= 0, "is the previously added preset (idx = " + customPresetIndex + ") in the list of items");
+ 
+     instance.menulist.selectedIndex = customPresetIndex;
+ 
+     is(content.innerWidth, 456, "add preset, and selected in the list, dimension valid (width)");
+     is(content.innerHeight, 123, "add preset, and selected in the list, dimension valid (height)");
+ 
+-    testDeleteCustomPresets();
++    executeSoon(testDeleteCustomPresets);
+   }
+ 
+   function testDeleteCustomPresets() {
+     instance.removebutton.doCommand();
+ 
+     instance.menulist.selectedIndex = 2;
+     deletedPresetA = instance.menulist.selectedItem.getAttribute("label");
+     instance.removebutton.doCommand();
+ 
+     instance.menulist.selectedIndex = 2;
+     deletedPresetB = instance.menulist.selectedItem.getAttribute("label");
+     instance.removebutton.doCommand();
+ 
++    info("waiting for responsive mode to turn off");
++    mgr.once("off", () => executeSoon(restartAgain));
+     EventUtils.synthesizeKey("VK_ESCAPE", {});
+-    executeSoon(restartAgain);
+   }
+ 
+   function restartAgain() {
++    info("waiting for responsive mode to turn on");
++    mgr.once("on", () => {
++      instance = gBrowser.selectedTab.__responsiveUI;
++      executeSoon(testCustomPresetsNotInListAnymore);
++    });
++
+     synthesizeKeyFromKeyTag("key_responsiveUI");
+-    instance = gBrowser.selectedTab.__responsiveUI;
+-    executeSoon(testCustomPresetsNotInListAnymore);
+   }
+ 
+   function testCustomPresetsNotInListAnymore() {
+     let customPresetIndex = getPresetIndex(deletedPresetA);
+     is(customPresetIndex, -1, "deleted preset " + deletedPresetA + " is not in the list anymore");
+ 
+     customPresetIndex = getPresetIndex(deletedPresetB);
+     is(customPresetIndex, -1, "deleted preset " + deletedPresetB + " is not in the list anymore");
+ 
+     executeSoon(finishUp);
+   }
+ 
+   function finishUp() {
+     delete instance;
+     gBrowser.removeCurrentTab();
+ 
+-    Services.prompt = oldPrompt;
+-
+     finish();
+   }
+ 
+   function getPresetIndex(presetLabel) {
+     function testOnePreset(c) {
+       if (c == 0) {
+         return -1;
+       }
+@@ -161,31 +166,11 @@ function test() {
+       }
+     }
+     return testOnePreset(instance.menulist.firstChild.childNodes.length - 4);
+   }
+ 
+   function synthesizeKeyFromKeyTag(aKeyId) {
+     let key = document.getElementById(aKeyId);
+     isnot(key, null, "Successfully retrieved the <key> node");
+-
+-    let modifiersAttr = key.getAttribute("modifiers");
+-
+-    let name = null;
+-
+-    if (key.getAttribute("keycode"))
+-      name = key.getAttribute("keycode");
+-    else if (key.getAttribute("key"))
+-      name = key.getAttribute("key");
+-
+-    isnot(name, null, "Successfully retrieved keycode/key");
+-
+-    let modifiers = {
+-      shiftKey: modifiersAttr.match("shift"),
+-      ctrlKey: modifiersAttr.match("ctrl"),
+-      altKey: modifiersAttr.match("alt"),
+-      metaKey: modifiersAttr.match("meta"),
+-      accelKey: modifiersAttr.match("accel")
+-    }
+-
+-    EventUtils.synthesizeKey(name, modifiers);
++    executeSoon(() => key.doCommand());
+   }
+ }
