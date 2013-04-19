@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 286cf3d332816b0bd3d043b332e1f0815ada2878
+# Parent 1e16b3af2489340594279ec5e4335618c7689666
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1366299750 -10800
+# Date 1366367637 -10800
 
 Bug 855763 - [Responsive Mode] Fix for intermittent browser_responsiveuiaddcustompreset.js | Test timed out, | Found a tab after previous test timed out: data:text/html,foo, browser_Services.js | Services.prompt is an nsIPromptService; r=jwalker
 
 diff --git a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcustompreset.js b/browser/devtools/responsivedesign/test/browser_responsiveuiaddcustompreset.js
 --- a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcustompreset.js
 +++ b/browser/devtools/responsivedesign/test/browser_responsiveuiaddcustompreset.js
-@@ -8,46 +8,50 @@ function test() {
+@@ -8,30 +8,39 @@ function test() {
    waitForExplicitFinish();
  
    gBrowser.selectedTab = gBrowser.addTab();
@@ -19,6 +19,11 @@ diff --git a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcusto
  
 -  content.location = "data:text/html,foo";
 +  content.location = "data:text/html;charset=utf8,test custom presets in responsive mode";
++
++  // This test uses executeSoon() when responsive mode is initialized and when
++  // it is destroyed such that we get out of the init/destroy loops. If we try
++  // to init/destroy immediately, without waiting for the next loop, we get
++  // intermittent test failures.
  
    function startTest() {
      // Mocking prompt
@@ -44,24 +49,7 @@ diff --git a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcusto
    function onUIOpen() {
      // Is it open?
      let container = gBrowser.getBrowserContainer();
-     is(container.getAttribute("responsivemode"), "true", "In responsive mode.");
- 
-     instance = gBrowser.selectedTab.__responsiveUI;
-     ok(instance, "instance of the module is attached to the tab.");
- 
-     instance.transitionsEnabled = false;
- 
--    testAddCustomPreset();
-+    executeSoon(testAddCustomPreset);
-   }
- 
-   function testAddCustomPreset() {
-     // Tries to add a custom preset and cancel the prompt
-     let idx = instance.menulist.selectedIndex;
-     let presetCount = instance.presets.length;
- 
-     Services.prompt.value = "";
-@@ -62,34 +66,32 @@ function test() {
+@@ -62,16 +71,17 @@ function test() {
  
      // Adds the custom preset with "Testing preset"
      Services.prompt.value = "Testing preset";
@@ -70,52 +58,16 @@ diff --git a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcusto
  
      instance.menulist.selectedIndex = 1;
  
--    mgr.once("off", restart);
--
--    // We're still in the loop of initializing the responsive mode.
--    // Let's wait next loop to stop it.
--    executeSoon(function() {
-+    executeSoon(() => {
-+      info("waiting for responsive mode to turn off");
-+      mgr.once("off", restart);
++    info("waiting for responsive mode to turn off");
+     mgr.once("off", restart);
+ 
+     // We're still in the loop of initializing the responsive mode.
+     // Let's wait next loop to stop it.
+     executeSoon(function() {
        EventUtils.synthesizeKey("VK_ESCAPE", {});
      });
    }
- 
-   function restart() {
-     info("Restarting Responsive Mode");
-     mgr.once("on", function() {
-       let container = gBrowser.getBrowserContainer();
-       is(container.getAttribute("responsivemode"), "true", "In responsive mode.");
- 
-       instance = gBrowser.selectedTab.__responsiveUI;
- 
--      testCustomPresetInList();
-+      executeSoon(testCustomPresetInList);
-     });
- 
-     // We're still in the loop of destroying the responsive mode.
-     // Let's wait next loop to start it.
-     executeSoon(function() {
-       synthesizeKeyFromKeyTag("key_responsiveUI");
-     });
-   }
-@@ -98,56 +100,59 @@ function test() {
-     let customPresetIndex = getPresetIndex("456x123 (Testing preset)");
-     ok(customPresetIndex >= 0, "is the previously added preset (idx = " + customPresetIndex + ") in the list of items");
- 
-     instance.menulist.selectedIndex = customPresetIndex;
- 
-     is(content.innerWidth, 456, "add preset, and selected in the list, dimension valid (width)");
-     is(content.innerHeight, 123, "add preset, and selected in the list, dimension valid (height)");
- 
--    testDeleteCustomPresets();
-+    executeSoon(testDeleteCustomPresets);
-   }
- 
-   function testDeleteCustomPresets() {
-     instance.removebutton.doCommand();
- 
+@@ -112,42 +122,50 @@ function test() {
      instance.menulist.selectedIndex = 2;
      deletedPresetA = instance.menulist.selectedItem.getAttribute("label");
      instance.removebutton.doCommand();
@@ -124,22 +76,29 @@ diff --git a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcusto
      deletedPresetB = instance.menulist.selectedItem.getAttribute("label");
      instance.removebutton.doCommand();
  
-+    info("waiting for responsive mode to turn off");
-+    mgr.once("off", () => executeSoon(restartAgain));
-     EventUtils.synthesizeKey("VK_ESCAPE", {});
+-    EventUtils.synthesizeKey("VK_ESCAPE", {});
 -    executeSoon(restartAgain);
++    info("waiting for responsive mode to turn off");
++    mgr.once("off", restartAgain);
++
++    // We're still in the loop of initializing the responsive mode.
++    // Let's wait next loop to stop it.
++    executeSoon(() => EventUtils.synthesizeKey("VK_ESCAPE", {}));
    }
  
    function restartAgain() {
+-    synthesizeKeyFromKeyTag("key_responsiveUI");
+-    instance = gBrowser.selectedTab.__responsiveUI;
+-    executeSoon(testCustomPresetsNotInListAnymore);
 +    info("waiting for responsive mode to turn on");
 +    mgr.once("on", () => {
 +      instance = gBrowser.selectedTab.__responsiveUI;
-+      executeSoon(testCustomPresetsNotInListAnymore);
++      testCustomPresetsNotInListAnymore();
 +    });
 +
-     synthesizeKeyFromKeyTag("key_responsiveUI");
--    instance = gBrowser.selectedTab.__responsiveUI;
--    executeSoon(testCustomPresetsNotInListAnymore);
++    // We're still in the loop of destroying the responsive mode.
++    // Let's wait next loop to start it.
++    executeSoon(() => synthesizeKeyFromKeyTag("key_responsiveUI"));
    }
  
    function testCustomPresetsNotInListAnymore() {
@@ -166,8 +125,7 @@ diff --git a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcusto
        if (c == 0) {
          return -1;
        }
-@@ -161,31 +166,11 @@ function test() {
-       }
+@@ -162,30 +180,20 @@ function test() {
      }
      return testOnePreset(instance.menulist.firstChild.childNodes.length - 4);
    }
@@ -175,18 +133,18 @@ diff --git a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcusto
    function synthesizeKeyFromKeyTag(aKeyId) {
      let key = document.getElementById(aKeyId);
      isnot(key, null, "Successfully retrieved the <key> node");
--
+ 
 -    let modifiersAttr = key.getAttribute("modifiers");
 -
--    let name = null;
--
--    if (key.getAttribute("keycode"))
--      name = key.getAttribute("keycode");
--    else if (key.getAttribute("key"))
--      name = key.getAttribute("key");
--
--    isnot(name, null, "Successfully retrieved keycode/key");
--
+     let name = null;
+ 
+     if (key.getAttribute("keycode"))
+       name = key.getAttribute("keycode");
+     else if (key.getAttribute("key"))
+       name = key.getAttribute("key");
+ 
+     isnot(name, null, "Successfully retrieved keycode/key");
+ 
 -    let modifiers = {
 -      shiftKey: modifiersAttr.match("shift"),
 -      ctrlKey: modifiersAttr.match("ctrl"),
@@ -196,6 +154,6 @@ diff --git a/browser/devtools/responsivedesign/test/browser_responsiveuiaddcusto
 -    }
 -
 -    EventUtils.synthesizeKey(name, modifiers);
-+    executeSoon(() => key.doCommand());
++    key.doCommand();
    }
  }
