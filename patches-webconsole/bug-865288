@@ -1,0 +1,173 @@
+# HG changeset patch
+# Parent 0653265b236bb95760f45665392953d27ca052b2
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1367436800 -10800
+
+Bug 865288 - console.log with different object logged from same line number are grouped together; r=past
+
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -119,16 +119,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_eval_in_debugger_stackframe.js \
+ 	browser_console_variables_view.js \
+ 	browser_console_variables_view_while_debugging.js \
+ 	browser_console.js \
+ 	browser_longstring_hang.js \
+ 	browser_console_consolejsm_output.js \
+ 	browser_webconsole_bug_837351_securityerrors.js \
+ 	browser_bug_865871_variables_view_close_on_esc_key.js \
++	browser_bug_865288_repeat_different_objects.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+ 	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js b/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js
+@@ -0,0 +1,117 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Tests that makes sure messages are not considered repeated when console.log()
++// is invoked with different objects, see bug 865288.
++
++// TODO: this is not done. it's just a copy-paste of a different test.
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-repeated-messages.html";
++
++function test() {
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function consoleOpened(hud) {
++  // Check that css warnings are not coalesced if they come from different lines.
++  info("waiting for 2 css warnings");
++
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      name: "two css warnings",
++      category: CATEGORY_CSS,
++      count: 2,
++      repeats: 1,
++    }],
++  }).then(testCSSRepeats.bind(null, hud));
++}
++
++function testCSSRepeats(hud) {
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++
++    info("wait for repeats after page reload");
++
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        name: "two css warnings, repeated twice",
++        category: CATEGORY_CSS,
++        repeats: 2,
++        count: 2,
++      }],
++    }).then(testCSSRepeatsAfterReload.bind(null, hud));
++  }, true);
++  content.location.reload();
++}
++
++function testCSSRepeatsAfterReload(hud) {
++  hud.jsterm.clearOutput(true);
++  content.wrappedJSObject.testConsole();
++
++  info("wait for repeats with the console API");
++
++  waitForMessages({
++    webconsole: hud,
++    messages: [
++      {
++        name: "console.log 'foo repeat' repeated twice",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++        repeats: 2,
++      },
++      {
++        name: "console.log 'foo repeat' repeated once",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++        repeats: 1,
++      },
++      {
++        name: "console.error 'foo repeat' repeated once",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_ERROR,
++        repeats: 1,
++      },
++    ],
++  }).then(testConsoleRepeats.bind(null, hud));
++}
++
++function testConsoleRepeats(hud) {
++  hud.jsterm.clearOutput(true);
++  hud.jsterm.execute("undefined");
++  content.console.log("undefined");
++
++  info("make sure console API messages are not coalesced with jsterm output");
++
++  waitForMessages({
++    webconsole: hud,
++    messages: [
++      {
++        name: "'undefined' jsterm input message",
++        text: "undefined",
++        category: CATEGORY_INPUT,
++        repeats: 1,
++      },
++      {
++        name: "'undefined' jsterm output message",
++        text: "undefined",
++        category: CATEGORY_OUTPUT,
++        repeats: 1,
++      },
++      {
++        name: "'undefined' console.log message",
++        text: "undefined",
++        category: CATEGORY_WEBDEV,
++        repeats: 1,
++      },
++    ],
++  }).then(finishTest);
++}
++
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -1092,16 +1092,19 @@ WebConsoleFrame.prototype = {
+     }
+ 
+     let node = this.createMessageNode(CATEGORY_WEBDEV, LEVELS[level], body,
+                                       sourceURL, sourceLine, clipboardText,
+                                       level, aMessage.timeStamp);
+ 
+     if (objectActors.size > 0) {
+       node._objectActors = objectActors;
++
++      let repeatNode = node.querySelector(".webconsole-msg-repeat");
++      repeatNode._uid += [...objectActors].join("-");
+     }
+ 
+     // Make the node bring up the variables view, to allow the user to inspect
+     // the stack trace.
+     if (level == "trace") {
+       node._stacktrace = aMessage.stacktrace;
+ 
+       this.makeOutputMessageLink(node, () =>
