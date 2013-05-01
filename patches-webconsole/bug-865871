@@ -1,0 +1,377 @@
+# HG changeset patch
+# Parent 07ce0c1d04188854e0007c46a08e1bf4bfec7732
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1367434338 -10800
+
+Bug 865871 - Object inspector can't be closed; r=past; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -117,30 +117,31 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_repeated_messages_accuracy.js \
+ 	browser_webconsole_bug_821877_csp_errors.js \
+ 	browser_eval_in_debugger_stackframe.js \
+ 	browser_console_variables_view.js \
+ 	browser_console_variables_view_while_debugging.js \
+ 	browser_console.js \
+ 	browser_longstring_hang.js \
+ 	browser_console_consolejsm_output.js \
+-  browser_webconsole_bug_837351_securityerrors.js \
++	browser_webconsole_bug_837351_securityerrors.js \
++	browser_bug_865871_variables_view_close_on_esc_key.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+-        browser_webconsole_bug_804845_ctrl_key_nav.js \
++	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+ 
+ ifeq ($(OS_ARCH),WINNT)
+ MOCHITEST_BROWSER_FILES += \
+-		browser_webconsole_bug_623749_ctrl_a_select_all_winnt.js \
+-		$(NULL)
++	browser_webconsole_bug_623749_ctrl_a_select_all_winnt.js \
++	$(NULL)
+ endif
+ 
+ MOCHITEST_BROWSER_FILES += \
+ 	test-console.html \
+ 	test-network.html \
+ 	test-network-request.html \
+ 	test-mutation.html \
+ 	testscript.js \
+@@ -220,12 +221,12 @@ MOCHITEST_BROWSER_FILES += \
+ 	test-repeated-messages.html \
+ 	test-bug-766001-console-log.js \
+ 	test-bug-766001-js-console-links.html \
+ 	test-bug-766001-js-errors.js \
+ 	test-bug-821877-csperrors.html \
+ 	test-bug-821877-csperrors.html^headers^ \
+ 	test-eval-in-stackframe.html \
+ 	test-bug-859170-longstring-hang.html \
+-  test-bug-837351-security-errors.html \
++	test-bug-837351-security-errors.html \
+ 	$(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js b/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
+@@ -0,0 +1,98 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Check that the variables view sidebar can be closed by pressing Escape in the
++// web console.
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-eval-in-stackframe.html";
++
++let gWebConsole, gJSTerm, gVariablesView;
++
++function test()
++{
++  registerCleanupFunction(() => {
++    gWebConsole = gJSTerm = gVariablesView = null;
++  });
++
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function consoleOpened(hud)
++{
++  gWebConsole = hud;
++  gJSTerm = hud.jsterm;
++  gJSTerm.execute("fooObj", onExecuteFooObj);
++}
++
++function onExecuteFooObj()
++{
++  let msg = gWebConsole.outputNode.querySelector(".webconsole-msg-output");
++  ok(msg, "output message found");
++  isnot(msg.textContent.indexOf("[object Object]"), -1, "message text check");
++
++  gJSTerm.once("variablesview-fetched", onFooObjFetch);
++  EventUtils.synthesizeMouse(msg, 2, 2, {}, gWebConsole.iframeWindow)
++}
++
++function onFooObjFetch(aEvent, aVar)
++{
++  gVariablesView = aVar._variablesView;
++  ok(gVariablesView, "variables view object");
++
++  findVariableViewProperties(aVar, [
++    { name: "testProp", value: "testValue" },
++  ], { webconsole: gWebConsole }).then(onTestPropFound);
++}
++
++function onTestPropFound(aResults)
++{
++  let prop = aResults[0].matchedProp;
++  ok(prop, "matched the |testProp| property in the variables view");
++
++  is(content.wrappedJSObject.fooObj.testProp, aResults[0].value,
++     "|fooObj.testProp| value is correct");
++
++  gVariablesView.window.focus();
++  gJSTerm.once("sidebar-closed", onSidebarClosed);
++  EventUtils.synthesizeKey("VK_ESCAPE", {}, gVariablesView.window);
++}
++
++function onSidebarClosed()
++{
++  gJSTerm.clearOutput();
++  gJSTerm.execute("window", onExecuteWindow);
++}
++
++function onExecuteWindow()
++{
++  let msg = gWebConsole.outputNode.querySelector(".webconsole-msg-output");
++  ok(msg, "output message found");
++  isnot(msg.textContent.indexOf("[object Window]"), -1, "message text check");
++
++  gJSTerm.once("variablesview-fetched", onWindowFetch);
++  EventUtils.synthesizeMouse(msg, 2, 2, {}, gWebConsole.iframeWindow)
++}
++
++function onWindowFetch(aEvent, aVar)
++{
++  gVariablesView = aVar._variablesView;
++  ok(gVariablesView, "variables view object");
++
++  findVariableViewProperties(aVar, [
++    { name: "foo", value: "globalFooBug783499" },
++  ], { webconsole: gWebConsole }).then(onFooFound);
++}
++
++function onFooFound(aResults)
++{
++  gVariablesView.window.focus();
++  gJSTerm.once("sidebar-closed", finishTest);
++  EventUtils.synthesizeKey("VK_ESCAPE", {}, gVariablesView.window);
++}
++
+diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devtools/webconsole/test/browser_console.js
+--- a/browser/devtools/webconsole/test/browser_console.js
++++ b/browser/devtools/webconsole/test/browser_console.js
+@@ -1,16 +1,16 @@
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+ // Test the basic features of the Browser Console, bug 587757.
+ 
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-eval-in-stackframe.html";
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html?" + Date.now();
+ 
+ function test()
+ {
+   HUDConsoleUI.toggleBrowserConsole().then(consoleOpened);
+ }
+ 
+ function consoleOpened(hud)
+ {
+diff --git a/browser/devtools/webconsole/test/browser_console_variables_view.js b/browser/devtools/webconsole/test/browser_console_variables_view.js
+--- a/browser/devtools/webconsole/test/browser_console_variables_view.js
++++ b/browser/devtools/webconsole/test/browser_console_variables_view.js
+@@ -1,15 +1,14 @@
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+-// Test that makes sure web console eval happens in the user-selected stackframe
+-// from the js debugger.
++// Check that variables view works as expected in the web console.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-eval-in-stackframe.html";
+ 
+ let gWebConsole, gJSTerm, gVariablesView;
+ 
+ function test()
+ {
+   addTab(TEST_URI);
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -2643,16 +2643,17 @@ function JSTerm(aWebConsoleFrame)
+   this.historyIndex = 0;
+   this.historyPlaceHolder = 0;  // this.history.length;
+   this._objectActorsInVariablesViews = new Map();
+ 
+   this._keyPress = this.keyPress.bind(this);
+   this._inputEventHandler = this.inputEventHandler.bind(this);
+   this._fetchVarProperties = this._fetchVarProperties.bind(this);
+   this._fetchVarLongString = this._fetchVarLongString.bind(this);
++  this._onKeypressInVariablesView = this._onKeypressInVariablesView.bind(this);
+ 
+   EventEmitter.decorate(this);
+ }
+ 
+ JSTerm.prototype = {
+   SELECTED_FRAME: -1,
+ 
+   /**
+@@ -3018,20 +3019,22 @@ JSTerm.prototype = {
+       if (!view || aOptions.targetElement) {
+         let viewOptions = {
+           container: container,
+           hideFilterInput: aOptions.hideFilterInput,
+         };
+         view = this._createVariablesView(viewOptions);
+         if (!aOptions.targetElement) {
+           this._variablesView = view;
++          aWindow.addEventListener("keypress", this._onKeypressInVariablesView);
+         }
+       }
+       aOptions.view = view;
+       this._updateVariablesView(aOptions);
++      this.sidebar.show();
+       this.emit("variablesview-open", view, aOptions);
+       return view;
+     };
+ 
+     let promise;
+     if (aOptions.targetElement) {
+       let deferred = Promise.defer();
+       promise = deferred.promise;
+@@ -3043,36 +3046,36 @@ JSTerm.prototype = {
+         deferred.resolve(iframe.contentWindow);
+       }, true);
+ 
+       iframe.flex = 1;
+       iframe.setAttribute("src", VARIABLES_VIEW_URL);
+       aOptions.targetElement.appendChild(iframe);
+     }
+     else {
+-      this._createSidebar();
++      if (!this.sidebar) {
++        this._createSidebar();
++      }
+       promise = this._addVariablesViewSidebarTab();
+     }
+ 
+     return promise.then(onContainerReady);
+   },
+ 
+   /**
+    * Create the Web Console sidebar.
+    *
+    * @see devtools/framework/sidebar.js
+    * @private
+    */
+   _createSidebar: function JST__createSidebar()
+   {
+-    if (!this.sidebar) {
+-      let tabbox = this.hud.document.querySelector("#webconsole-sidebar");
+-      let ToolSidebar = devtools.require("devtools/framework/sidebar").ToolSidebar;
+-      this.sidebar = new ToolSidebar(tabbox, this);
+-    }
++    let tabbox = this.hud.document.querySelector("#webconsole-sidebar");
++    let ToolSidebar = devtools.require("devtools/framework/sidebar").ToolSidebar;
++    this.sidebar = new ToolSidebar(tabbox, this);
+     this.sidebar.show();
+   },
+ 
+   /**
+    * Add the variables view tab to the sidebar.
+    *
+    * @private
+    * @return object
+@@ -3101,16 +3104,36 @@ JSTerm.prototype = {
+       this.sidebar.once("variablesview-ready", onTabReady);
+       this.sidebar.addTab("variablesview", VARIABLES_VIEW_URL, true);
+     }
+ 
+     return deferred.promise;
+   },
+ 
+   /**
++   * The keypress event handler for the Variables View sidebar. Currently this
++   * is used for removing the sidebar when Escape is pressed.
++   *
++   * @private
++   * @param nsIDOMEvent aEvent
++   *        The keypress DOM event object.
++   */
++  _onKeypressInVariablesView: function JST__onKeypressInVariablesView(aEvent)
++  {
++    let tag = aEvent.target.nodeName;
++    if (aEvent.keyCode != Ci.nsIDOMKeyEvent.DOM_VK_ESCAPE || aEvent.shiftKey ||
++        aEvent.altKey || aEvent.ctrlKey || aEvent.metaKey ||
++        ["input", "textarea", "select", "textbox"].indexOf(tag) > -1) {
++        return;
++    }
++
++    this._sidebarDestroy();
++  },
++
++  /**
+    * Create a variables view instance.
+    *
+    * @private
+    * @param object aOptions
+    *        Options for the new Variables View instance:
+    *        - container: the DOM element where the variables view is inserted.
+    *        - hideFilterInput: boolean, if true the variables filter input is
+    *        hidden.
+@@ -4166,34 +4189,46 @@ JSTerm.prototype = {
+   {
+     this.openVariablesView({
+       label: VariablesView.getString(aResponse.result),
+       objectActor: aResponse.result,
+     });
+   },
+ 
+   /**
+-   * Destroy the JSTerm object. Call this method to avoid memory leaks.
++   * Destroy the sidebar.
++   * @private
+    */
+-  destroy: function JST_destroy()
++  _sidebarDestroy: function JST__sidebarDestroy()
+   {
+     if (this._variablesView) {
+       let actors = this._objectActorsInVariablesViews.get(this._variablesView);
+       for (let actor of actors) {
+         this.hud._releaseObject(actor);
+       }
+       actors.clear();
+       this._variablesView = null;
+     }
+ 
+     if (this.sidebar) {
++      this.sidebar.hide();
+       this.sidebar.destroy();
+       this.sidebar = null;
+     }
+ 
++    this.emit("sidebar-closed");
++  },
++
++  /**
++   * Destroy the JSTerm object. Call this method to avoid memory leaks.
++   */
++  destroy: function JST_destroy()
++  {
++    this._sidebarDestroy();
++
+     this.clearCompletion();
+     this.clearOutput();
+ 
+     this.autocompletePopup.destroy();
+     this.autocompletePopup = null;
+ 
+     let popup = this.hud.owner.chromeWindow.document
+                 .getElementById("webConsole_autocompletePopup");
