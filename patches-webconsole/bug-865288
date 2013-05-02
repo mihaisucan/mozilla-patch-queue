@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 0653265b236bb95760f45665392953d27ca052b2
+# Parent 4d4f26313ab20bc651b90be79c27b7526afee71a
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1367436800 -10800
+# Date 1367508105 -10800
 
-Bug 865288 - console.log with different object logged from same line number are grouped together; r=past
+Bug 865288 - Do not count console.log messages with different objects as repeats; r=past; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
 
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
@@ -30,7 +30,7 @@ diff --git a/browser/devtools/webconsole/test/browser_bug_865288_repeat_differen
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,82 @@
 +/*
 + * Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/
@@ -39,9 +39,9 @@ new file mode 100644
 +// Tests that makes sure messages are not considered repeated when console.log()
 +// is invoked with different objects, see bug 865288.
 +
-+// TODO: this is not done. it's just a copy-paste of a different test.
-+
 +const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-repeated-messages.html";
++
++let hud = null;
 +
 +function test() {
 +  addTab(TEST_URI);
@@ -51,103 +51,152 @@ new file mode 100644
 +  }, true);
 +}
 +
-+function consoleOpened(hud) {
++function consoleOpened(aHud) {
++  hud = aHud;
++
 +  // Check that css warnings are not coalesced if they come from different lines.
-+  info("waiting for 2 css warnings");
++  info("waiting for 3 console.log objects");
++
++  hud.jsterm.clearOutput(true);
++  content.wrappedJSObject.testConsoleObjects();
 +
 +  waitForMessages({
 +    webconsole: hud,
 +    messages: [{
-+      name: "two css warnings",
-+      category: CATEGORY_CSS,
-+      count: 2,
++      name: "3 console.log messages",
++      text: "abba",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++      count: 3,
 +      repeats: 1,
++      objects: true,
 +    }],
-+  }).then(testCSSRepeats.bind(null, hud));
++  }).then(checkMessages);
 +}
 +
-+function testCSSRepeats(hud) {
-+  browser.addEventListener("load", function onLoad() {
-+    browser.removeEventListener("load", onLoad, true);
++function checkMessages(aResults)
++{
++  let result = aResults[0];
++  let msgs = [...result.matched];
++  is(msgs.length, 3, "3 message elements");
++  let m = -1;
 +
-+    info("wait for repeats after page reload");
++  function nextMessage()
++  {
++    let msg = msgs[++m];
++    if (msg) {
++      ok(msg, "message element #" + m);
 +
-+    waitForMessages({
-+      webconsole: hud,
-+      messages: [{
-+        name: "two css warnings, repeated twice",
-+        category: CATEGORY_CSS,
-+        repeats: 2,
-+        count: 2,
-+      }],
-+    }).then(testCSSRepeatsAfterReload.bind(null, hud));
-+  }, true);
-+  content.location.reload();
++      let clickable = msg.querySelector(".hud-clickable");
++      ok(clickable, "clickable object #" + m);
++
++      scrollOutputToNode(msg);
++      clickObject(clickable);
++    }
++    else {
++      finishTest();
++    }
++  }
++
++  nextMessage();
++
++  function clickObject(aObject)
++  {
++    hud.jsterm.once("variablesview-fetched", onObjectFetch);
++    EventUtils.synthesizeMouse(aObject, 2, 2, {}, hud.iframeWindow);
++  }
++
++  function onObjectFetch(aEvent, aVar)
++  {
++    findVariableViewProperties(aVar, [
++      { name: "id", value: "abba" + m },
++    ], { webconsole: hud }).then(nextMessage);
++  }
 +}
-+
-+function testCSSRepeatsAfterReload(hud) {
-+  hud.jsterm.clearOutput(true);
-+  content.wrappedJSObject.testConsole();
-+
-+  info("wait for repeats with the console API");
-+
-+  waitForMessages({
-+    webconsole: hud,
-+    messages: [
-+      {
-+        name: "console.log 'foo repeat' repeated twice",
-+        category: CATEGORY_WEBDEV,
-+        severity: SEVERITY_LOG,
-+        repeats: 2,
-+      },
-+      {
-+        name: "console.log 'foo repeat' repeated once",
-+        category: CATEGORY_WEBDEV,
-+        severity: SEVERITY_LOG,
-+        repeats: 1,
-+      },
-+      {
-+        name: "console.error 'foo repeat' repeated once",
-+        category: CATEGORY_WEBDEV,
-+        severity: SEVERITY_ERROR,
-+        repeats: 1,
-+      },
-+    ],
-+  }).then(testConsoleRepeats.bind(null, hud));
-+}
-+
-+function testConsoleRepeats(hud) {
-+  hud.jsterm.clearOutput(true);
-+  hud.jsterm.execute("undefined");
-+  content.console.log("undefined");
-+
-+  info("make sure console API messages are not coalesced with jsterm output");
-+
-+  waitForMessages({
-+    webconsole: hud,
-+    messages: [
-+      {
-+        name: "'undefined' jsterm input message",
-+        text: "undefined",
-+        category: CATEGORY_INPUT,
-+        repeats: 1,
-+      },
-+      {
-+        name: "'undefined' jsterm output message",
-+        text: "undefined",
-+        category: CATEGORY_OUTPUT,
-+        repeats: 1,
-+      },
-+      {
-+        name: "'undefined' console.log message",
-+        text: "undefined",
-+        category: CATEGORY_WEBDEV,
-+        repeats: 1,
-+      },
-+    ],
-+  }).then(finishTest);
-+}
-+
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -864,26 +864,51 @@ function getMessageElementText(aElement)
+  *
+  * @param object aOptions
+  *        Options for what you want to wait for:
+  *        - webconsole: the webconsole instance you work with.
+  *        - messages: an array of objects that tells which messages to wait for.
+  *        Properties:
+  *            - text: string or RegExp to match the textContent of each new
+  *            message.
++ *            - noText: string or RegExp that must not match in the message
++ *            textContent.
+  *            - repeats: the number of message repeats, as displayed by the Web
+  *            Console.
+  *            - category: match message category. See CATEGORY_* constants at
+  *            the top of this file.
+  *            - severity: match message severity. See SEVERITY_* constants at
+  *            the top of this file.
+  *            - count: how many unique web console messages should be matched by
+  *            this rule.
++ *            - consoleTrace: boolean, set to |true| to match a console.trace()
++ *            message. Optionally this can be an object of the form
++ *            { file, fn, line } that can match the specified file, function
++ *            and/or line number in the trace message.
++ *            - consoleTime: string that matches a console.time() timer name.
++ *            Provide this if you want to match a console.time() message.
++ *            - consoleTimeEnd: same as above, but for console.timeEnd().
++ *            - consoleDir: boolean, set to |true| to match a console.dir()
++ *            message.
++ *            - longString: boolean, set to |true} to match long strings in the
++ *            message.
++ *            - objects: boolean, set to |true| if you expect inspectable
++ *            objects in the message.
+  * @return object
+  *         A Promise object is returned once the messages you want are found.
++ *         The promise is resolved with the array of rule objects you give in
++ *         the |messages| property. Each objects is the same as provided, with
++ *         additional properties:
++ *         - matched: a Set of web console messages that matched the rule.
++ *         - clickableElements: a list of inspectable objects. This is available
++ *         if any of the following properties are present in the rule:
++ *         |consoleTrace| or |objects|.
++ *         - longStrings: a list of long string ellipsis elements you can click
++ *         in the message element, to expand a long string. This is available
++ *         only if |longString| is present in the matching rule.
+  */
+ function waitForMessages(aOptions)
+ {
+   gPendingOutputTest++;
+   let webconsole = aOptions.webconsole;
+   let rules = WebConsoleUtils.cloneObject(aOptions.messages, true);
+   let rulesMatched = 0;
+   let listenerAdded = false;
+diff --git a/browser/devtools/webconsole/test/test-repeated-messages.html b/browser/devtools/webconsole/test/test-repeated-messages.html
+--- a/browser/devtools/webconsole/test/test-repeated-messages.html
++++ b/browser/devtools/webconsole/test/test-repeated-messages.html
+@@ -1,18 +1,24 @@
+ <!DOCTYPE HTML>
+ <html dir="ltr" xml:lang="en-US" lang="en-US">
+   <head>
+     <meta charset="utf8">
+-    <title>Test for bugs 720180 and 800510</title>
++    <title>Test for bugs 720180, 800510 and 865288</title>
+     <script>
+       function testConsole() {
+         console.log("foo repeat"); console.log("foo repeat");
+         console.log("foo repeat"); console.error("foo repeat");
+       }
++      function testConsoleObjects() {
++        for (var i = 0; i < 3; i++) {
++          var o = { id: "abba" + i };
++          console.log("abba", o);
++        }
++      }
+     </script>
+     <style>
+       body {
+         background-image: foobarz;
+       }
+       p {
+         background-image: foobarz;
+       }
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
