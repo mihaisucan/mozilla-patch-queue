@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 07ce0c1d04188854e0007c46a08e1bf4bfec7732
+# Parent 4a496e6b99af3f6eae4025dda2748337d3b21585
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1367434338 -10800
+# Date 1367495591 -10800
 
-Bug 865871 - Object inspector can't be closed; r=past; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+Bug 865871 - Allow object inspector to be closed by pressing Escape; r=past
 
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
@@ -205,7 +205,54 @@ diff --git a/browser/devtools/webconsole/test/browser_console_variables_view.js 
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -2643,16 +2643,17 @@ function JSTerm(aWebConsoleFrame)
+@@ -1100,17 +1100,20 @@ WebConsoleFrame.prototype = {
+     }
+ 
+     // Make the node bring up the variables view, to allow the user to inspect
+     // the stack trace.
+     if (level == "trace") {
+       node._stacktrace = aMessage.stacktrace;
+ 
+       this.makeOutputMessageLink(node, () =>
+-        this.jsterm.openVariablesView({ rawObject: node._stacktrace }));
++        this.jsterm.openVariablesView({
++          rawObject: node._stacktrace,
++          autofocus: true,
++        }));
+     }
+ 
+     return node;
+   },
+ 
+   /**
+    * Handle ConsoleAPICall objects received from the server. This method outputs
+    * the window.console API call.
+@@ -1131,21 +1134,21 @@ WebConsoleFrame.prototype = {
+    * @param nsIDOMNode aAnchor
+    *        The object inspector anchor element. This is the clickable element
+    *        in the console.log message we display.
+    * @param object aObjectActor
+    *        The object actor grip.
+    */
+   _consoleLogClick: function WCF__consoleLogClick(aAnchor, aObjectActor)
+   {
+-    let options = {
++    this.jsterm.openVariablesView({
+       label: aAnchor.textContent,
+       objectActor: aObjectActor,
+-    };
+-    this.jsterm.openVariablesView(options);
++      autofocus: true,
++    });
+   },
+ 
+   /**
+    * Reports an error in the page source, either JavaScript or CSS.
+    *
+    * @param nsIScriptError aScriptError
+    *        The error message to report.
+    * @return nsIDOMElement|undefined
+@@ -2643,16 +2646,17 @@ function JSTerm(aWebConsoleFrame)
    this.historyIndex = 0;
    this.historyPlaceHolder = 0;  // this.history.length;
    this._objectActorsInVariablesViews = new Map();
@@ -223,7 +270,26 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    SELECTED_FRAME: -1,
  
    /**
-@@ -3018,20 +3019,22 @@ JSTerm.prototype = {
+@@ -3001,16 +3005,18 @@ JSTerm.prototype = {
+    *        - rawObject: the raw object you want to show in the variables view.
+    *        - label: label to display in the variables view for inspected
+    *        object.
+    *        - hideFilterInput: optional boolean, |true| if you want to hide the
+    *        variables view filter input.
+    *        - targetElement: optional nsIDOMElement to append the variables view
+    *        to. An iframe element is used as a container for the view. If this
+    *        option is not used, then the variables view opens in the sidebar.
++   *        - autofocus: optional boolean, |true| if you want to give focus to
++   *        the variables view window after open, |false| otherwise.
+    * @return object
+    *         A Promise object that is resolved when the variables view has
+    *         opened. The new variables view instance is given to the callbacks.
+    */
+   openVariablesView: function JST_openVariablesView(aOptions)
+   {
+     let onContainerReady = (aWindow) => {
+       let container = aWindow.document.querySelector("#variables");
+@@ -3018,20 +3024,25 @@ JSTerm.prototype = {
        if (!view || aOptions.targetElement) {
          let viewOptions = {
            container: container,
@@ -237,7 +303,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        }
        aOptions.view = view;
        this._updateVariablesView(aOptions);
++
 +      this.sidebar.show();
++      aOptions.autofocus && aWindow.focus();
++
        this.emit("variablesview-open", view, aOptions);
        return view;
      };
@@ -246,7 +315,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (aOptions.targetElement) {
        let deferred = Promise.defer();
        promise = deferred.promise;
-@@ -3043,36 +3046,36 @@ JSTerm.prototype = {
+@@ -3043,36 +3054,36 @@ JSTerm.prototype = {
          deferred.resolve(iframe.contentWindow);
        }, true);
  
@@ -289,7 +358,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @return object
-@@ -3101,16 +3104,36 @@ JSTerm.prototype = {
+@@ -3101,16 +3112,37 @@ JSTerm.prototype = {
        this.sidebar.once("variablesview-ready", onTabReady);
        this.sidebar.addTab("variablesview", VARIABLES_VIEW_URL, true);
      }
@@ -315,6 +384,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    }
 +
 +    this._sidebarDestroy();
++    this.inputNode.focus();
 +  },
 +
 +  /**
@@ -326,11 +396,36 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *        - container: the DOM element where the variables view is inserted.
     *        - hideFilterInput: boolean, if true the variables filter input is
     *        hidden.
-@@ -4166,34 +4189,46 @@ JSTerm.prototype = {
+@@ -3757,16 +3789,19 @@ JSTerm.prototype = {
+     let inputUpdated = false;
+ 
+     switch(aEvent.keyCode) {
+       case Ci.nsIDOMKeyEvent.DOM_VK_ESCAPE:
+         if (this.autocompletePopup.isOpen) {
+           this.clearCompletion();
+           aEvent.preventDefault();
+         }
++        else if (this.sidebar) {
++          this._sidebarDestroy();
++        }
+         break;
+ 
+       case Ci.nsIDOMKeyEvent.DOM_VK_RETURN:
+         if (this.autocompletePopup.isOpen && this.autocompletePopup.selectedIndex > -1) {
+           this.acceptProposedCompletion();
+         }
+         else {
+           this.execute();
+@@ -4162,38 +4197,51 @@ JSTerm.prototype = {
+    * @param object aResponse
+    *        The JavaScript evaluation response received from the server.
+    */
+   _evalOutputClick: function JST__evalOutputClick(aResponse)
    {
      this.openVariablesView({
        label: VariablesView.getString(aResponse.result),
        objectActor: aResponse.result,
++      autofocus: true,
      });
    },
  
