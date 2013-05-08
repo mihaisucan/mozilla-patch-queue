@@ -1,0 +1,156 @@
+# HG changeset patch
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1368045054 -10800
+# Node ID 7fea107a1df361cd1769a122fd44b41e5e574b06
+# Parent 8f4b12ba859e20ca41ca8896e2696b2862028ae7
+Bug 851695 - Add a |console| object to every JSM global; try: -b do -p linux,linux64,macosx64,win32,win64 -u all -t none
+
+diff --git a/browser/devtools/styleeditor/StyleEditorUtil.jsm b/browser/devtools/styleeditor/StyleEditorUtil.jsm
+--- a/browser/devtools/styleeditor/StyleEditorUtil.jsm
++++ b/browser/devtools/styleeditor/StyleEditorUtil.jsm
+@@ -17,17 +17,16 @@ this.EXPORTED_SYMBOLS = [
+ const Cc = Components.classes;
+ const Ci = Components.interfaces;
+ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/Services.jsm");
+ 
+ const PROPERTIES_URL = "chrome://browser/locale/devtools/styleeditor.properties";
+ 
+-const console = Services.console;
+ const gStringBundle = Services.strings.createBundle(PROPERTIES_URL);
+ 
+ 
+ /**
+  * Returns a localized string with the given key name from the string bundle.
+  *
+  * @param aName
+  * @param ...rest
+@@ -105,21 +104,20 @@ function forEach(aObject, aCallback)
+   }
+ }
+ 
+ /**
+  * Log a message to the console.
+  *
+  * @param ...rest
+  *        One or multiple arguments to log.
+- *        If multiple arguments are given, they will be joined by " " in the log.
+  */
+ this.log = function log()
+ {
+-  console.logStringMessage(Array.prototype.slice.call(arguments).join(" "));
++  console.log.apply(console, arguments);
+ }
+ 
+ /**
+  * Wire up element(s) matching selector with attributes, event listeners, etc.
+  *
+  * @param DOMElement aRoot
+  *        The element to use for querySelectorAll.
+  *        Can be null if aSelector is a DOMElement.
+diff --git a/js/xpconnect/loader/mozJSComponentLoader.cpp b/js/xpconnect/loader/mozJSComponentLoader.cpp
+--- a/js/xpconnect/loader/mozJSComponentLoader.cpp
++++ b/js/xpconnect/loader/mozJSComponentLoader.cpp
+@@ -88,16 +88,17 @@ static JSClass kFakeBackstagePassJSClass
+     JS_ResolveStub,
+     JS_ConvertStub
+ };
+ 
+ static const char kJSRuntimeServiceContractID[] = "@mozilla.org/js/xpc/RuntimeService;1";
+ static const char kXPConnectServiceContractID[] = "@mozilla.org/js/xpc/XPConnect;1";
+ static const char kObserverServiceContractID[] = "@mozilla.org/observer-service;1";
+ static const char kJSCachePrefix[] = "jsloader";
++static const char kModuleGlobalCreatedTopic[] = "module-global-created";
+ 
+ /* Some platforms don't have an implementation of PR_MemMap(). */
+ #ifndef XP_OS2
+ #define HAVE_PR_MEMMAP
+ #endif
+ 
+ /**
+  * Buffer sizes for serialization and deserialization of scripts.
+@@ -752,16 +753,23 @@ mozJSComponentLoader::PrepareObjectForLo
+         backstagePass->SetGlobalObject(global);
+ 
+         JSAutoCompartment ac(aCx, global);
+         if (!JS_DefineFunctions(aCx, global, gGlobalFun) ||
+             !JS_DefineProfilingFunctions(aCx, global)) {
+             return nullptr;
+         }
+ 
++        nsCOMPtr<nsIObserverService> obsSvc =
++            do_GetService(kObserverServiceContractID, &rv);
++        if (NS_SUCCEEDED(rv)) {
++          obsSvc->NotifyObservers(static_cast<nsIGlobalObject *>(backstagePass),
++                                  kModuleGlobalCreatedTopic, nullptr);
++        }
++
+         if (aReuseLoaderGlobal) {
+             mLoaderGlobal = holder;
+         }
+     }
+ 
+     RootedObject obj(aCx);
+     rv = holder->GetJSObject(obj.address());
+     NS_ENSURE_SUCCESS(rv, nullptr);
+diff --git a/toolkit/content/Services.jsm b/toolkit/content/Services.jsm
+--- a/toolkit/content/Services.jsm
++++ b/toolkit/content/Services.jsm
+@@ -3,16 +3,17 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ this.EXPORTED_SYMBOLS = ["Services"];
+ 
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ 
+ Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
++Components.utils.import("resource://gre/modules/devtools/Console.jsm");
+ 
+ this.Services = {};
+ 
+ XPCOMUtils.defineLazyGetter(Services, "prefs", function () {
+   return Cc["@mozilla.org/preferences-service;1"]
+            .getService(Ci.nsIPrefService)
+            .QueryInterface(Ci.nsIPrefBranch);
+ });
+@@ -66,8 +67,12 @@ let initTable = [
+   ["uriFixup", "@mozilla.org/docshell/urifixup;1", "nsIURIFixup"],
+   ["blocklist", "@mozilla.org/extensions/blocklist;1", "nsIBlocklistService"]
+ ];
+ 
+ initTable.forEach(function ([name, contract, intf])
+   XPCOMUtils.defineLazyServiceGetter(Services, name, contract, intf));
+ 
+ initTable = undefined;
++
++// Add the global |console| object to every JSM.
++Services.obs.addObserver((aSubject) => aSubject.console = console,
++                         "module-global-created", false);
+diff --git a/toolkit/devtools/Require.jsm b/toolkit/devtools/Require.jsm
+--- a/toolkit/devtools/Require.jsm
++++ b/toolkit/devtools/Require.jsm
+@@ -12,22 +12,16 @@
+  * To date, no attempt has been made to ensure that Require.jsm closely follows
+  * either the AMD or CommonJS specs. It is hoped that a more formal JavaScript
+  * module standard will arrive before this is necessary. In the mean time it
+  * serves the projects it loads.
+  */
+ 
+ this.EXPORTED_SYMBOLS = [ "define", "require" ];
+ 
+-const console = (function() {
+-  const tempScope = {};
+-  Components.utils.import("resource://gre/modules/devtools/Console.jsm", tempScope);
+-  return tempScope.console;
+-})();
+-
+ /**
+  * Define a module along with a payload.
+  * @param moduleName Name for the payload
+  * @param deps Ignored. For compatibility with CommonJS AMD Spec
+  * @param payload Function with (require, exports, module) params
+  */
+ this.define = function define(moduleName, deps, payload) {
+   if (typeof moduleName != "string") {
