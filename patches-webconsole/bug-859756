@@ -1,0 +1,607 @@
+# HG changeset patch
+# Parent d98ddeb9e46625ee79693a6664558f361486c319
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1368129707 -10800
+
+Bug 859756 - [browserconsole] Missing nsIConsoleMessages from Browser Console; r=robcee
+
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -952,16 +952,19 @@ WebConsoleFrame.prototype = {
+     aRemoteMessages.forEach(function(aMessage) {
+       switch (aMessage._type) {
+         case "PageError": {
+           let category = Utils.categoryForScriptError(aMessage);
+           this.outputMessage(category, this.reportPageError,
+                              [category, aMessage]);
+           break;
+         }
++        case "LogMessage":
++          this.handleLogMessage(aMessage);
++          break;
+         case "ConsoleAPI":
+           this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage,
+                              [aMessage]);
+           break;
+       }
+     }, this);
+   },
+ 
+@@ -1184,16 +1187,31 @@ WebConsoleFrame.prototype = {
+    */
+   handlePageError: function WCF_handlePageError(aPageError)
+   {
+     let category = Utils.categoryForScriptError(aPageError);
+     this.outputMessage(category, this.reportPageError, [category, aPageError]);
+   },
+ 
+   /**
++   * Handle log messages received from the server. This method outputs the given
++   * message.
++   *
++   * @param object aPacket
++   *        The message packet received from the server.
++   */
++  handleLogMessage: function WCF_handleLogMessage(aPacket)
++  {
++    this.outputMessage(CATEGORY_JS, () => {
++      return this.createMessageNode(CATEGORY_JS, SEVERITY_LOG, aPacket.message,
++                                    null, null, null, null, aPacket.timeStamp);
++    });
++  },
++
++  /**
+    * Log network event.
+    *
+    * @param object aActorId
+    *        The network event actor ID to log.
+    * @return nsIDOMElement|null
+    *         The message element to display in the Web Console output.
+    */
+   logNetEvent: function WCF_logNetEvent(aActorId)
+@@ -4481,16 +4499,17 @@ CommandController.prototype = {
+  *        The target that the console will connect to.
+  */
+ function WebConsoleConnectionProxy(aWebConsole, aTarget)
+ {
+   this.owner = aWebConsole;
+   this.target = aTarget;
+ 
+   this._onPageError = this._onPageError.bind(this);
++  this._onLogMessage = this._onLogMessage.bind(this);
+   this._onConsoleAPICall = this._onConsoleAPICall.bind(this);
+   this._onNetworkEvent = this._onNetworkEvent.bind(this);
+   this._onNetworkEventUpdate = this._onNetworkEventUpdate.bind(this);
+   this._onFileActivity = this._onFileActivity.bind(this);
+   this._onTabNavigated = this._onTabNavigated.bind(this);
+   this._onAttachConsole = this._onAttachConsole.bind(this);
+   this._onCachedMessages = this._onCachedMessages.bind(this);
+   this._connectionTimeout = this._connectionTimeout.bind(this);
+@@ -4584,16 +4603,17 @@ WebConsoleConnectionProxy.prototype = {
+       this._connectTimer.cancel();
+       this._connectTimer = null;
+     }.bind(this), function _onFailure() {
+       this._connectTimer = null;
+     }.bind(this));
+ 
+     let client = this.client = this.target.client;
+ 
++    client.addListener("logMessage", this._onLogMessage);
+     client.addListener("pageError", this._onPageError);
+     client.addListener("consoleAPICall", this._onConsoleAPICall);
+     client.addListener("networkEvent", this._onNetworkEvent);
+     client.addListener("networkEventUpdate", this._onNetworkEventUpdate);
+     client.addListener("fileActivity", this._onFileActivity);
+     this.target.on("will-navigate", this._onTabNavigated);
+     this.target.on("navigate", this._onTabNavigated);
+ 
+@@ -4705,16 +4725,33 @@ WebConsoleConnectionProxy.prototype = {
+   _onPageError: function WCCP__onPageError(aType, aPacket)
+   {
+     if (this.owner && aPacket.from == this._consoleActor) {
+       this.owner.handlePageError(aPacket.pageError);
+     }
+   },
+ 
+   /**
++   * The "logMessage" message type handler. We redirect any message to the UI
++   * for displaying.
++   *
++   * @private
++   * @param string aType
++   *        Message type.
++   * @param object aPacket
++   *        The message received from the server.
++   */
++  _onLogMessage: function WCCP__onLogMessage(aType, aPacket)
++  {
++    if (this.owner && aPacket.from == this._consoleActor) {
++      this.owner.handleLogMessage(aPacket);
++    }
++  },
++
++  /**
+    * The "consoleAPICall" message type handler. We redirect any message to
+    * the UI for displaying.
+    *
+    * @private
+    * @param string aType
+    *        Message type.
+    * @param object aPacket
+    *        The message received from the server.
+@@ -4831,16 +4868,17 @@ WebConsoleConnectionProxy.prototype = {
+     this._disconnecter = Promise.defer();
+ 
+     if (!this.client) {
+       this._disconnecter.resolve(null);
+       return this._disconnecter.promise;
+     }
+ 
+     this.client.removeListener("pageError", this._onPageError);
++    this.client.removeListener("logMessage", this._onLogMessage);
+     this.client.removeListener("consoleAPICall", this._onConsoleAPICall);
+     this.client.removeListener("networkEvent", this._onNetworkEvent);
+     this.client.removeListener("networkEventUpdate", this._onNetworkEventUpdate);
+     this.client.removeListener("fileActivity", this._onFileActivity);
+     this.target.off("will-navigate", this._onTabNavigated);
+     this.target.off("navigate", this._onTabNavigated);
+ 
+     this.client = null;
+diff --git a/js/xpconnect/idl/nsIScriptError.idl b/js/xpconnect/idl/nsIScriptError.idl
+--- a/js/xpconnect/idl/nsIScriptError.idl
++++ b/js/xpconnect/idl/nsIScriptError.idl
+@@ -6,17 +6,17 @@
+ /*
+  * nsIConsoleMessage subclass for representing JavaScript errors and warnings.
+  */
+ 
+ 
+ #include "nsISupports.idl"
+ #include "nsIConsoleMessage.idl"
+ 
+-[scriptable, uuid(ec640482-be5f-49a0-a9cb-c87eacce9291)]
++[scriptable, uuid(cac9d8e8-0d53-4fa8-9903-bb367e4fa1fe)]
+ interface nsIScriptError : nsIConsoleMessage
+ {
+     /** pseudo-flag for default case */
+     const unsigned long errorFlag = 0x0;
+ 
+     /** message is warning */
+     const unsigned long warningFlag = 0x1;
+ 
+@@ -44,25 +44,16 @@ interface nsIScriptError : nsIConsoleMes
+     /**
+      * Categories I know about -
+      * XUL javascript
+      * content javascript (both of these from nsDocShell, currently)
+      * component javascript (errors in JS components)
+      */
+     readonly attribute string category;
+ 
+-    /*
+-       The time (in milliseconds from the Epoch) that the script error instance
+-       was initialised, and thus the time when the error occurred.
+-       Currently used to display date and time of the message in Error console.
+-       The timestamp is initialized as JS_now/1000 so that it can be
+-       compared to Date.now in Javascript.
+-     */
+-    readonly attribute long long timeStamp;
+-
+     /* Get the window id this was initialized with.  Zero will be
+        returned if init() was used instead of initWithWindowID(). */
+     readonly attribute unsigned long long outerWindowID;
+ 
+     /* Get the inner window id this was initialized with.  Zero will be
+        returned if init() was used instead of initWithWindowID(). */
+     readonly attribute unsigned long long innerWindowID;
+ 
+@@ -88,12 +79,12 @@ interface nsIScriptError : nsIConsoleMes
+                           in string category,
+                           in unsigned long long innerWindowID);
+ 
+     AUTF8String toString();
+ };
+ 
+ %{ C++
+ #define NS_SCRIPTERROR_CID \
+-{ 0xe38e53b9, 0x5bb0, 0x456a, { 0xb5, 0x53, 0x57, 0x93, 0x70, 0xcb, 0x15, 0x67 }}
++{ 0x1950539a, 0x90f0, 0x4d22, { 0xb5, 0xaf, 0x71, 0x32, 0x9c, 0x68, 0xfa, 0x35 }}
+ 
+ #define NS_SCRIPTERROR_CONTRACTID "@mozilla.org/scripterror;1"
+ %}
+diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
+--- a/toolkit/devtools/debugger/dbg-client.jsm
++++ b/toolkit/devtools/debugger/dbg-client.jsm
+@@ -169,16 +169,17 @@ const ThreadStateTypes = {
+ /**
+  * Set of protocol messages that are sent by the server without a prior request
+  * by the client.
+  */
+ const UnsolicitedNotifications = {
+   "consoleAPICall": "consoleAPICall",
+   "eventNotification": "eventNotification",
+   "fileActivity": "fileActivity",
++  "logMessage": "logMessage",
+   "networkEvent": "networkEvent",
+   "networkEventUpdate": "networkEventUpdate",
+   "newGlobal": "newGlobal",
+   "newScript": "newScript",
+   "newSource": "newSource",
+   "tabDetached": "tabDetached",
+   "tabNavigated": "tabNavigated",
+   "pageError": "pageError",
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -876,80 +876,94 @@ return JSPropertyProvider;
+  * The nsIConsoleService listener. This is used to send all the page errors
+  * (JavaScript, CSS and more) to the remote Web Console instance.
+  *
+  * @constructor
+  * @param nsIDOMWindow [aWindow]
+  *        Optional - the window object for which we are created. This is used
+  *        for filtering out messages that belong to other windows.
+  * @param object aListener
+- *        The listener object must have a method: onPageError. This method is
+- *        invoked with one argument, the nsIScriptError, whenever a relevant
+- *        page error is received.
++ *        The listener object must have two methods:
++ *        - onPageError(). This method is invoked with one argument, the
++ *        nsIScriptError, whenever a relevant page error is received.
++ *        - onLogMessage(). This method is invoked for every new
++ *        nsIConsoleMessage.
+  */
+ this.PageErrorListener = function PageErrorListener(aWindow, aListener)
+ {
+   this.window = aWindow;
+   this.listener = aListener;
+ }
+ 
+ PageErrorListener.prototype =
+ {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
++  _allowLogMessages: false,
+ 
+   /**
+    * The content window for which we listen to page errors.
+    * @type nsIDOMWindow
+    */
+   window: null,
+ 
+   /**
+    * The listener object which is notified of page errors. It must have
+    * a onPageError method which is invoked with one argument: the nsIScriptError.
+    * @type object
+    */
+   listener: null,
+ 
+   /**
+    * Initialize the nsIConsoleService listener.
++   *
++   * @param boolean [aAllowLogMessages=false]
++   *        Set to |true| if you want to receive nsIConsoleMessages. If this is
++   *        |false| you only receive nsIScriptErrors.
+    */
+-  init: function PEL_init()
++  init: function PEL_init(aAllowLogMessages = false)
+   {
++    this._allowLogMessages = aAllowLogMessages;
+     Services.console.registerListener(this);
+   },
+ 
+   /**
+    * The nsIConsoleService observer. This method takes all the script error
+    * messages belonging to the current window and sends them to the remote Web
+    * Console instance.
+    *
+    * @param nsIScriptError aScriptError
+    *        The script error object coming from the nsIConsoleService.
+    */
+   observe: function PEL_observe(aScriptError)
+   {
+     if (!this.listener ||
+-        !(aScriptError instanceof Ci.nsIScriptError)) {
++        (!this._allowLogMessages &&
++         !(aScriptError instanceof Ci.nsIScriptError))) {
+       return;
+     }
+ 
+     if (this.window) {
+       if (!aScriptError.outerWindowID ||
+           !this.isCategoryAllowed(aScriptError.category)) {
+         return;
+       }
+ 
+       let errorWindow =
+         Services.wm.getOuterWindowWithId(aScriptError.outerWindowID);
+       if (!errorWindow || errorWindow.top != this.window) {
+         return;
+       }
+     }
+ 
+-    this.listener.onPageError(aScriptError);
++    if (aScriptError instanceof Ci.nsIScriptError) {
++      this.listener.onPageError(aScriptError);
++    }
++    else if (aScriptError.message) {
++      this.listener.onLogMessage(aScriptError);
++    }
+   },
+ 
+   /**
+    * Check if the given script error category is allowed to be tracked or not.
+    * We ignore chrome-originating errors as we only care about content.
+    *
+    * @param string aCategory
+    *        The nsIScriptError category you want to check.
+@@ -972,32 +986,31 @@ PageErrorListener.prototype =
+ 
+     return true;
+   },
+ 
+   /**
+    * Get the cached page errors for the current inner window.
+    *
+    * @return array
+-   *         The array of cached messages. Each element is an nsIScriptError
+-   *         with an added _type property so the remote Web Console instance can
+-   *         tell the difference between various types of cached messages.
++   *         The array of cached messages. Each element is an nsIScriptError or
++   *         an nsIConsoleMessage.
+    */
+   getCachedMessages: function PEL_getCachedMessages()
+   {
+     let innerWindowId = this.window ?
+                         WebConsoleUtils.getInnerWindowId(this.window) : null;
+     let errors = Services.console.getMessageArray() || [];
+ 
+-    return errors.filter(function(aError) {
+-      return aError instanceof Ci.nsIScriptError &&
++    return errors.filter((aError) => {
++      return ((this._allowLogMessages || aError instanceof Ci.nsIScriptError) &&
+              (!innerWindowId ||
+               (aError.innerWindowID == innerWindowId &&
+-               this.isCategoryAllowed(aError.category)));
+-    }, this);
++               this.isCategoryAllowed(aError.category))));
++    });
+   },
+ 
+   /**
+    * Remove the nsIConsoleService listener.
+    */
+   destroy: function PEL_destroy()
+   {
+     Services.console.unregisterListener(this);
+@@ -1086,18 +1099,17 @@ ConsoleAPIListener.prototype =
+ 
+     this.owner.onConsoleAPICall(apiMessage);
+   },
+ 
+   /**
+    * Get the cached messages for the current inner window.
+    *
+    * @return array
+-   *         The array of cached messages. Each element is a Console API
+-   *         prepared to be sent to the remote Web Console instance.
++   *         The array of cached messages.
+    */
+   getCachedMessages: function CAL_getCachedMessages()
+   {
+     let innerWindowId = this.window ?
+                         WebConsoleUtils.getInnerWindowId(this.window) : null;
+     return ConsoleAPIStorage.getEvents(innerWindowId);
+   },
+ 
+diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+--- a/toolkit/devtools/webconsole/dbg-webconsole-actors.js
++++ b/toolkit/devtools/webconsole/dbg-webconsole-actors.js
+@@ -361,17 +361,17 @@ WebConsoleActor.prototype =
+ 
+     while (aRequest.listeners.length > 0) {
+       let listener = aRequest.listeners.shift();
+       switch (listener) {
+         case "PageError":
+           if (!this.pageErrorListener) {
+             this.pageErrorListener =
+               new PageErrorListener(window, this);
+-            this.pageErrorListener.init();
++            this.pageErrorListener.init(this._isGlobalActor);
+           }
+           startedListeners.push(listener);
+           break;
+         case "ConsoleAPI":
+           if (!this.consoleAPIListener) {
+             this.consoleAPIListener =
+               new ConsoleAPIListener(window, this);
+             this.consoleAPIListener.init();
+@@ -492,21 +492,31 @@ WebConsoleActor.prototype =
+               message._type = type;
+               messages.push(message);
+             }, this);
+           }
+           break;
+         case "PageError":
+           if (this.pageErrorListener) {
+             let cache = this.pageErrorListener.getCachedMessages();
+-            cache.forEach(function(aMessage) {
+-              let message = this.preparePageErrorForRemote(aMessage);
+-              message._type = type;
++            cache.forEach((aMessage) => {
++              let message = null;
++              if (aMessage instanceof Ci.nsIScriptError) {
++                message = this.preparePageErrorForRemote(aMessage);
++                message._type = type;
++              }
++              else {
++                message = {
++                  _type: "LogMessage",
++                  message: aMessage.message,
++                  timeStamp: aMessage.timeStamp,
++                };
++              }
+               messages.push(message);
+-            }, this);
++            });
+           }
+           break;
+       }
+     }
+ 
+     messages.sort(function(a, b) { return a.timeStamp - b.timeStamp; });
+ 
+     return {
+@@ -590,16 +600,20 @@ WebConsoleActor.prototype =
+    * The "clearMessagesCache" request handler.
+    */
+   onClearMessagesCache: function WCA_onClearMessagesCache()
+   {
+     // TODO: Bug 717611 - Web Console clear button does not clear cached errors
+     let windowId = !this._isGlobalActor ?
+                    WebConsoleUtils.getInnerWindowId(this.window) : null;
+     ConsoleAPIStorage.clearEvents(windowId);
++    if (this._isGlobalActor) {
++      Services.console.logStringMessage(null); // for the Error Console
++      Services.console.reset();
++    }
+     return {};
+   },
+ 
+   /**
+    * The "setPreferences" request handler.
+    *
+    * @param object aRequest
+    *        The request message - which preferences need to be updated.
+@@ -864,16 +878,34 @@ WebConsoleActor.prototype =
+       from: this.actorID,
+       type: "pageError",
+       pageError: this.preparePageErrorForRemote(aPageError),
+     };
+     this.conn.send(packet);
+   },
+ 
+   /**
++   * Handler for simple log messages received from the PageErrorListener.
++   * This method sends the nsIConsoleMessage to the remote Web Console client.
++   *
++   * @param nsIConsoleMessage aMessage
++   *        The log message we need to send to the client.
++   */
++  onLogMessage: function WCA_onLogMessage(aMessage)
++  {
++    let packet = {
++      from: this.actorID,
++      type: "logMessage",
++      message: aMessage.message,
++      timeStamp: aMessage.timeStamp,
++    };
++    this.conn.send(packet);
++  },
++
++  /**
+    * Prepare an nsIScriptError to be sent to the client.
+    *
+    * @param nsIScriptError aPageError
+    *        The page error we need to send to the client.
+    * @return object
+    *         The object you can send to the remote client.
+    */
+   preparePageErrorForRemote: function WCA_preparePageErrorForRemote(aPageError)
+diff --git a/xpcom/base/nsConsoleMessage.cpp b/xpcom/base/nsConsoleMessage.cpp
+--- a/xpcom/base/nsConsoleMessage.cpp
++++ b/xpcom/base/nsConsoleMessage.cpp
+@@ -4,34 +4,43 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /*
+  * Base implementation for console messages.
+  */
+ 
+ #include "nsConsoleMessage.h"
+ #include "nsReadableUtils.h"
++#include "jsapi.h"
+ 
+ NS_IMPL_THREADSAFE_ISUPPORTS1(nsConsoleMessage, nsIConsoleMessage)
+ 
+-nsConsoleMessage::nsConsoleMessage() 
++nsConsoleMessage::nsConsoleMessage() : mTimeStamp(0)
+ {
+ }
+ 
+ nsConsoleMessage::nsConsoleMessage(const PRUnichar *message) 
+ {
++	mTimeStamp = JS_Now() / 1000;
+ 	mMessage.Assign(message);
+ }
+ 
+ NS_IMETHODIMP
+ nsConsoleMessage::GetMessageMoz(PRUnichar **result) {
+     *result = ToNewUnicode(mMessage);
+ 
+     return NS_OK;
+ }
+ 
++NS_IMETHODIMP
++nsConsoleMessage::GetTimeStamp(int64_t *aTimeStamp)
++{
++    *aTimeStamp = mTimeStamp;
++    return NS_OK;
++}
++
+ //  NS_IMETHODIMP
+ //  nsConsoleMessage::Init(const PRUnichar *message) {
+ //      nsAutoString newMessage(message);
+ //      mMessage = ToNewUnicode(newMessage);
+ //      return NS_OK;
+ //  }
+ 
+diff --git a/xpcom/base/nsConsoleMessage.h b/xpcom/base/nsConsoleMessage.h
+--- a/xpcom/base/nsConsoleMessage.h
++++ b/xpcom/base/nsConsoleMessage.h
+@@ -17,12 +17,13 @@ public:
+     nsConsoleMessage(const PRUnichar *message);
+ 
+     NS_DECL_ISUPPORTS
+     NS_DECL_NSICONSOLEMESSAGE
+ 
+ private:
+     ~nsConsoleMessage() {}
+ 
++    int64_t mTimeStamp;
+     nsString mMessage;
+ };
+ 
+ #endif /* __nsconsolemessage_h__ */
+diff --git a/xpcom/base/nsIConsoleMessage.idl b/xpcom/base/nsIConsoleMessage.idl
+--- a/xpcom/base/nsIConsoleMessage.idl
++++ b/xpcom/base/nsIConsoleMessage.idl
+@@ -5,18 +5,26 @@
+ 
+ #include "nsISupports.idl"
+ 
+ /**
+  * This is intended as a base interface; implementations may want to
+  * provide an object that can be qi'ed to provide more specific
+  * message information.
+  */
+-[scriptable, uuid(41bd8784-1dd2-11b2-9553-8606958fffe1)]
++[scriptable, uuid(c14c151b-5ea4-47ed-8e85-d392cdd3e154)]
+ interface nsIConsoleMessage : nsISupports
+ {
++    /*
++       The time (in milliseconds from the Epoch) that the message instance
++       was initialised.
++       The timestamp is initialized as JS_now/1000 so that it can be
++       compared to Date.now in Javascript.
++     */
++    readonly attribute long long timeStamp;
++
+     [binaryname(MessageMoz)] readonly attribute wstring message;
+ };
+ 
+ %{ C++
+ #define NS_CONSOLEMESSAGE_CID \
+-{ 0x56c9d666, 0x1dd2, 0x11b2, { 0xb4, 0x3c, 0xa8, 0x4b, 0xf3, 0xb3, 0xec, 0xbb }}
++{ 0x024efc9e, 0x54dc, 0x4844, { 0x80, 0x4b, 0x41, 0xd3, 0xf3, 0x69, 0x90, 0x73 }}
+ %}
