@@ -1,0 +1,1579 @@
+# HG changeset patch
+# Parent 13c1c11245ab90aebe2560a5fb304c7dd62388d7
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1368221286 -10800
+
+Bug 870220 - Web Console property inspector shows duplicate entries for navigator.plugins; r=robcee,vporof
+
+diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools/debugger/debugger-controller.js
+--- a/browser/devtools/debugger/debugger-controller.js
++++ b/browser/devtools/debugger/debugger-controller.js
+@@ -792,17 +792,19 @@ StackFrames.prototype = {
+     aScope._fetched = true;
+     let env = aScope._sourceEnvironment;
+ 
+     switch (env.type) {
+       case "with":
+       case "object":
+         // Add nodes for every variable in scope.
+         this.activeThread.pauseGrip(env.object).getPrototypeAndProperties(function(aResponse) {
+-          this._insertScopeVariables(aResponse.ownProperties, aScope);
++          let { ownProperties, safeGetterValues } = aResponse;
++          this._mergeSafeGetterValues(ownProperties, safeGetterValues);
++          this._insertScopeVariables(ownProperties, aScope);
+ 
+           // Signal that variables have been fetched.
+           window.dispatchEvent(document, "Debugger:FetchedVariables");
+           DebuggerView.Variables.commitHierarchy();
+         }.bind(this));
+         break;
+       case "block":
+       case "function":
+@@ -898,19 +900,21 @@ StackFrames.prototype = {
+     // Fetch the properties only once.
+     if (aVar._fetched) {
+       return;
+     }
+     aVar._fetched = true;
+     let grip = aVar._sourceGrip;
+ 
+     this.activeThread.pauseGrip(grip).getPrototypeAndProperties(function(aResponse) {
+-      let { ownProperties, prototype } = aResponse;
++      let { ownProperties, prototype, safeGetterValues } = aResponse;
+       let sortable = VariablesView.NON_SORTABLE_CLASSES.indexOf(grip.class) == -1;
+ 
++      this._mergeSafeGetterValues(ownProperties, safeGetterValues);
++
+       // Add all the variable properties.
+       if (ownProperties) {
+         aVar.addProperties(ownProperties, {
+           // Not all variables need to force sorted properties.
+           sorted: sortable,
+           // Expansion handlers must be set after the properties are added.
+           callback: this._addVarExpander
+         });
+@@ -928,16 +932,43 @@ StackFrames.prototype = {
+ 
+       // Signal that properties have been fetched.
+       window.dispatchEvent(document, "Debugger:FetchedProperties");
+       DebuggerView.Variables.commitHierarchy();
+     }.bind(this));
+   },
+ 
+   /**
++   * Merge the safe getter values descriptors into the "own properties" object
++   * that comes from a "prototypeAndProperties" response packet. This is needed
++   * for Variables View.
++   *
++   * @private
++   * @param object aOwnProperties
++   *        The |ownProperties| object that will get the new safe getter values.
++   * @param object aSafeGetterValues
++   *        The |safeGetterValues| object.
++   */
++  _mergeSafeGetterValues:
++  function SF__mergeSafeGetterValues(aOwnProperties, aSafeGetterValues) {
++    // Merge the safe getter values into one object such that we can use it
++    // in VariablesView.
++    for (let name of Object.keys(aSafeGetterValues)) {
++      if (name in aOwnProperties) {
++        aOwnProperties[name].getterValue = aSafeGetterValues[name].getterValue;
++        aOwnProperties[name].getterPrototypeLevel = aSafeGetterValues[name]
++                                                    .getterPrototypeLevel;
++      }
++      else {
++        aOwnProperties[name] = aSafeGetterValues[name];
++      }
++    }
++  },
++
++  /**
+    * Adds the specified stack frame to the list.
+    *
+    * @param object aFrame
+    *        The new frame to add.
+    */
+   _addFrame: function SF__addFrame(aFrame) {
+     let depth = aFrame.depth;
+     let { url, line } = aFrame.where;
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-09.js b/browser/devtools/debugger/test/browser_dbg_propertyview-09.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-09.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-09.js
+@@ -51,20 +51,23 @@ function testFrameParameters()
+         "Should have three frames.");
+ 
+       is(globalNodes[1].querySelector(".name").getAttribute("value"), "SpecialPowers",
+         "Should have the right property name for |SpecialPowers|.");
+ 
+       is(globalNodes[1].querySelector(".value").getAttribute("value"), "[object Object]",
+         "Should have the right property value for |SpecialPowers|.");
+ 
+-      is(globalNodes[3].querySelector(".name").getAttribute("value"), "document",
++      let globalScopeObject = gDebugger.DebuggerView.Variables.getScopeForNode(globalScope);
++      let documentNode = globalScopeObject.get("document");
++
++      is(documentNode.target.querySelector(".name").getAttribute("value"), "document",
+         "Should have the right property name for |document|.");
+ 
+-      is(globalNodes[3].querySelector(".value").getAttribute("value"), "[object HTMLDocument]",
++      is(documentNode.target.querySelector(".value").getAttribute("value"), "[object HTMLDocument]",
+         "Should have the right property value for |document|.");
+ 
+       let len = globalNodes.length - 1;
+       is(globalNodes[len].querySelector(".name").getAttribute("value"), "window",
+         "Should have the right property name for |window|.");
+ 
+       is(globalNodes[len].querySelector(".value").getAttribute("value"), "[object Window]",
+         "Should have the right property value for |window|.");
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-10.js b/browser/devtools/debugger/test/browser_dbg_propertyview-10.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-10.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-10.js
+@@ -56,20 +56,23 @@ function testWithFrame()
+       is(scopes.childNodes.length, 5, "Should have 5 variable scopes.");
+ 
+       is(innerNodes[1].querySelector(".name").getAttribute("value"), "one",
+         "Should have the right property name for |one|.");
+ 
+       is(innerNodes[1].querySelector(".value").getAttribute("value"), "1",
+         "Should have the right property value for |one|.");
+ 
+-      is(globalNodes[3].querySelector(".name").getAttribute("value"), "document",
++      let globalScopeObject = gDebugger.DebuggerView.Variables.getScopeForNode(globalScope);
++      let documentNode = globalScopeObject.get("document");
++
++      is(documentNode.target.querySelector(".name").getAttribute("value"), "document",
+         "Should have the right property name for |document|.");
+ 
+-      is(globalNodes[3].querySelector(".value").getAttribute("value"), "[object HTMLDocument]",
++      is(documentNode.target.querySelector(".value").getAttribute("value"), "[object HTMLDocument]",
+         "Should have the right property value for |document|.");
+ 
+       let len = globalNodes.length - 1;
+       is(globalNodes[len].querySelector(".name").getAttribute("value"), "window",
+         "Should have the right property name for |window|.");
+ 
+       is(globalNodes[len].querySelector(".value").getAttribute("value"), "[object Window]",
+         "Should have the right property value for |window|.");
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-11.js b/browser/devtools/debugger/test/browser_dbg_propertyview-11.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-11.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-11.js
+@@ -56,25 +56,27 @@ function testFrameParameters()
+         "Should have the right property value for |button|.");
+ 
+       is(anonymousNodes[2].querySelector(".name").getAttribute("value"), "buttonAsProto",
+         "Should have the right property name for |buttonAsProto|.");
+ 
+       is(anonymousNodes[2].querySelector(".value").getAttribute("value"), "[object Object]",
+         "Should have the right property value for |buttonAsProto|.");
+ 
+-      is(globalNodes[3].querySelector(".name").getAttribute("value"), "document",
++      let globalScopeObject = gVars.getScopeForNode(globalScope);
++      let documentNode = globalScopeObject.get("document");
++
++      is(documentNode.target.querySelector(".name").getAttribute("value"), "document",
+         "Should have the right property name for |document|.");
+ 
+-      is(globalNodes[3].querySelector(".value").getAttribute("value"), "[object HTMLDocument]",
++      is(documentNode.target.querySelector(".value").getAttribute("value"), "[object HTMLDocument]",
+         "Should have the right property value for |document|.");
+ 
+       let buttonNode = gVars.getItemForNode(anonymousNodes[1]);
+       let buttonAsProtoNode = gVars.getItemForNode(anonymousNodes[2]);
+-      let documentNode = gVars.getItemForNode(globalNodes[3]);
+ 
+       is(buttonNode.expanded, false,
+         "The buttonNode should not be expanded at this point.");
+       is(buttonAsProtoNode.expanded, false,
+         "The buttonAsProtoNode should not be expanded at this point.");
+       is(documentNode.expanded, false,
+         "The documentNode should not be expanded at this point.");
+ 
+@@ -126,133 +128,90 @@ function testFrameParameters()
+ 
+         is(documentNode.get("__proto__").target.querySelector(".name")
+            .getAttribute("value"), "__proto__",
+           "Should have the right property name for '__proto__' in documentNode.");
+         ok(documentNode.get("__proto__").target.querySelector(".value")
+            .getAttribute("value").search(/object/) != -1,
+           "'__proto__' in documentNode should be an object.");
+ 
+-        let buttonProtoNode = buttonNode.get("__proto__");
++        // Now the main course: make sure that the native getters for WebIDL
++        // attributes have been called and a value has been returned.
++        is(buttonNode.get("type").target.querySelector(".name")
++           .getAttribute("value"), "type",
++          "Should have the right property name for 'type' in buttonProtoNode.");
++        is(buttonNode.get("type").target.querySelector(".value")
++           .getAttribute("value"), '"submit"',
++          "'type' in buttonProtoNode should have the right value.");
++        is(buttonNode.get("formMethod").target.querySelector(".name")
++           .getAttribute("value"), "formMethod",
++          "Should have the right property name for 'formMethod' in buttonProtoNode.");
++        is(buttonNode.get("formMethod").target.querySelector(".value")
++           .getAttribute("value"), '""',
++          "'formMethod' in buttonProtoNode should have the right value.");
++
++        is(documentNode.get("domain").target.querySelector(".name")
++           .getAttribute("value"), "domain",
++          "Should have the right property name for 'domain' in documentProtoNode.");
++        is(documentNode.get("domain").target.querySelector(".value")
++           .getAttribute("value"), '"example.com"',
++          "'domain' in documentProtoNode should have the right value.");
++        is(documentNode.get("cookie").target.querySelector(".name")
++           .getAttribute("value"), "cookie",
++          "Should have the right property name for 'cookie' in documentProtoNode.");
++        is(documentNode.get("cookie").target.querySelector(".value")
++           .getAttribute("value"), '""',
++          "'cookie' in documentProtoNode should have the right value.");
++
+         let buttonAsProtoProtoNode = buttonAsProtoNode.get("__proto__");
+-        let documentProtoNode = documentNode.get("__proto__");
+ 
+-        is(buttonProtoNode.expanded, false,
+-          "The buttonProtoNode should not be expanded at this point.");
+         is(buttonAsProtoProtoNode.expanded, false,
+           "The buttonAsProtoProtoNode should not be expanded at this point.");
+-        is(documentProtoNode.expanded, false,
+-          "The documentProtoNode should not be expanded at this point.");
+ 
+         // Expand the prototypes of 'button', 'buttonAsProto' and 'document'
+         // tree nodes. This causes their properties to be retrieved and
+         // displayed.
+-        buttonProtoNode.expand();
+         buttonAsProtoProtoNode.expand();
+-        documentProtoNode.expand();
+ 
+-        is(buttonProtoNode.expanded, true,
+-          "The buttonProtoNode should be expanded at this point.");
+         is(buttonAsProtoProtoNode.expanded, true,
+           "The buttonAsProtoProtoNode should be expanded at this point.");
+-        is(documentProtoNode.expanded, true,
+-          "The documentProtoNode should be expanded at this point.");
+ 
+ 
+         // Poll every few milliseconds until the properties are retrieved.
+         // It's important to set the timer in the chrome window, because the
+         // content window timers are disabled while the debuggee is paused.
+         let count2 = 0;
+         let intervalID1 = window.setInterval(function(){
+           info("count2: " + count2);
+           if (++count2 > 50) {
+             ok(false, "Timed out while polling for the properties.");
+             window.clearInterval(intervalID1);
+             return resumeAndFinish();
+           }
+-          if (!buttonProtoNode._retrieved ||
+-              !buttonAsProtoProtoNode._retrieved ||
+-              !documentProtoNode._retrieved) {
++          if (!buttonAsProtoProtoNode._retrieved) {
+             return;
+           }
+           window.clearInterval(intervalID1);
+ 
+-          // Now the main course: make sure that the native getters for WebIDL
+-          // attributes have been called and a value has been returned.
+-          is(buttonProtoNode.get("type").target.querySelector(".name")
++          // Test this more involved case that reuses an object that is
++          // present in another cache line.
++          is(buttonAsProtoProtoNode.get("type").target.querySelector(".name")
+              .getAttribute("value"), "type",
+-            "Should have the right property name for 'type' in buttonProtoNode.");
+-          is(buttonProtoNode.get("type").target.querySelector(".value")
++            "Should have the right property name for 'type' in buttonAsProtoProtoProtoNode.");
++          is(buttonAsProtoProtoNode.get("type").target.querySelector(".value")
+              .getAttribute("value"), '"submit"',
+-            "'type' in buttonProtoNode should have the right value.");
+-          is(buttonProtoNode.get("formMethod").target.querySelector(".name")
++            "'type' in buttonAsProtoProtoProtoNode should have the right value.");
++          is(buttonAsProtoProtoNode.get("formMethod").target.querySelector(".name")
+              .getAttribute("value"), "formMethod",
+-            "Should have the right property name for 'formMethod' in buttonProtoNode.");
+-          is(buttonProtoNode.get("formMethod").target.querySelector(".value")
++            "Should have the right property name for 'formMethod' in buttonAsProtoProtoProtoNode.");
++          is(buttonAsProtoProtoNode.get("formMethod").target.querySelector(".value")
+              .getAttribute("value"), '""',
+-            "'formMethod' in buttonProtoNode should have the right value.");
++            "'formMethod' in buttonAsProtoProtoProtoNode should have the right value.");
+ 
+-          is(documentProtoNode.get("domain").target.querySelector(".name")
+-             .getAttribute("value"), "domain",
+-            "Should have the right property name for 'domain' in documentProtoNode.");
+-          is(documentProtoNode.get("domain").target.querySelector(".value")
+-             .getAttribute("value"), '"example.com"',
+-            "'domain' in documentProtoNode should have the right value.");
+-          is(documentProtoNode.get("cookie").target.querySelector(".name")
+-             .getAttribute("value"), "cookie",
+-            "Should have the right property name for 'cookie' in documentProtoNode.");
+-          is(documentProtoNode.get("cookie").target.querySelector(".value")
+-             .getAttribute("value"), '""',
+-            "'cookie' in documentProtoNode should have the right value.");
+-
+-          let buttonAsProtoProtoProtoNode = buttonAsProtoProtoNode.get("__proto__");
+-
+-          is(buttonAsProtoProtoProtoNode.expanded, false,
+-            "The buttonAsProtoProtoProtoNode should not be expanded at this point.");
+-
+-          // Expand the prototype of the prototype of 'buttonAsProto' tree
+-          // node. This causes its properties to be retrieved and displayed.
+-          buttonAsProtoProtoProtoNode.expand();
+-
+-          is(buttonAsProtoProtoProtoNode.expanded, true,
+-            "The buttonAsProtoProtoProtoNode should be expanded at this point.");
+-
+-          // Poll every few milliseconds until the properties are retrieved.
+-          // It's important to set the timer in the chrome window, because the
+-          // content window timers are disabled while the debuggee is paused.
+-          let count3 = 0;
+-          let intervalID2 = window.setInterval(function(){
+-            info("count3: " + count3);
+-            if (++count3 > 50) {
+-              ok(false, "Timed out while polling for the properties.");
+-              window.clearInterval(intervalID2);
+-              return resumeAndFinish();
+-            }
+-            if (!buttonAsProtoProtoProtoNode._retrieved) {
+-              return;
+-            }
+-            window.clearInterval(intervalID2);
+-
+-            // Test this more involved case that reuses an object that is
+-            // present in another cache line.
+-            is(buttonAsProtoProtoProtoNode.get("type").target.querySelector(".name")
+-               .getAttribute("value"), "type",
+-              "Should have the right property name for 'type' in buttonAsProtoProtoProtoNode.");
+-            is(buttonAsProtoProtoProtoNode.get("type").target.querySelector(".value")
+-               .getAttribute("value"), '"submit"',
+-              "'type' in buttonAsProtoProtoProtoNode should have the right value.");
+-            is(buttonAsProtoProtoProtoNode.get("formMethod").target.querySelector(".name")
+-               .getAttribute("value"), "formMethod",
+-              "Should have the right property name for 'formMethod' in buttonAsProtoProtoProtoNode.");
+-            is(buttonAsProtoProtoProtoNode.get("formMethod").target.querySelector(".value")
+-               .getAttribute("value"), '""',
+-              "'formMethod' in buttonAsProtoProtoProtoNode should have the right value.");
+-
+-            resumeAndFinish();
+-          }, 100);
++          resumeAndFinish();
+         }, 100);
+       }, 100);
+     }}, 0);
+   }, false);
+ 
+   EventUtils.sendMouseEvent({ type: "click" },
+     content.document.querySelector("button"),
+     content.window);
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-filter-01.js b/browser/devtools/debugger/test/browser_dbg_propertyview-filter-01.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-filter-01.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-filter-01.js
+@@ -144,47 +144,45 @@ function testVariablesFiltering()
+     is(innerScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 1,
+       "There should be 1 variable displayed in the inner scope");
+     is(mathScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the test scope");
+     is(loadScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the load scope");
+-    is(globalScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 1,
+-      "There should be 1 variable displayed in the global scope");
++    is(globalScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 3,
++      "There should be 3 variables displayed in the global scope");
+ 
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length, 6,
+-      "There should be 6 properties displayed in the inner scope");
++    ok(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length > 6,
++      "There should be more than 6 properties displayed in the inner scope");
+     is(mathScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the test scope");
+     is(loadScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the load scope");
+     is(globalScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the global scope");
+ 
+     is(innerScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[0].getAttribute("value"),
+       "this", "The only inner variable displayed should be 'this'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[0].getAttribute("value"),
+-      "window", "The first inner property displayed should be 'window'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[1].getAttribute("value"),
+-      "document", "The second inner property displayed should be 'document'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[2].getAttribute("value"),
+-      "location", "The third inner property displayed should be 'location'");
++      "window", "The third inner property displayed should be 'window'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[3].getAttribute("value"),
+-      "__proto__", "The fourth inner property displayed should be '__proto__'");
++      "document", "The fourth inner property displayed should be 'document'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[4].getAttribute("value"),
+-      "Location", "The fifth inner property displayed should be 'Location'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[5].getAttribute("value"),
+-      "Location", "The sixth inner property displayed should be 'Location'");
++      "location", "The fifth inner property displayed should be 'location'");
+ 
+     is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[0].getAttribute("value"),
+-      "Location", "The only global variable displayed should be 'Location'");
++      "location", "The first global variable displayed should be 'location'");
++    is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[1].getAttribute("value"),
++      "locationbar", "The second global variable displayed should be 'locationbar'");
++    is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[2].getAttribute("value"),
++      "Location", "The second global variable displayed should be 'Location'");
+   }
+ 
+   function test2()
+   {
+     innerScopeItem.collapse();
+     mathScopeItem.collapse();
+     testScopeItem.collapse();
+     loadScopeItem.collapse();
+@@ -232,47 +230,45 @@ function testVariablesFiltering()
+     is(innerScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 1,
+       "There should be 1 variable displayed in the inner scope");
+     is(mathScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the test scope");
+     is(loadScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the load scope");
+-    is(globalScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 1,
+-      "There should be 1 variable displayed in the global scope");
++    is(globalScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 3,
++      "There should be 3 variables displayed in the global scope");
+ 
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length, 6,
+-      "There should be 6 properties displayed in the inner scope");
++    ok(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length > 6,
++      "There should be more than 6 properties displayed in the inner scope");
+     is(mathScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the test scope");
+     is(loadScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the load scope");
+     is(globalScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the global scope");
+ 
+     is(innerScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[0].getAttribute("value"),
+       "this", "The only inner variable displayed should be 'this'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[0].getAttribute("value"),
+-      "window", "The first inner property displayed should be 'window'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[1].getAttribute("value"),
+-      "document", "The second inner property displayed should be 'document'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[2].getAttribute("value"),
+-      "location", "The third inner property displayed should be 'location'");
++      "window", "The third inner property displayed should be 'window'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[3].getAttribute("value"),
+-      "__proto__", "The fourth inner property displayed should be '__proto__'");
++      "document", "The fourth inner property displayed should be 'document'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[4].getAttribute("value"),
+-      "Location", "The fifth inner property displayed should be 'Location'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[5].getAttribute("value"),
+-      "Location", "The sixth inner property displayed should be 'Location'");
++      "location", "The fifth inner property displayed should be 'location'");
+ 
+     is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[0].getAttribute("value"),
+-      "Location", "The only global variable displayed should be 'Location'");
++      "location", "The first global variable displayed should be 'location'");
++    is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[1].getAttribute("value"),
++      "locationbar", "The second global variable displayed should be 'locationbar'");
++    is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[2].getAttribute("value"),
++      "Location", "The second global variable displayed should be 'Location'");
+   }
+ 
+   var scopes = gDebugger.DebuggerView.Variables._list,
+       innerScope = scopes.querySelectorAll(".variables-view-scope")[0],
+       mathScope = scopes.querySelectorAll(".variables-view-scope")[1],
+       testScope = scopes.querySelectorAll(".variables-view-scope")[2],
+       loadScope = scopes.querySelectorAll(".variables-view-scope")[3],
+       globalScope = scopes.querySelectorAll(".variables-view-scope")[4];
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-filter-02.js b/browser/devtools/debugger/test/browser_dbg_propertyview-filter-02.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-filter-02.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-filter-02.js
+@@ -87,18 +87,18 @@ function testVariablesFiltering()
+       "There should be 0 variables displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the test scope");
+     is(loadScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the load scope");
+     is(globalScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 2,
+       "There should be 2 variables displayed in the global scope");
+ 
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length, 8,
+-      "There should be 8 properties displayed in the inner scope");
++    ok(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length > 3,
++      "There should be more than 3 properties displayed in the inner scope");
+     is(mathScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the test scope");
+     is(loadScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the load scope");
+     is(globalScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the global scope");
+@@ -106,26 +106,16 @@ function testVariablesFiltering()
+     is(innerScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[0].getAttribute("value"),
+       "this", "The only inner variable displayed should be 'this'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[0].getAttribute("value"),
+       "document", "The first inner property displayed should be 'document'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[1].getAttribute("value"),
+       "window", "The second inner property displayed should be 'window'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[2].getAttribute("value"),
+       "document", "The third inner property displayed should be 'document'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[3].getAttribute("value"),
+-      "location", "The fourth inner property displayed should be 'location'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[4].getAttribute("value"),
+-      "__proto__", "The fifth inner property displayed should be '__proto__'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[5].getAttribute("value"),
+-      "__proto__", "The sixth inner property displayed should be '__proto__'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[6].getAttribute("value"),
+-      "HTMLDocument", "The seventh inner property displayed should be 'HTMLDocument'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[7].getAttribute("value"),
+-      "HTMLDocument", "The eight inner property displayed should be 'HTMLDocument'");
+ 
+     is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[0].getAttribute("value"),
+       "document", "The first global variable displayed should be 'document'");
+     is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[1].getAttribute("value"),
+       "HTMLDocument", "The first global variable displayed should be 'HTMLDocument'");
+   }
+ 
+   function test2()
+@@ -163,36 +153,36 @@ function testVariablesFiltering()
+     write("htmldocument");
+ 
+     is(thisItem.expanded, true,
+       "The local scope 'this' should be expanded");
+     is(windowItem.expanded, true,
+       "The local scope 'this.window' should be expanded");
+     is(documentItem.expanded, true,
+       "The local scope 'this.window.document' should be expanded");
+-    is(locationItem.expanded, false,
+-      "The local scope 'this.window.document.location' should not be expanded");
++    is(locationItem.expanded, true,
++      "The local scope 'this.window.document.location' should be expanded");
+ 
+     documentItem.toggle();
+     documentItem.toggle();
+     locationItem.toggle();
+ 
+     is(innerScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 1,
+       "There should be 1 variable displayed in the inner scope");
+     is(mathScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the test scope");
+     is(loadScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 0,
+       "There should be 0 variables displayed in the load scope");
+     is(globalScope.querySelectorAll(".variables-view-variable:not([non-match])").length, 2,
+       "There should be 2 variables displayed in the global scope");
+ 
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length, 8,
+-      "There should be 8 properties displayed in the inner scope");
++    ok(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length > 3,
++      "There should be more than 3 properties displayed in the inner scope");
+     is(mathScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the test scope");
+     is(loadScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the load scope");
+     is(globalScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the global scope");
+@@ -200,26 +190,16 @@ function testVariablesFiltering()
+     is(innerScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[0].getAttribute("value"),
+       "this", "The only inner variable displayed should be 'this'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[0].getAttribute("value"),
+       "document", "The first inner property displayed should be 'document'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[1].getAttribute("value"),
+       "window", "The second inner property displayed should be 'window'");
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[2].getAttribute("value"),
+       "document", "The third inner property displayed should be 'document'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[3].getAttribute("value"),
+-      "location", "The fourth inner property displayed should be 'location'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[4].getAttribute("value"),
+-      "__proto__", "The fifth inner property displayed should be '__proto__'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[5].getAttribute("value"),
+-      "__proto__", "The sixth inner property displayed should be '__proto__'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[6].getAttribute("value"),
+-      "HTMLDocument", "The seventh inner property displayed should be 'HTMLDocument'");
+-    is(innerScope.querySelectorAll(".variables-view-property:not([non-match]) > .title > .name")[7].getAttribute("value"),
+-      "HTMLDocument", "The eight inner property displayed should be 'HTMLDocument'");
+ 
+     is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[0].getAttribute("value"),
+       "document", "The first global variable displayed should be 'document'");
+     is(globalScope.querySelectorAll(".variables-view-variable:not([non-match]) > .title > .name")[1].getAttribute("value"),
+       "HTMLDocument", "The first global variable displayed should be 'HTMLDocument'");
+   }
+ 
+   var scopes = gDebugger.DebuggerView.Variables._list,
+diff --git a/browser/devtools/debugger/test/browser_dbg_propertyview-filter-05.js b/browser/devtools/debugger/test/browser_dbg_propertyview-filter-05.js
+--- a/browser/devtools/debugger/test/browser_dbg_propertyview-filter-05.js
++++ b/browser/devtools/debugger/test/browser_dbg_propertyview-filter-05.js
+@@ -122,18 +122,18 @@ function testVariablesFiltering()
+       "There should be some variables displayed in the global scope");
+ 
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the inner scope");
+     is(mathScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the test scope");
+-    is(loadScope.querySelectorAll(".variables-view-property:not([non-match])").length, 1,
+-      "There should be 1 property displayed in the load scope");
++    ok(loadScope.querySelectorAll(".variables-view-property:not([non-match])").length > 1,
++      "There should be more than one properties displayed in the load scope");
+     isnot(globalScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be some properties displayed in the global scope");
+   }
+ 
+   function test4()
+   {
+     backspace(1);
+ 
+@@ -152,18 +152,18 @@ function testVariablesFiltering()
+       "There should be some variables displayed in the global scope");
+ 
+     is(innerScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the inner scope");
+     is(mathScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the math scope");
+     is(testScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be 0 properties displayed in the test scope");
+-    is(loadScope.querySelectorAll(".variables-view-property:not([non-match])").length, 1,
+-      "There should be 1 property displayed in the load scope");
++    ok(loadScope.querySelectorAll(".variables-view-property:not([non-match])").length > 1,
++      "There should be more than one properties displayed in the load scope");
+     isnot(globalScope.querySelectorAll(".variables-view-property:not([non-match])").length, 0,
+       "There should be some properties displayed in the global scope");
+   }
+ 
+   var scopes = gDebugger.DebuggerView.Variables._list,
+       innerScope = scopes.querySelectorAll(".variables-view-scope")[0],
+       mathScope = scopes.querySelectorAll(".variables-view-scope")[1],
+       testScope = scopes.querySelectorAll(".variables-view-scope")[2],
+diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
+--- a/browser/devtools/shared/widgets/VariablesView.jsm
++++ b/browser/devtools/shared/widgets/VariablesView.jsm
+@@ -1973,16 +1973,23 @@ Scope.prototype = {
+  * @param object aDescriptor
+  *        The variable's descriptor.
+  */
+ function Variable(aScope, aName, aDescriptor) {
+   this._displayTooltip = this._displayTooltip.bind(this);
+   this._activateNameInput = this._activateNameInput.bind(this);
+   this._activateValueInput = this._activateValueInput.bind(this);
+ 
++  // Treat safe getter descriptors as descriptors with a value.
++  if ("getterValue" in aDescriptor) {
++    aDescriptor.value = aDescriptor.getterValue;
++    delete aDescriptor.get;
++    delete aDescriptor.set;
++  }
++
+   Scope.call(this, aScope, aName, this._initialDescriptor = aDescriptor);
+   this.setGrip(aDescriptor.value);
+   this._symbolicName = aName;
+   this._absoluteName = aScope.name + "[\"" + aName + "\"]";
+ }
+ 
+ ViewHelpers.create({ constructor: Variable, proto: Scope.prototype }, {
+   /**
+@@ -1997,16 +2004,18 @@ ViewHelpers.create({ constructor: Variab
+    *        e.g. - { value: 42 }
+    *             - { value: true }
+    *             - { value: "nasu" }
+    *             - { value: { type: "undefined" } }
+    *             - { value: { type: "null" } }
+    *             - { value: { type: "object", class: "Object" } }
+    *             - { get: { type: "object", class: "Function" },
+    *                 set: { type: "undefined" } }
++   *             - { get: { type "object", class: "Function" },
++   *                 getterValue: "foo", getterPrototypeLevel: 2 }
+    * @param boolean aRelaxed
+    *        True if name duplicates should be allowed.
+    * @return Property
+    *         The newly created Property instance, null if it already exists.
+    */
+   addProperty: function V_addProperty(aName = "", aDescriptor = {}, aRelaxed = false) {
+     if (this._store.has(aName) && !aRelaxed) {
+       return null;
+@@ -2376,24 +2385,27 @@ ViewHelpers.create({ constructor: Variab
+       let document = this.document;
+ 
+       let tooltip = document.createElement("tooltip");
+       tooltip.id = "tooltip-" + this._idString;
+ 
+       let configurableLabel = document.createElement("label");
+       let enumerableLabel = document.createElement("label");
+       let writableLabel = document.createElement("label");
++      let safeGetterLabel = document.createElement("label");
+       configurableLabel.setAttribute("value", "configurable");
+       enumerableLabel.setAttribute("value", "enumerable");
+       writableLabel.setAttribute("value", "writable");
++      safeGetterLabel.setAttribute("value", "native-getter");
+ 
+       tooltip.setAttribute("orient", "horizontal");
+       tooltip.appendChild(configurableLabel);
+       tooltip.appendChild(enumerableLabel);
+       tooltip.appendChild(writableLabel);
++      tooltip.appendChild(safeGetterLabel);
+ 
+       this._target.appendChild(tooltip);
+       this._target.setAttribute("tooltip", tooltip.id);
+     }
+     if (this.ownerView.eval && !this._isUndefined && (this.getter || this.setter)) {
+       this._editNode.setAttribute("tooltiptext", this.ownerView.editButtonTooltip);
+     }
+     if (this.ownerView.eval) {
+@@ -2422,16 +2434,19 @@ ViewHelpers.create({ constructor: Variab
+       this._target.setAttribute("non-configurable", "");
+     }
+     if (!descriptor.null && !descriptor.enumerable) {
+       this._target.setAttribute("non-enumerable", "");
+     }
+     if (!descriptor.null && !descriptor.writable && !this.ownerView.getter && !this.ownerView.setter) {
+       this._target.setAttribute("non-writable", "");
+     }
++    if (descriptor && "getterValue" in descriptor) {
++      this._target.setAttribute("safe-getter", "");
++    }
+     if (name == "this") {
+       this._target.setAttribute("self", "");
+     }
+     else if (name == "<exception>") {
+       this._target.setAttribute("exception", "");
+     }
+     else if (name == "__proto__") {
+       this._target.setAttribute("proto", "");
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -123,16 +123,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_longstring_hang.js \
+ 	browser_console_consolejsm_output.js \
+ 	browser_webconsole_bug_837351_securityerrors.js \
+ 	browser_bug_865871_variables_view_close_on_esc_key.js \
+ 	browser_bug_865288_repeat_different_objects.js \
+ 	browser_jsterm_inspect.js \
+ 	browser_bug_869003_inspect_cross_domain_object.js \
+ 	browser_bug_862916_console_dir_and_filter_off.js \
++	browser_console_native_getters.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+ 	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_console_native_getters.js b/browser/devtools/webconsole/test/browser_console_native_getters.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console_native_getters.js
+@@ -0,0 +1,121 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Check that native getters and setters for DOM elements work as expected in
++// variables view - bug 870220.
++
++const TEST_URI = "data:text/html;charset=utf8,<title>bug870220</title>\n" +
++                 "<p>hello world\n<p>native getters!";
++
++let gWebConsole, gJSTerm, gVariablesView;
++
++function test()
++{
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function consoleOpened(hud)
++{
++  gWebConsole = hud;
++  gJSTerm = hud.jsterm;
++
++  gJSTerm.execute("document");
++
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "[object HTMLDocument]",
++      category: CATEGORY_OUTPUT,
++      objects: true,
++    }],
++  }).then(onEvalResult);
++}
++
++function onEvalResult(aResults)
++{
++  let clickable = aResults[0].clickableElements[0];
++  ok(clickable, "clickable object found");
++
++  gJSTerm.once("variablesview-fetched", onDocumentFetch);
++  EventUtils.synthesizeMouse(clickable, 2, 2, {}, gWebConsole.iframeWindow)
++}
++
++function onDocumentFetch(aEvent, aVar)
++{
++  gVariablesView = aVar._variablesView;
++  ok(gVariablesView, "variables view object");
++
++  findVariableViewProperties(aVar, [
++    { name: "title", value: "bug870220" },
++    { name: "bgColor" },
++  ], { webconsole: gWebConsole }).then(onDocumentPropsFound);
++}
++
++function onDocumentPropsFound(aResults)
++{
++  let prop = aResults[1].matchedProp;
++  ok(prop, "matched the |bgColor| property in the variables view");
++
++  // Check that property value updates work.
++  updateVariablesViewProperty({
++    property: prop,
++    field: "value",
++    string: "'red'",
++    webconsole: gWebConsole,
++    callback: onFetchAfterBackgroundUpdate,
++  });
++}
++
++function onFetchAfterBackgroundUpdate(aEvent, aVar)
++{
++  info("onFetchAfterBackgroundUpdate");
++
++  is(content.document.bgColor, "red", "document background color changed");
++
++  findVariableViewProperties(aVar, [
++    { name: "bgColor", value: "red" },
++  ], { webconsole: gWebConsole }).then(testParagraphs);
++}
++
++function testParagraphs()
++{
++  gJSTerm.execute("$$('p')");
++
++  waitForMessages({
++    webconsole: gWebConsole,
++    messages: [{
++      text: "[object NodeList]",
++      category: CATEGORY_OUTPUT,
++      objects: true,
++    }],
++  }).then(onEvalNodeList);
++}
++
++function onEvalNodeList(aResults)
++{
++  let clickable = aResults[0].clickableElements[0];
++  ok(clickable, "clickable object found");
++
++  gJSTerm.once("variablesview-fetched", onNodeListFetch);
++  EventUtils.synthesizeMouse(clickable, 2, 2, {}, gWebConsole.iframeWindow)
++}
++
++function onNodeListFetch(aEvent, aVar)
++{
++  gVariablesView = aVar._variablesView;
++  ok(gVariablesView, "variables view object");
++
++  findVariableViewProperties(aVar, [
++    { name: "0.textContent", value: /hello world/ },
++    { name: "1.textContent", value: /native getters/ },
++  ], { webconsole: gWebConsole }).then(() => {
++    gWebConsole = gJSTerm = gVariablesView = null;
++    finishTest();
++  });
++}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+@@ -95,12 +95,12 @@ function testPropertyPanel()
+     },
+     failureFn: finishTest,
+   });
+ }
+ 
+ function onVariablesViewReady(aEvent, aView)
+ {
+   findVariableViewProperties(aView, [
+-    { name: "__proto__.body", value: "[object HTMLBodyElement]" },
++    { name: "body", value: "[object HTMLBodyElement]" },
+   ], { webconsole: gHUD }).then(finishTest);
+ }
+ 
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -3504,19 +3504,32 @@ JSTerm.prototype = {
+       else if (longString) {
+         aProperty.onexpand = this._fetchVarLongString;
+         aProperty.showArrow();
+       }
+     };
+ 
+     let client = new GripClient(this.hud.proxy.client, grip);
+     client.getPrototypeAndProperties((aResponse) => {
+-      let { ownProperties, prototype } = aResponse;
++      let { ownProperties, prototype, safeGetterValues } = aResponse;
+       let sortable = VariablesView.NON_SORTABLE_CLASSES.indexOf(grip.class) == -1;
+ 
++      // Merge the safe getter values into one object such that we can use it
++      // in VariablesView.
++      for (let name of Object.keys(safeGetterValues)) {
++        if (name in ownProperties) {
++          ownProperties[name].getterValue = safeGetterValues[name].getterValue;
++          ownProperties[name].getterPrototypeLevel = safeGetterValues[name]
++                                                     .getterPrototypeLevel;
++        }
++        else {
++          ownProperties[name] = safeGetterValues[name];
++        }
++      }
++
+       // Add all the variable properties.
+       if (ownProperties) {
+         aVar.addProperties(ownProperties, {
+           sorted: sortable,
+           callback: onNewProperty,
+         });
+       }
+ 
+diff --git a/browser/themes/linux/devtools/widgets.css b/browser/themes/linux/devtools/widgets.css
+--- a/browser/themes/linux/devtools/widgets.css
++++ b/browser/themes/linux/devtools/widgets.css
+@@ -501,16 +501,20 @@
+ .variable-or-property[non-configurable] > .title > .name {
+   border-bottom: 1px dashed #99f;
+ }
+ 
+ .variable-or-property[non-configurable][non-writable] > .title > .name {
+   border-bottom: 1px dashed #f99;
+ }
+ 
++.variable-or-property[safe-getter] > .title > .name {
++  border-bottom: 1px dashed #8b0;
++}
++
+ .variable-or-property[non-writable] > .title:after {
+   content: " ";
+   display: inline-block;
+   background: url("chrome://browser/skin/identity-icons-https.png") no-repeat;
+   width: 16px;
+   height: 16px;
+   opacity: 0.5;
+ }
+@@ -534,16 +538,20 @@
+ }
+ 
+ .variable-or-property[non-enumerable] > tooltip > label[value=enumerable],
+ .variable-or-property[non-configurable] > tooltip > label[value=configurable],
+ .variable-or-property[non-writable] > tooltip > label[value=writable] {
+   text-decoration: line-through;
+ }
+ 
++.variable-or-property:not([safe-getter]) > tooltip > label[value=native-getter] {
++  display: none;
++}
++
+ /* Variables and properties editing */
+ 
+ .variables-view-delete {
+   list-style-image: url("moz-icon://stock/gtk-close?size=menu");
+   opacity: 0;
+ }
+ 
+ .variables-view-delete:hover {
+diff --git a/browser/themes/osx/devtools/widgets.css b/browser/themes/osx/devtools/widgets.css
+--- a/browser/themes/osx/devtools/widgets.css
++++ b/browser/themes/osx/devtools/widgets.css
+@@ -501,16 +501,20 @@
+ .variable-or-property[non-configurable] > .title > .name {
+   border-bottom: 1px dashed #99f;
+ }
+ 
+ .variable-or-property[non-configurable][non-writable] > .title > .name {
+   border-bottom: 1px dashed #f99;
+ }
+ 
++.variable-or-property[safe-getter] > .title > .name {
++  border-bottom: 1px dashed #8b0;
++}
++
+ .variable-or-property[non-writable] > .title:after {
+   content: " ";
+   display: inline-block;
+   background: url("chrome://browser/skin/identity-icons-https.png") no-repeat;
+   width: 16px;
+   height: 16px;
+   opacity: 0.5;
+ }
+@@ -534,16 +538,20 @@
+ }
+ 
+ .variable-or-property[non-enumerable] > tooltip > label[value=enumerable],
+ .variable-or-property[non-configurable] > tooltip > label[value=configurable],
+ .variable-or-property[non-writable] > tooltip > label[value=writable] {
+   text-decoration: line-through;
+ }
+ 
++.variable-or-property:not([safe-getter]) > tooltip > label[value=native-getter] {
++  display: none;
++}
++
+ /* Variables and properties editing */
+ 
+ .variables-view-delete {
+   list-style-image: url("chrome://browser/skin/devtools/toolbarbutton-close.png");
+   -moz-image-region: rect(0,32px,16px,16px);
+   opacity: 0;
+ }
+ 
+diff --git a/browser/themes/windows/devtools/widgets.css b/browser/themes/windows/devtools/widgets.css
+--- a/browser/themes/windows/devtools/widgets.css
++++ b/browser/themes/windows/devtools/widgets.css
+@@ -504,16 +504,20 @@
+ .variable-or-property[non-configurable] > .title > .name {
+   border-bottom: 1px dashed #99f;
+ }
+ 
+ .variable-or-property[non-configurable][non-writable] > .title > .name {
+   border-bottom: 1px dashed #f99;
+ }
+ 
++.variable-or-property[safe-getter] > .title > .name {
++  border-bottom: 1px dashed #8b0;
++}
++
+ .variable-or-property[non-writable] > .title:after {
+   content: " ";
+   display: inline-block;
+   background: url("chrome://browser/skin/identity-icons-https.png") no-repeat;
+   width: 16px;
+   height: 16px;
+   opacity: 0.5;
+ }
+@@ -537,16 +541,20 @@
+ }
+ 
+ .variable-or-property[non-enumerable] > tooltip > label[value=enumerable],
+ .variable-or-property[non-configurable] > tooltip > label[value=configurable],
+ .variable-or-property[non-writable] > tooltip > label[value=writable] {
+   text-decoration: line-through;
+ }
+ 
++.variable-or-property:not([safe-getter]) > tooltip > label[value=native-getter] {
++  display: none;
++}
++
+ /* Variables and properties editing */
+ 
+ .variables-view-delete {
+   list-style-image: url("chrome://browser/skin/devtools/toolbarbutton-close.png");
+   -moz-image-region: rect(0,32px,16px,16px);
+   opacity: 0;
+ }
+ 
+diff --git a/toolkit/devtools/Console.jsm b/toolkit/devtools/Console.jsm
+--- a/toolkit/devtools/Console.jsm
++++ b/toolkit/devtools/Console.jsm
+@@ -182,17 +182,17 @@ function log(aThing) {
+     else if (type == "Set") {
+       let i = 0;
+       reply += "Set\n";
+       for (let value of aThing) {
+         reply += logProperty('' + i, value);
+         i++;
+       }
+     }
+-    else if (type.match("Error$")) {
++    else if (type.match("Error$") || aThing.name == "NS_ERROR_FAILURE") {
+       reply += "  Message: " + aThing + "\n";
+       if (aThing.stack) {
+         reply += "  Stack:\n";
+         var frame = aThing.stack;
+         while (frame) {
+           reply += "    " + frame + "\n";
+           frame = frame.caller;
+         }
+diff --git a/toolkit/devtools/debugger/server/dbg-script-actors.js b/toolkit/devtools/debugger/server/dbg-script-actors.js
+--- a/toolkit/devtools/debugger/server/dbg-script-actors.js
++++ b/toolkit/devtools/debugger/server/dbg-script-actors.js
+@@ -27,27 +27,16 @@
+ function ThreadActor(aHooks, aGlobal)
+ {
+   this._state = "detached";
+   this._frameActors = [];
+   this._environmentActors = [];
+   this._hooks = aHooks;
+   this.global = aGlobal;
+ 
+-  // A cache of prototype chains for objects that have received a
+-  // prototypeAndProperties request. Due to the way the debugger frontend works,
+-  // this corresponds to a cache of prototype chains that the user has been
+-  // inspecting in the variables tree view. This allows the debugger to evaluate
+-  // native getter methods for WebIDL attributes that are meant to be called on
+-  // the instace and not on the prototype.
+-  //
+-  // The map keys are Debugger.Object instances requested by the client and the
+-  // values are arrays of Debugger.Objects that make up their prototype chain.
+-  this._protoChains = new Map();
+-
+   this.findGlobals = this.globalManager.findGlobals.bind(this);
+   this.onNewGlobal = this.globalManager.onNewGlobal.bind(this);
+   this.onNewSource = this.onNewSource.bind(this);
+ 
+   this._options = {
+     useSourceMaps: false
+   };
+ }
+@@ -181,17 +170,16 @@ ThreadActor.prototype = {
+   disconnect: function TA_disconnect() {
+     dumpn("in ThreadActor.prototype.disconnect");
+     if (this._state == "paused") {
+       this.onResume();
+     }
+ 
+     this._state = "exited";
+ 
+-    this._protoChains.clear();
+     this.clearDebuggees();
+ 
+     if (!this.dbg) {
+       return;
+     }
+     this.dbg.enabled = false;
+     this.dbg = null;
+   },
+@@ -1292,62 +1280,16 @@ ThreadActor.prototype = {
+             this._setBreakpoint(bp);
+           }
+         }
+       }
+ 
+       return true;
+     });
+   },
+-
+-  /**
+-   * Finds the prototype chain cache for the provided object and returns the
+-   * full cache entry, or null if the object is not found in the cache.
+-   *
+-   * @param aObject Debugger.Object
+-   *        The object to look up.
+-   * @returns the array of objects that correspond to the found cache entry.
+-   */
+-  _findProtoChain: function TA__findProtoChain(aObject) {
+-    if (this._protoChains.has(aObject)) {
+-      return this._protoChains.get(aObject);
+-    }
+-    for (let [obj, chain] of this._protoChains) {
+-      if (chain.indexOf(aObject) != -1) {
+-        return chain;
+-      }
+-    }
+-    return null;
+-  },
+-
+-  /**
+-   * Removes the specified object and its prototype chain from the prototype
+-   * chain cache. Returns true if the removal was successful and false if the
+-   * object was not found in the cache.
+-   *
+-   * @param aObject Debugger.Object
+-   *        The object to remove from the cache.
+-   * @returns true if the object was removed, false if it was not found.
+-   */
+-  _removeFromProtoChain:function TA__removeFromProtoChain(aObject) {
+-    let retval = false;
+-    if (this._protoChains.has(aObject)) {
+-      this._protoChains.delete(aObject);
+-      retval = true;
+-    }
+-    for (let [obj, chain] of this._protoChains) {
+-      let index = chain.indexOf(aObject);
+-      if (index != -1) {
+-        chain.splice(index);
+-        retval = true;
+-      }
+-    }
+-    return retval;
+-  },
+-
+ };
+ 
+ ThreadActor.prototype.requestTypes = {
+   "attach": ThreadActor.prototype.onAttach,
+   "detach": ThreadActor.prototype.onDetach,
+   "reconfigure": ThreadActor.prototype.onReconfigure,
+   "resume": ThreadActor.prototype.onResume,
+   "clientEvaluate": ThreadActor.prototype.onClientEvaluate,
+@@ -1546,21 +1488,16 @@ ObjectActor.prototype = {
+   /**
+    * Releases this actor from the pool.
+    */
+   release: function OA_release() {
+     if (this.registeredPool.objectActors) {
+       this.registeredPool.objectActors.delete(this.obj);
+     }
+     this.registeredPool.removeActor(this);
+-    this.disconnect();
+-  },
+-
+-  disconnect: function OA_disconnect() {
+-    this.threadActor._removeFromProtoChain(this.obj);
+   },
+ 
+   /**
+    * Handle a protocol request to provide the names of the properties defined on
+    * the object and not its prototype.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+@@ -1573,41 +1510,129 @@ ObjectActor.prototype = {
+   /**
+    * Handle a protocol request to provide the prototype and own properties of
+    * the object.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+    */
+   onPrototypeAndProperties: function OA_onPrototypeAndProperties(aRequest) {
+-    if (this.obj.proto) {
+-      // Store the object and its prototype to the prototype chain cache, so that
+-      // we can evaluate native getter methods for WebIDL attributes that are
+-      // meant to be called on the instace and not on the prototype.
+-      //
+-      // TODO: after bug 801084, we could restrict the cache to objects where
+-      // this.obj.hostAnnotations.isWebIDLObject == true
+-      let chain = this.threadActor._findProtoChain(this.obj);
+-      if (!chain) {
+-        chain = [];
+-        this.threadActor._protoChains.set(this.obj, chain);
+-        chain.push(this.obj);
+-      }
+-      if (chain.indexOf(this.obj.proto) == -1) {
+-        chain.push(this.obj.proto);
+-      }
+-    }
+-
+-    let ownProperties = {};
++    let ownProperties = Object.create(null);
+     for (let name of this.obj.getOwnPropertyNames()) {
+       ownProperties[name] = this._propertyDescriptor(name);
+     }
+     return { from: this.actorID,
+              prototype: this.threadActor.createValueGrip(this.obj.proto),
+-             ownProperties: ownProperties };
++             ownProperties: ownProperties,
++             safeGetterValues: this._findSafeGetterValues(ownProperties) };
++  },
++
++  /**
++   * Find the safe getter values for the current Debugger.Object, |this.obj|.
++   *
++   * @private
++   * @param object aOwnProperties
++   *        The object that holds the list of known ownProperties for
++   *        |this.obj|.
++   * @return object
++   *         An object that maps property names to safe getter descriptors as
++   *         defined by the remote debugging protocol.
++   */
++  _findSafeGetterValues: function OA__findSafeGetterValues(aOwnProperties)
++  {
++    let safeGetterValues = Object.create(null);
++    let obj = this.obj;
++    let level = 0;
++
++    while (obj) {
++      let getters = this._findSafeGetters(obj);
++      for (let name of getters) {
++        // Avoid overwriting properties from prototypes closer to this.obj. Also
++        // avoid providing safeGetterValues from prototypes if property |name|
++        // is already defined as an own property.
++        if (name in safeGetterValues ||
++            (obj != this.obj && name in aOwnProperties)) {
++          continue;
++        }
++
++        let desc = null, getter = null;
++        try {
++          desc = obj.getOwnPropertyDescriptor(name);
++          getter = desc.get;
++        } catch (ex) {
++          // The above can throw if the cache becomes stale.
++        }
++        if (!getter) {
++          obj._safeGetters = null;
++          continue;
++        }
++
++        let result = getter.call(this.obj);
++        if (result && !("throw" in result)) {
++          let getterValue = undefined;
++          if ("return" in result) {
++            getterValue = result.return;
++          } else if ("yield" in result) {
++            getterValue = result.yield;
++          }
++          safeGetterValues[name] = {
++            getterValue: this.threadActor.createValueGrip(getterValue),
++            getterPrototypeLevel: level,
++            enumerable: desc.enumerable,
++            writable: level == 0 ? desc.writable : true,
++          };
++        }
++      }
++
++      obj = obj.proto;
++      level++;
++    }
++
++    return safeGetterValues;
++  },
++
++  /**
++   * Find the safe getters for a given Debugger.Object. Safe getters are native
++   * getters which are safe to execute.
++   *
++   * @private
++   * @param Debugger.Object aObject
++   *        The Debugger.Object where you want to find safe getters.
++   * @return Set
++   *         A Set of names of safe getters. This result is cached for each
++   *         Debugger.Object.
++   */
++  _findSafeGetters: function OA__findSafeGetters(aObject)
++  {
++    if (aObject._safeGetters) {
++      return aObject._safeGetters;
++    }
++
++    let getters = new Set();
++    for (let name of aObject.getOwnPropertyNames()) {
++      let desc = null;
++      try {
++        desc = aObject.getOwnPropertyDescriptor(name);
++      } catch (e) {
++        // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
++        // allowed (bug 560072).
++      }
++      if (!desc || desc.value !== undefined || !("get" in desc)) {
++        continue;
++      }
++
++      let fn = desc.get;
++      if (fn && fn.callable && fn.class == "Function" &&
++          fn.script === undefined) {
++        getters.add(name);
++      }
++    }
++
++    aObject._safeGetters = getters;
++    return getters;
+   },
+ 
+   /**
+    * Handle a protocol request to provide the prototype of the object.
+    *
+    * @param aRequest object
+    *        The protocol request object.
+    */
+@@ -1660,58 +1685,20 @@ ObjectActor.prototype = {
+       configurable: desc.configurable,
+       enumerable: desc.enumerable
+     };
+ 
+     if (desc.value !== undefined) {
+       retval.writable = desc.writable;
+       retval.value = this.threadActor.createValueGrip(desc.value);
+     } else {
+-
+       if ("get" in desc) {
+-        let fn = desc.get;
+-        if (fn && fn.callable && fn.class == "Function" &&
+-            fn.script === undefined) {
+-          // Maybe this is a DOM getter. Try calling it on every object in the
+-          // prototype chain, until it doesn't throw.
+-          let rv, chain = this.threadActor._findProtoChain(this.obj);
+-          let index = chain.indexOf(this.obj);
+-          for (let i = index; i >= 0; i--) {
+-            // If we had hostAnnotations (bug 801084) we would have been able to
+-            // filter on chain[i].hostAnnotations.isWebIDLObject or similar.
+-            rv = fn.call(chain[i]);
+-            // If the error D.O. wasn't completely opaque (bug 812764?), we
+-            // could perhaps treat other errors differently.
+-            if (rv && !("throw" in rv)) {
+-              // If calling the getter produced a return value, create a data
+-              // property descriptor.
+-              if ("return" in rv) {
+-                retval.value = this.threadActor.createValueGrip(rv.return);
+-              } else if ("yield" in rv) {
+-                retval.value = this.threadActor.createValueGrip(rv.yield);
+-              }
+-              break;
+-            }
+-          }
+-
+-          // If calling the getter didn't produce a data property descriptor,
+-          // use the original accessor property descriptor.
+-          if (!("value" in retval)) {
+-            retval.get = this.threadActor.createValueGrip(fn);
+-          }
+-        } else {
+-          // It doesn't look like a WebIDL attribute getter, just use the getter
+-          // from the original accessor property descriptor.
+-          retval.get = this.threadActor.createValueGrip(fn);
+-        }
++        retval.get = this.threadActor.createValueGrip(desc.get);
+       }
+-
+-      // If we couldn't convert it to a data property and there is a setter in
+-      // the original property descriptor, use it.
+-      if ("set" in desc && !("value" in retval)) {
++      if ("set" in desc) {
+         retval.set = this.threadActor.createValueGrip(desc.set);
+       }
+     }
+     return retval;
+   },
+ 
+   /**
+    * Handle a protocol request to provide the source code of a function.
+diff --git a/toolkit/devtools/webconsole/test/Makefile.in b/toolkit/devtools/webconsole/test/Makefile.in
+--- a/toolkit/devtools/webconsole/test/Makefile.in
++++ b/toolkit/devtools/webconsole/test/Makefile.in
+@@ -17,15 +17,16 @@ MOCHITEST_CHROME_FILES = \
+     test_consoleapi.html \
+     test_jsterm.html \
+     test_object_actor.html \
+     test_network_get.html \
+     test_network_post.html \
+     test_network_longstring.html \
+     test_file_uri.html \
+     test_bug819670_getter_throws.html \
++    test_object_actor_native_getters.html \
+     network_requests_iframe.html \
+     data.json \
+     data.json^headers^ \
+     common.js \
+     $(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/toolkit/devtools/webconsole/test/test_object_actor_native_getters.html b/toolkit/devtools/webconsole/test/test_object_actor_native_getters.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/test_object_actor_native_getters.html
+@@ -0,0 +1,106 @@
++<!DOCTYPE HTML>
++<html lang="en">
++<head>
++  <meta charset="utf8">
++  <title>Test for the native getters in object actors</title>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript;version=1.8" src="common.js"></script>
++  <!-- Any copyright is dedicated to the Public Domain.
++     - http://creativecommons.org/publicdomain/zero/1.0/ -->
++</head>
++<body>
++<p>Test for the native getters in object actors</p>
++
++<script class="testbody" type="text/javascript;version=1.8">
++SimpleTest.waitForExplicitFinish();
++
++let expectedProps = [];
++let expectedSafeGetters = [];
++
++function startTest()
++{
++  removeEventListener("load", startTest);
++
++  attachConsole(["ConsoleAPI"], onAttach, true);
++}
++
++function onAttach(aState, aResponse)
++{
++  onConsoleCall = onConsoleCall.bind(null, aState);
++  aState.dbgClient.addListener("consoleAPICall", onConsoleCall);
++
++  top.console.log("hello", document);
++
++  expectedProps = {
++    "location": {
++      get: {
++        type: "object",
++        class: "Function",
++        actor: /[a-z]/,
++      },
++    },
++  };
++
++  expectedSafeGetters = {
++    "title": {
++      getterValue: /native getters in object actors/,
++      getterPrototypeLevel: 2,
++    },
++    "styleSheets": {
++      getterValue: "[object Object]",
++      getterPrototypeLevel: 2,
++    },
++  };
++}
++
++function onConsoleCall(aState, aType, aPacket)
++{
++  is(aPacket.from, aState.actor, "console API call actor");
++
++  info("checking the console API call packet");
++
++  checkConsoleAPICall(aPacket.message, {
++    level: "log",
++    filename: /test_object_actor/,
++    functionName: "onAttach",
++    arguments: ["hello", {
++      type: "object",
++      actor: /[a-z]/,
++    }],
++  });
++
++  aState.dbgClient.removeListener("consoleAPICall", onConsoleCall);
++
++  info("inspecting object properties");
++  let args = aPacket.message.arguments;
++  onProperties = onProperties.bind(null, aState);
++
++  let client = new GripClient(aState.dbgClient, args[1]);
++  client.getPrototypeAndProperties(onProperties);
++}
++
++function onProperties(aState, aResponse)
++{
++  let props = aResponse.ownProperties;
++  let keys = Object.keys(props);
++  info(keys.length + " ownProperties: " + keys);
++
++  ok(keys.length >= Object.keys(expectedProps).length, "number of properties");
++
++  info("check ownProperties");
++  checkObject(props, expectedProps);
++  info("check safeGetterValues");
++  checkObject(aResponse.safeGetterValues, expectedSafeGetters);
++
++  expectedProps = [];
++  expectedSafeGetters = [];
++
++  closeDebugger(aState, function() {
++    SimpleTest.finish();
++  });
++}
++
++addEventListener("load", startTest);
++</script>
++</body>
++</html>
