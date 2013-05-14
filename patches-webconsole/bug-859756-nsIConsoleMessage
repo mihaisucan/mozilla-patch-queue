@@ -1,0 +1,451 @@
+# HG changeset patch
+# Parent 965fa67fc4104822b16e250a4675df15e73fbed9
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1368561496 -10800
+
+Bug 859756 - [browserconsole] Add timestamp, category and window IDs to nsIConsoleMessages; r=bz
+
+diff --git a/js/xpconnect/idl/nsIScriptError.idl b/js/xpconnect/idl/nsIScriptError.idl
+--- a/js/xpconnect/idl/nsIScriptError.idl
++++ b/js/xpconnect/idl/nsIScriptError.idl
+@@ -6,17 +6,17 @@
+ /*
+  * nsIConsoleMessage subclass for representing JavaScript errors and warnings.
+  */
+ 
+ 
+ #include "nsISupports.idl"
+ #include "nsIConsoleMessage.idl"
+ 
+-[scriptable, uuid(ec640482-be5f-49a0-a9cb-c87eacce9291)]
++[scriptable, uuid(cac9d8e8-0d53-4fa8-9903-bb367e4fa1fe)]
+ interface nsIScriptError : nsIConsoleMessage
+ {
+     /** pseudo-flag for default case */
+     const unsigned long errorFlag = 0x0;
+ 
+     /** message is warning */
+     const unsigned long warningFlag = 0x1;
+ 
+@@ -36,43 +36,16 @@ interface nsIScriptError : nsIConsoleMes
+     readonly attribute AString errorMessage;
+ 
+     readonly attribute AString sourceName;
+     readonly attribute AString sourceLine;
+     readonly attribute uint32_t lineNumber;
+     readonly attribute uint32_t columnNumber;
+     readonly attribute uint32_t flags;
+ 
+-    /**
+-     * Categories I know about -
+-     * XUL javascript
+-     * content javascript (both of these from nsDocShell, currently)
+-     * component javascript (errors in JS components)
+-     */
+-    readonly attribute string category;
+-
+-    /*
+-       The time (in milliseconds from the Epoch) that the script error instance
+-       was initialised, and thus the time when the error occurred.
+-       Currently used to display date and time of the message in Error console.
+-       The timestamp is initialized as JS_now/1000 so that it can be
+-       compared to Date.now in Javascript.
+-     */
+-    readonly attribute long long timeStamp;
+-
+-    /* Get the window id this was initialized with.  Zero will be
+-       returned if init() was used instead of initWithWindowID(). */
+-    readonly attribute unsigned long long outerWindowID;
+-
+-    /* Get the inner window id this was initialized with.  Zero will be
+-       returned if init() was used instead of initWithWindowID(). */
+-    readonly attribute unsigned long long innerWindowID;
+-
+-    readonly attribute boolean isFromPrivateWindow;
+-
+     void init(in AString message,
+               in AString sourceName,
+               in AString sourceLine,
+               in uint32_t lineNumber,
+               in uint32_t columnNumber,
+               in uint32_t flags,
+               in string category);
+ 
+@@ -82,18 +55,16 @@ interface nsIScriptError : nsIConsoleMes
+     void initWithWindowID(in AString message,
+                           in AString sourceName,
+                           in AString sourceLine,
+                           in uint32_t lineNumber,
+                           in uint32_t columnNumber,
+                           in uint32_t flags,
+                           in string category,
+                           in unsigned long long innerWindowID);
+-
+-    AUTF8String toString();
+ };
+ 
+ %{ C++
+ #define NS_SCRIPTERROR_CID \
+-{ 0xe38e53b9, 0x5bb0, 0x456a, { 0xb5, 0x53, 0x57, 0x93, 0x70, 0xcb, 0x15, 0x67 }}
++{ 0x1950539a, 0x90f0, 0x4d22, { 0xb5, 0xaf, 0x71, 0x32, 0x9c, 0x68, 0xfa, 0x35 }}
+ 
+ #define NS_SCRIPTERROR_CONTRACTID "@mozilla.org/scripterror;1"
+ %}
+diff --git a/js/xpconnect/src/XPCModule.h b/js/xpconnect/src/XPCModule.h
+--- a/js/xpconnect/src/XPCModule.h
++++ b/js/xpconnect/src/XPCModule.h
+@@ -3,16 +3,18 @@
+  * This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "xpcprivate.h"
+ #include "mozilla/ModuleUtils.h"
+ #include "mozJSComponentLoader.h"
+ #include "mozJSSubScriptLoader.h"
++#include "nsConsoleMessage.h"
++#include "nsIConsoleMessage.h"
+ 
+ /* Module implementation for the xpconnect library. */
+ 
+ #define XPCVARIANT_CONTRACTID "@mozilla.org/xpcvariant;1"
+ 
+ // {FE4F7592-C1FC-4662-AC83-538841318803}
+ #define SCRIPTABLE_INTERFACES_CID                                             \
+     {0xfe4f7592, 0xc1fc, 0x4662,                                              \
+@@ -20,42 +22,46 @@
+ 
+ #define MOZJSSUBSCRIPTLOADER_CONTRACTID "@mozilla.org/moz/jssubscript-loader;1"
+ 
+ NS_GENERIC_FACTORY_CONSTRUCTOR(nsJSID)
+ NS_GENERIC_FACTORY_CONSTRUCTOR(nsXPCException)
+ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsIXPConnect,
+                                          nsXPConnect::GetSingleton)
+ NS_GENERIC_FACTORY_CONSTRUCTOR(nsScriptError)
++NS_GENERIC_FACTORY_CONSTRUCTOR(nsConsoleMessage)
+ 
+ NS_GENERIC_FACTORY_CONSTRUCTOR(mozJSComponentLoader)
+ NS_GENERIC_FACTORY_CONSTRUCTOR(mozJSSubScriptLoader)
+ 
+ NS_DEFINE_NAMED_CID(NS_JS_ID_CID);
+ NS_DEFINE_NAMED_CID(NS_XPCONNECT_CID);
+ NS_DEFINE_NAMED_CID(NS_XPCEXCEPTION_CID);
+ NS_DEFINE_NAMED_CID(NS_SCRIPTERROR_CID);
++NS_DEFINE_NAMED_CID(NS_CONSOLEMESSAGE_CID);
+ NS_DEFINE_NAMED_CID(MOZJSCOMPONENTLOADER_CID);
+ NS_DEFINE_NAMED_CID(MOZ_JSSUBSCRIPTLOADER_CID);
+ 
+ #define XPCONNECT_CIDENTRIES                                                  \
+   { &kNS_JS_ID_CID, false, NULL,  nsJSIDConstructor },                        \
+   { &kNS_XPCONNECT_CID, false, NULL,  nsIXPConnectConstructor },              \
+   { &kNS_XPCEXCEPTION_CID, false, NULL, nsXPCExceptionConstructor },          \
+   { &kNS_SCRIPTERROR_CID, false, NULL, nsScriptErrorConstructor },            \
++  { &kNS_CONSOLEMESSAGE_CID, false, NULL, nsConsoleMessageConstructor },      \
+   { &kMOZJSCOMPONENTLOADER_CID, false, NULL, mozJSComponentLoaderConstructor },\
+   { &kMOZ_JSSUBSCRIPTLOADER_CID, false, NULL, mozJSSubScriptLoaderConstructor },
+ 
+ #define XPCONNECT_CONTRACTS                                                   \
+   { XPC_ID_CONTRACTID, &kNS_JS_ID_CID },                                      \
+   { XPC_XPCONNECT_CONTRACTID, &kNS_XPCONNECT_CID },                           \
+   { XPC_CONTEXT_STACK_CONTRACTID, &kNS_XPCONNECT_CID },                       \
+   { XPC_RUNTIME_CONTRACTID, &kNS_XPCONNECT_CID },                             \
+   { XPC_EXCEPTION_CONTRACTID, &kNS_XPCEXCEPTION_CID },                        \
+   { NS_SCRIPTERROR_CONTRACTID, &kNS_SCRIPTERROR_CID },                        \
++  { NS_CONSOLEMESSAGE_CONTRACTID, &kNS_CONSOLEMESSAGE_CID },                  \
+   { MOZJSCOMPONENTLOADER_CONTRACTID, &kMOZJSCOMPONENTLOADER_CID },            \
+   { MOZJSSUBSCRIPTLOADER_CONTRACTID, &kMOZ_JSSUBSCRIPTLOADER_CID },
+ 
+ #define XPCONNECT_CATEGORIES \
+   { "module-loader", "js", MOZJSCOMPONENTLOADER_CONTRACTID },
+ 
+ nsresult xpcModuleCtor();
+ void xpcModuleDtor();
+diff --git a/js/xpconnect/src/nsScriptError.cpp b/js/xpconnect/src/nsScriptError.cpp
+--- a/js/xpconnect/src/nsScriptError.cpp
++++ b/js/xpconnect/src/nsScriptError.cpp
+@@ -90,16 +90,24 @@ nsScriptError::GetFlags(uint32_t *result
+ NS_IMETHODIMP
+ nsScriptError::GetCategory(char **result) {
+     *result = ToNewCString(mCategory);
+     return NS_OK;
+ }
+ 
+ NS_IMETHODIMP
+ nsScriptError::Init(const nsAString& message,
++                       const char *category,
++                       uint64_t innerWindowID)
++{
++  return InitWithWindowID(message, NS_LITERAL_STRING(""), NS_LITERAL_STRING(""), 0, 0, 0, category, 0);
++}
++
++NS_IMETHODIMP
++nsScriptError::Init(const nsAString& message,
+                     const nsAString& sourceName,
+                     const nsAString& sourceLine,
+                     uint32_t lineNumber,
+                     uint32_t columnNumber,
+                     uint32_t flags,
+                     const char *category)
+ {
+     return InitWithWindowID(message, sourceName, sourceLine, lineNumber,
+diff --git a/layout/build/Makefile.in b/layout/build/Makefile.in
+--- a/layout/build/Makefile.in
++++ b/layout/build/Makefile.in
+@@ -297,16 +297,17 @@ LOCAL_INCLUDES	+= -I$(srcdir)/../base \
+ 		   -I$(topsrcdir)/editor/libeditor/base \
+ 		   -I$(topsrcdir)/editor/libeditor/text \
+ 		   -I$(topsrcdir)/editor/libeditor/html \
+ 		   -I$(topsrcdir)/editor/txmgr/src \
+ 		   -I$(topsrcdir)/editor/txtsvc/src \
+ 		   -I$(topsrcdir)/editor/composer/src \
+ 		   -I$(topsrcdir)/js/xpconnect/src \
+ 		   -I$(topsrcdir)/js/xpconnect/loader \
++		   -I$(topsrcdir)/xpcom/base \
+ 		   -I$(topsrcdir)/caps/include \
+ 		   -I$(topsrcdir)/netwerk/base/src \
+ 		   -I$(topsrcdir)/content/svg/content/src \
+ 		   -I$(topsrcdir)/extensions/cookie \
+ 		   -I$(topsrcdir)/netwerk/cookie \
+ 		   $(NULL)
+ 
+ ifdef MOZ_GSTREAMER
+diff --git a/xpcom/base/Makefile.in b/xpcom/base/Makefile.in
+--- a/xpcom/base/Makefile.in
++++ b/xpcom/base/Makefile.in
+@@ -97,16 +97,17 @@ DEFINES		+= -D_IMPL_NS_COM
+ 
+ ifneq (,$(filter gtk2,$(MOZ_WIDGET_TOOLKIT)))
+ CXXFLAGS        += $(MOZ_GTK2_CFLAGS)
+ endif
+ 
+ LOCAL_INCLUDES += \
+ 		-I$(srcdir)/../build \
+ 		-I$(topsrcdir)/xpcom/ds \
++		-I$(topsrcdir)/dom/base \
+ 		$(NULL)
+ 
+ # We generate ErrorListCxxDefines.h from ErrorList.h using regex.  The -n option
+ # suppresses printing the pattern space, and the p at the end prints it anyway,
+ # so we don't print lines that don't match the pattern to start with.
+ ErrorListCxxDefines.h: ErrorList.h Makefile
+ 		sed -n 's/.*ERROR(\([A-Z_0-9]*\).*/#define \1 nsresult::\1/p' < $< > $@
+ 
+diff --git a/xpcom/base/nsConsoleMessage.cpp b/xpcom/base/nsConsoleMessage.cpp
+--- a/xpcom/base/nsConsoleMessage.cpp
++++ b/xpcom/base/nsConsoleMessage.cpp
+@@ -4,34 +4,124 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /*
+  * Base implementation for console messages.
+  */
+ 
+ #include "nsConsoleMessage.h"
+ #include "nsReadableUtils.h"
++#include "jsapi.h"
++#include "nsGlobalWindow.h"
++#include "nsPIDOMWindow.h"
++#include "nsILoadContext.h"
++#include "nsIDocShell.h"
+ 
+ NS_IMPL_THREADSAFE_ISUPPORTS1(nsConsoleMessage, nsIConsoleMessage)
+ 
+ nsConsoleMessage::nsConsoleMessage() 
+ {
+ }
+ 
+ nsConsoleMessage::nsConsoleMessage(const PRUnichar *message) 
+ {
+-	mMessage.Assign(message);
++  nsAutoString m;
++  m.Assign(message);
++  Init(m, nullptr, 0);
+ }
+ 
+ NS_IMETHODIMP
+-nsConsoleMessage::GetMessageMoz(PRUnichar **result) {
+-    *result = ToNewUnicode(mMessage);
++nsConsoleMessage::Init(const nsAString& message,
++                       const char *category,
++                       uint64_t innerWindowID)
++{
++  mTimeStamp = JS_Now() / 1000;
++  mMessage.Assign(message);
++  mCategory.Assign(category);
++  mInnerWindowID = innerWindowID;
+ 
+-    return NS_OK;
++  if (innerWindowID) {
++    nsGlobalWindow* window =
++      nsGlobalWindow::GetInnerWindowWithId(innerWindowID);
++    if (window) {
++      nsPIDOMWindow* outer = window->GetOuterWindow();
++      if (outer)
++	mOuterWindowID = outer->WindowID();
++
++      nsIDocShell* docShell = window->GetDocShell();
++      nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(docShell);
++
++      if (loadContext) {
++	// Never mark exceptions from chrome windows as having come from
++	// private windows, since we always want them to be reported.
++	nsIPrincipal* winPrincipal = window->GetPrincipal();
++	mIsFromPrivateWindow = loadContext->UsePrivateBrowsing() &&
++	  !nsContentUtils::IsSystemPrincipal(winPrincipal);
++      }
++    }
++  }
++
++  return NS_OK;
+ }
+ 
+-//  NS_IMETHODIMP
+-//  nsConsoleMessage::Init(const PRUnichar *message) {
+-//      nsAutoString newMessage(message);
+-//      mMessage = ToNewUnicode(newMessage);
+-//      return NS_OK;
+-//  }
++NS_IMETHODIMP
++nsConsoleMessage::GetMessageMoz(PRUnichar **result)
++{
++  nsresult rv;
+ 
++  nsAutoCString message;
++  rv = ToString(message);
++  if (NS_FAILED(rv))
++    return rv;
++
++  *result = UTF8ToNewUnicode(message);
++  if (!*result)
++    return NS_ERROR_OUT_OF_MEMORY;
++
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++nsConsoleMessage::GetCategory(char **result)
++{
++  *result = ToNewCString(mCategory);
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++nsConsoleMessage::GetOuterWindowID(uint64_t *aOuterWindowID)
++{
++  *aOuterWindowID = mOuterWindowID;
++  return NS_OK;
++}
++
++  NS_IMETHODIMP
++nsConsoleMessage::GetInnerWindowID(uint64_t *aInnerWindowID)
++{
++  *aInnerWindowID = mInnerWindowID;
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++nsConsoleMessage::GetTimeStamp(int64_t *aTimeStamp)
++{
++  *aTimeStamp = mTimeStamp;
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++nsConsoleMessage::GetIsFromPrivateWindow(bool *aIsFromPrivateWindow)
++{
++  *aIsFromPrivateWindow = mIsFromPrivateWindow;
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++nsConsoleMessage::ToString(nsACString& /*UTF8*/ aResult)
++{
++  if (!mCategory.IsEmpty())
++    aResult.Assign(mCategory + NS_LITERAL_CSTRING(": ") +
++                   NS_ConvertUTF16toUTF8(mMessage));
++  else
++    aResult.Assign(ToNewUTF8String(mMessage));
++
++  return NS_OK;
++}
+diff --git a/xpcom/base/nsConsoleMessage.h b/xpcom/base/nsConsoleMessage.h
+--- a/xpcom/base/nsConsoleMessage.h
++++ b/xpcom/base/nsConsoleMessage.h
+@@ -17,12 +17,17 @@ public:
+     nsConsoleMessage(const PRUnichar *message);
+ 
+     NS_DECL_ISUPPORTS
+     NS_DECL_NSICONSOLEMESSAGE
+ 
+ private:
+     ~nsConsoleMessage() {}
+ 
++    int64_t mTimeStamp;
++    nsCString mCategory;
++    uint64_t mOuterWindowID;
++    uint64_t mInnerWindowID;
++    bool mIsFromPrivateWindow;
+     nsString mMessage;
+ };
+ 
+ #endif /* __nsconsolemessage_h__ */
+diff --git a/xpcom/base/nsIConsoleMessage.idl b/xpcom/base/nsIConsoleMessage.idl
+--- a/xpcom/base/nsIConsoleMessage.idl
++++ b/xpcom/base/nsIConsoleMessage.idl
+@@ -5,18 +5,54 @@
+ 
+ #include "nsISupports.idl"
+ 
+ /**
+  * This is intended as a base interface; implementations may want to
+  * provide an object that can be qi'ed to provide more specific
+  * message information.
+  */
+-[scriptable, uuid(41bd8784-1dd2-11b2-9553-8606958fffe1)]
++[scriptable, uuid(c14c151b-5ea4-47ed-8e85-d392cdd3e154)]
+ interface nsIConsoleMessage : nsISupports
+ {
++    void Init(in AString message, [optional] in string category, [optional] in unsigned long long innerWindowID);
++
++    /**
++     * The time (in milliseconds from the Epoch) that the message instance
++     * was initialised.
++     * The timestamp is initialized as JS_now/1000 so that it can be
++     * compared to Date.now in Javascript.
++     */
++    readonly attribute long long timeStamp;
++
++    /**
++     * Categories I know about
++     * - nsIScriptError:
++     *   XUL javascript
++     *   content javascript (both of these from nsDocShell, currently)
++     *   component javascript (errors in JS components)
++     * - nsIConsoleMessage: none yet.
++     */
++    readonly attribute string category;
++
++    /**
++     * Get the window id this was initialized with.
++     */
++    readonly attribute unsigned long long outerWindowID;
++
++    /**
++     * Get the inner window id this was initialized with.
++     */
++    readonly attribute unsigned long long innerWindowID;
++
++    readonly attribute boolean isFromPrivateWindow;
++
+     [binaryname(MessageMoz)] readonly attribute wstring message;
++
++    AUTF8String toString();
+ };
+ 
+ %{ C++
+ #define NS_CONSOLEMESSAGE_CID \
+-{ 0x56c9d666, 0x1dd2, 0x11b2, { 0xb4, 0x3c, 0xa8, 0x4b, 0xf3, 0xb3, 0xec, 0xbb }}
++{ 0x024efc9e, 0x54dc, 0x4844, { 0x80, 0x4b, 0x41, 0xd3, 0xf3, 0x69, 0x90, 0x73 }}
++
++#define NS_CONSOLEMESSAGE_CONTRACTID "@mozilla.org/consolemessage;1"
+ %}

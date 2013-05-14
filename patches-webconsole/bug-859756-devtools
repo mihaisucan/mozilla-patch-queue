@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent b08c89277fb6b9e37f166282477ae44c73932e6a
+# Parent f09c5e2f370398ecfa3ce254396a578d92994468
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1368478052 -10800
+# Date 1368561909 -10800
 
-Bug 859756 - [browserconsole] Missing nsIConsoleMessages from Browser Console; r=robcee
+Bug 859756 - [browserconsole] Show nsIConsoleMessages in the Browser Console; r=robcee
 
 diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/shared/DeveloperToolbar.jsm
 --- a/browser/devtools/shared/DeveloperToolbar.jsm
@@ -42,7 +42,7 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
                                    "resource://gre/modules/PluralForm.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "devtools",
-                                   "resource:///modules/devtools/gDevTools.jsm");
+                                   "resource://gre/modules/devtools/Loader.jsm");
  
 @@ -430,18 +432,18 @@ DeveloperToolbar.prototype._initErrorsCo
  {
@@ -85,14 +85,139 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
      this._warningsCount[aTabId]++;
    } else {
      this._errorsCount[aTabId]++;
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -124,16 +124,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_console_consolejsm_output.js \
+ 	browser_webconsole_bug_837351_securityerrors.js \
+ 	browser_bug_865871_variables_view_close_on_esc_key.js \
+ 	browser_bug_865288_repeat_different_objects.js \
+ 	browser_jsterm_inspect.js \
+ 	browser_bug_869003_inspect_cross_domain_object.js \
+ 	browser_bug_862916_console_dir_and_filter_off.js \
+ 	browser_console_native_getters.js \
++	browser_console_nsiconsolemessage.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+ 	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js b/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
+@@ -0,0 +1,93 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Check that nsIConsoleMessages show in the Browser Console and in the Web
++// Console. See bug 859756.
++
++const TEST_URI = "data:text/html;charset=utf8,<title>bug859756</title>\n" +
++                 "<p>hello world\n<p>nsIConsoleMessages ftw!";
++
++let gWebConsole, gJSTerm, gVariablesView;
++
++function test()
++{
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++
++    // Test for cached nsIConsoleMessages.
++    sendMessage("test1 for bug859756", "cat2012");
++
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function sendMessage(aMessage, aCategory)
++{
++  let windowID = WebConsoleUtils.getInnerWindowId(content);
++  let consoleMsg = Cc["@mozilla.org/consolemessage;1"]
++                   .createInstance(Ci.nsIConsoleMessage);
++  consoleMsg.Init(aMessage, aCategory, windowID);
++  Services.console.logMessage(consoleMsg);
++}
++
++function consoleOpened(hud)
++{
++  gWebConsole = hud;
++  gJSTerm = hud.jsterm;
++
++  // Send a message with no window ID.
++  Services.console.logStringMessage("do-not-show-me");
++
++  sendMessage("test2 for bug859756", "cat2013");
++
++  waitForMessages({
++    webconsole: hud,
++    messages: [
++      {
++        text: "cat2012: test1 for bug859756",
++        category: CATEGORY_JS,
++      },
++      {
++        text: "cat2013: test2 for bug859756",
++        category: CATEGORY_JS,
++      },
++    ],
++  }).then(onLogMessages);
++}
++
++function onLogMessages()
++{
++  let text = gWebConsole.outputNode.textContent;
++  is(text.indexOf("do-not-show-me"), -1,
++     "message without window ID is not displayed");
++  closeConsole(null, onWebConsoleClose);
++}
++
++function onWebConsoleClose()
++{
++  HUDConsoleUI.toggleBrowserConsole().then(onBrowserConsoleOpen);
++}
++
++function onBrowserConsoleOpen(hud)
++{
++  waitForMessages({
++    webconsole: hud,
++    messages: [
++      {
++        text: "cat2012: test1 for bug859756",
++        category: CATEGORY_JS,
++      },
++      {
++        text: "cat2013: test2 for bug859756",
++        category: CATEGORY_JS,
++      },
++      {
++        text: "do-not-show-me",
++        category: CATEGORY_JS,
++      },
++    ],
++  }).then(finishTest);
++}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -956,16 +956,19 @@ WebConsoleFrame.prototype = {
+@@ -951,21 +951,24 @@ WebConsoleFrame.prototype = {
+   {
+     if (!aRemoteMessages.length) {
+       return;
+     }
+ 
      aRemoteMessages.forEach(function(aMessage) {
        switch (aMessage._type) {
          case "PageError": {
-           let category = Utils.categoryForScriptError(aMessage);
+-          let category = Utils.categoryForScriptError(aMessage);
++          let category = Utils.categoryForConsoleMessage(aMessage);
            this.outputMessage(category, this.reportPageError,
                               [category, aMessage]);
            break;
@@ -108,11 +233,17 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }, this);
    },
  
-@@ -1188,16 +1191,32 @@ WebConsoleFrame.prototype = {
+@@ -1183,21 +1186,37 @@ WebConsoleFrame.prototype = {
+    * Handle PageError objects received from the server. This method outputs the
+    * given error.
+    *
+    * @param nsIScriptError aPageError
+    *        The error received from the server.
     */
    handlePageError: function WCF_handlePageError(aPageError)
    {
-     let category = Utils.categoryForScriptError(aPageError);
+-    let category = Utils.categoryForScriptError(aPageError);
++    let category = Utils.categoryForConsoleMessage(aPageError);
      this.outputMessage(category, this.reportPageError, [category, aPageError]);
    },
  
@@ -125,7 +256,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   */
 +  handleLogMessage: function WCF_handleLogMessage(aPacket)
 +  {
-+    let category = Utils.categoryForScriptError(aPacket.category);
++    let category = Utils.categoryForConsoleMessage(aPacket.category);
 +    this.outputMessage(category, () => {
 +      return this.createMessageNode(category, SEVERITY_LOG, aPacket.message,
 +                                    null, null, null, null, aPacket.timeStamp);
@@ -163,7 +294,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *         CATEGORY_SECURITY can be returned.
     */
 -  categoryForScriptError: function Utils_categoryForScriptError(aScriptError)
-+  categoryForScriptError: function Utils_categoryForScriptError(aMessage)
++  categoryForConsoleMessage: function Utils_categoryForConsoleMessage(aMessage)
    {
 -    switch (aScriptError.category) {
 +    switch (aMessage.category) {
@@ -263,92 +394,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.target.off("navigate", this._onTabNavigated);
  
      this.client = null;
-diff --git a/js/xpconnect/idl/nsIScriptError.idl b/js/xpconnect/idl/nsIScriptError.idl
---- a/js/xpconnect/idl/nsIScriptError.idl
-+++ b/js/xpconnect/idl/nsIScriptError.idl
-@@ -6,17 +6,17 @@
- /*
-  * nsIConsoleMessage subclass for representing JavaScript errors and warnings.
-  */
- 
- 
- #include "nsISupports.idl"
- #include "nsIConsoleMessage.idl"
- 
--[scriptable, uuid(ec640482-be5f-49a0-a9cb-c87eacce9291)]
-+[scriptable, uuid(cac9d8e8-0d53-4fa8-9903-bb367e4fa1fe)]
- interface nsIScriptError : nsIConsoleMessage
- {
-     /** pseudo-flag for default case */
-     const unsigned long errorFlag = 0x0;
- 
-     /** message is warning */
-     const unsigned long warningFlag = 0x1;
- 
-@@ -36,43 +36,16 @@ interface nsIScriptError : nsIConsoleMes
-     readonly attribute AString errorMessage;
- 
-     readonly attribute AString sourceName;
-     readonly attribute AString sourceLine;
-     readonly attribute uint32_t lineNumber;
-     readonly attribute uint32_t columnNumber;
-     readonly attribute uint32_t flags;
- 
--    /**
--     * Categories I know about -
--     * XUL javascript
--     * content javascript (both of these from nsDocShell, currently)
--     * component javascript (errors in JS components)
--     */
--    readonly attribute string category;
--
--    /*
--       The time (in milliseconds from the Epoch) that the script error instance
--       was initialised, and thus the time when the error occurred.
--       Currently used to display date and time of the message in Error console.
--       The timestamp is initialized as JS_now/1000 so that it can be
--       compared to Date.now in Javascript.
--     */
--    readonly attribute long long timeStamp;
--
--    /* Get the window id this was initialized with.  Zero will be
--       returned if init() was used instead of initWithWindowID(). */
--    readonly attribute unsigned long long outerWindowID;
--
--    /* Get the inner window id this was initialized with.  Zero will be
--       returned if init() was used instead of initWithWindowID(). */
--    readonly attribute unsigned long long innerWindowID;
--
--    readonly attribute boolean isFromPrivateWindow;
--
-     void init(in AString message,
-               in AString sourceName,
-               in AString sourceLine,
-               in uint32_t lineNumber,
-               in uint32_t columnNumber,
-               in uint32_t flags,
-               in string category);
- 
-@@ -82,18 +55,16 @@ interface nsIScriptError : nsIConsoleMes
-     void initWithWindowID(in AString message,
-                           in AString sourceName,
-                           in AString sourceLine,
-                           in uint32_t lineNumber,
-                           in uint32_t columnNumber,
-                           in uint32_t flags,
-                           in string category,
-                           in unsigned long long innerWindowID);
--
--    AUTF8String toString();
- };
- 
- %{ C++
- #define NS_SCRIPTERROR_CID \
--{ 0xe38e53b9, 0x5bb0, 0x456a, { 0xb5, 0x53, 0x57, 0x93, 0x70, 0xcb, 0x15, 0x67 }}
-+{ 0x1950539a, 0x90f0, 0x4d22, { 0xb5, 0xaf, 0x71, 0x32, 0x9c, 0x68, 0xfa, 0x35 }}
- 
- #define NS_SCRIPTERROR_CONTRACTID "@mozilla.org/scripterror;1"
- %}
 diff --git a/toolkit/devtools/debugger/dbg-client.jsm b/toolkit/devtools/debugger/dbg-client.jsm
 --- a/toolkit/devtools/debugger/dbg-client.jsm
 +++ b/toolkit/devtools/debugger/dbg-client.jsm
@@ -376,7 +421,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 @@ -34,17 +34,17 @@ XPCOMUtils.defineLazyModuleGetter(this, 
                                    "resource:///modules/devtools/gDevTools.jsm");
  XPCOMUtils.defineLazyModuleGetter(this, "devtools",
-                                   "resource:///modules/devtools/gDevTools.jsm");
+                                   "resource://gre/modules/devtools/Loader.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "VariablesView",
                                    "resource:///modules/devtools/VariablesView.jsm");
@@ -392,26 +437,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  // Examples:
  // (function foobar(a, b) { ...
  // function foobar2(a) { ...
-@@ -710,16 +710,18 @@ function findCompletionBeginning(aStr)
-  *            {
-  *              matches: [ string, string, string ],
-  *              matchProp: Last part of the inputValue that was used to find
-  *                         the matches-strings.
-  *            }
-  */
- function JSPropertyProvider(aScope, aInputValue)
- {
-+  Services.console.logStringMessage("autocomplete " + aInputValue);
-+
-   let obj = WCU.unwrap(aScope);
- 
-   // Analyse the aInputValue and find the beginning of the last part that
-   // should be completed.
-   let beginning = findCompletionBeginning(aInputValue);
- 
-   // There was an error analysing the string.
-   if (beginning.err) {
-@@ -868,101 +870,104 @@ function getMatchedProps(aObj, aOptions 
+@@ -868,101 +868,104 @@ function getMatchedProps(aObj, aOptions 
  return JSPropertyProvider;
  })(WebConsoleUtils);
  
@@ -539,7 +565,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
        case "XBL":
        case "XBL Prototype Handler":
        case "XBL Content Sink":
-@@ -972,38 +977,36 @@ PageErrorListener.prototype =
+@@ -972,38 +975,36 @@ PageErrorListener.prototype =
  
      return true;
    },
@@ -586,7 +612,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  
  
  ///////////////////////////////////////////////////////////////////////////////
-@@ -1086,18 +1089,17 @@ ConsoleAPIListener.prototype =
+@@ -1086,18 +1087,17 @@ ConsoleAPIListener.prototype =
  
      this.owner.onConsoleAPICall(apiMessage);
    },
@@ -836,6 +862,51 @@ diff --git a/toolkit/devtools/webconsole/dbg-webconsole-actors.js b/toolkit/devt
     *
     * @param nsIScriptError aPageError
     *        The page error we need to send to the client.
+diff --git a/toolkit/devtools/webconsole/test/Makefile.in b/toolkit/devtools/webconsole/test/Makefile.in
+--- a/toolkit/devtools/webconsole/test/Makefile.in
++++ b/toolkit/devtools/webconsole/test/Makefile.in
+@@ -18,15 +18,16 @@ MOCHITEST_CHROME_FILES = \
+     test_jsterm.html \
+     test_object_actor.html \
+     test_network_get.html \
+     test_network_post.html \
+     test_network_longstring.html \
+     test_file_uri.html \
+     test_bug819670_getter_throws.html \
+     test_object_actor_native_getters.html \
++    test_nsiconsolemessage.html \
+     network_requests_iframe.html \
+     data.json \
+     data.json^headers^ \
+     common.js \
+     $(NULL)
+ 
+ include $(topsrcdir)/config/rules.mk
+diff --git a/toolkit/devtools/webconsole/test/common.js b/toolkit/devtools/webconsole/test/common.js
+--- a/toolkit/devtools/webconsole/test/common.js
++++ b/toolkit/devtools/webconsole/test/common.js
+@@ -101,17 +101,20 @@ function checkObject(aObject, aExpected)
+     let expected = aExpected[name];
+     let value = aObject[name];
+     checkValue(name, value, expected);
+   }
+ }
+ 
+ function checkValue(aName, aValue, aExpected)
+ {
+-  if (aValue === undefined) {
++  if (aExpected === null) {
++    ok(!aValue, "'" + aName + "' is null");
++  }
++  else if (aValue === undefined) {
+     ok(false, "'" + aName + "' is undefined");
+   }
+   else if (typeof aExpected == "string" || typeof aExpected == "number" ||
+            typeof aExpected == "boolean") {
+     is(aValue, aExpected, "property '" + aName + "'");
+   }
+   else if (aExpected instanceof RegExp) {
+     ok(aExpected.test(aValue), aName + ": " + aExpected + " matched " + aValue);
 diff --git a/toolkit/devtools/webconsole/test/test_cached_messages.html b/toolkit/devtools/webconsole/test/test_cached_messages.html
 --- a/toolkit/devtools/webconsole/test/test_cached_messages.html
 +++ b/toolkit/devtools/webconsole/test/test_cached_messages.html
@@ -903,254 +974,141 @@ diff --git a/toolkit/devtools/webconsole/test/test_cached_messages.html b/toolki
    aState.client.getCachedMessages(["PageError"],
                                    onCachedPageErrors.bind(null, aState));
  }
-diff --git a/xpcom/base/Makefile.in b/xpcom/base/Makefile.in
---- a/xpcom/base/Makefile.in
-+++ b/xpcom/base/Makefile.in
-@@ -97,16 +97,17 @@ DEFINES		+= -D_IMPL_NS_COM
- 
- ifneq (,$(filter gtk2,$(MOZ_WIDGET_TOOLKIT)))
- CXXFLAGS        += $(MOZ_GTK2_CFLAGS)
- endif
- 
- LOCAL_INCLUDES += \
- 		-I$(srcdir)/../build \
- 		-I$(topsrcdir)/xpcom/ds \
-+		-I$(topsrcdir)/dom/base \
- 		$(NULL)
- 
- # We generate ErrorListCxxDefines.h from ErrorList.h using regex.  The -n option
- # suppresses printing the pattern space, and the p at the end prints it anyway,
- # so we don't print lines that don't match the pattern to start with.
- ErrorListCxxDefines.h: ErrorList.h Makefile
- 		sed -n 's/.*ERROR(\([A-Z_0-9]*\).*/#define \1 nsresult::\1/p' < $< > $@
- 
-diff --git a/xpcom/base/nsConsoleMessage.cpp b/xpcom/base/nsConsoleMessage.cpp
---- a/xpcom/base/nsConsoleMessage.cpp
-+++ b/xpcom/base/nsConsoleMessage.cpp
-@@ -4,34 +4,126 @@
-  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
- 
- /*
-  * Base implementation for console messages.
-  */
- 
- #include "nsConsoleMessage.h"
- #include "nsReadableUtils.h"
-+#include "jsapi.h"
-+#include "nsGlobalWindow.h"
-+#include "nsPIDOMWindow.h"
-+#include "nsILoadContext.h"
-+#include "nsIDocShell.h"
- 
- NS_IMPL_THREADSAFE_ISUPPORTS1(nsConsoleMessage, nsIConsoleMessage)
- 
- nsConsoleMessage::nsConsoleMessage() 
- {
- }
- 
- nsConsoleMessage::nsConsoleMessage(const PRUnichar *message) 
- {
--	mMessage.Assign(message);
-+  init(message, nullptr, 0);
+diff --git a/toolkit/devtools/webconsole/test/test_nsiconsolemessage.html b/toolkit/devtools/webconsole/test/test_nsiconsolemessage.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/test_nsiconsolemessage.html
+@@ -0,0 +1,133 @@
++<!DOCTYPE HTML>
++<html lang="en">
++<head>
++  <meta charset="utf8">
++  <title>Test for nsIConsoleMessages</title>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript;version=1.8" src="common.js"></script>
++  <!-- Any copyright is dedicated to the Public Domain.
++     - http://creativecommons.org/publicdomain/zero/1.0/ -->
++</head>
++<body>
++<p>Make sure that nsIConsoleMessages are logged. See bug 859756.</p>
++
++<script class="testbody" type="text/javascript;version=1.8">
++SimpleTest.waitForExplicitFinish();
++
++let expectedMessages = [];
++let testingTabActor = false;
++
++function sendMessages()
++{
++  expectedMessages = [
++    {
++      message: "hello world! bug859756",
++      category: null,
++      timeStamp: /^\d+$/,
++    },
++    {
++      message: "foobarz",
++      category: null,
++      timeStamp: /^\d+$/,
++    },
++    {
++      message: "cat7: boom",
++      category: "cat7",
++      timeStamp: /^\d+$/,
++    },
++    {
++      message: "cat9: windowfun",
++      category: "cat9",
++      timeStamp: /^\d+$/,
++    },
++  ];
++
++  Services.console.logStringMessage("hello world! bug859756");
++
++  let consoleMsg = Cc["@mozilla.org/consolemessage;1"]
++                   .createInstance(Ci.nsIConsoleMessage);
++  consoleMsg.Init("foobarz");
++  Services.console.logMessage(consoleMsg);
++
++  consoleMsg = Cc["@mozilla.org/consolemessage;1"]
++                   .createInstance(Ci.nsIConsoleMessage);
++  consoleMsg.Init("boom", "cat7");
++  Services.console.logMessage(consoleMsg);
++
++  consoleMsg = Cc["@mozilla.org/consolemessage;1"]
++                   .createInstance(Ci.nsIConsoleMessage);
++  consoleMsg.Init("windowfun", "cat9", Date.now());
++  Services.console.logMessage(consoleMsg);
 +}
 +
-+nsConsoleMessage::nsConsoleMessage(const PRUnichar *message, const char *category)
++function sendMessagesForTab()
 +{
-+  init(message, category, 0);
++  sendMessages();
++  expectedMessages = [
++    {
++      message: "cat10: windowfun3",
++      category: "cat10",
++      timeStamp: /^\d+$/,
++    },
++  ];
++
++  let windowID = WebConsoleUtils.getInnerWindowId(top);
++  let consoleMsg = Cc["@mozilla.org/consolemessage;1"]
++                   .createInstance(Ci.nsIConsoleMessage);
++  consoleMsg.Init("windowfun3", "cat10", windowID);
++  Services.console.logMessage(consoleMsg);
 +}
 +
-+nsConsoleMessage::nsConsoleMessage(const PRUnichar *message, const char *category, uint64_t innerWindowID)
++function startTest()
 +{
-+  init(message, category, innerWindowID);
++  removeEventListener("load", startTest);
++  attachConsole(["PageError"], onAttach);
 +}
 +
-+void nsConsoleMessage::init(const PRUnichar *message, const char *category, uint64_t innerWindowID)
++function onAttach(aState, aResponse)
 +{
-+  mTimeStamp = JS_Now() / 1000;
-+  mMessage.Assign(message);
-+  mCategory.Assign(category);
++  window.onLogMessage_ = onLogMessage.bind(null, aState);
++  aState.dbgClient.addListener("logMessage", onLogMessage_);
 +
-+  if (innerWindowID) {
-+    nsGlobalWindow* window =
-+      nsGlobalWindow::GetInnerWindowWithId(innerWindowID);
-+    if (window) {
-+      nsPIDOMWindow* outer = window->GetOuterWindow();
-+      if (outer)
-+	mOuterWindowID = outer->WindowID();
-+
-+      nsIDocShell* docShell = window->GetDocShell();
-+      nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(docShell);
-+
-+      if (loadContext) {
-+	// Never mark exceptions from chrome windows as having come from
-+	// private windows, since we always want them to be reported.
-+	nsIPrincipal* winPrincipal = window->GetPrincipal();
-+	mIsFromPrivateWindow = loadContext->UsePrivateBrowsing() &&
-+	  !nsContentUtils::IsSystemPrincipal(winPrincipal);
-+      }
-+    }
++  if (!testingTabActor) {
++    sendMessages();
++  } else {
++    sendMessagesForTab();
 +  }
- }
- 
- NS_IMETHODIMP
--nsConsoleMessage::GetMessageMoz(PRUnichar **result) {
--    *result = ToNewUnicode(mMessage);
-+nsConsoleMessage::GetMessageMoz(PRUnichar **result)
-+{
-+  nsresult rv;
- 
--    return NS_OK;
-+  nsAutoCString message;
-+  rv = ToString(message);
-+  if (NS_FAILED(rv))
-+    return rv;
 +
-+  *result = UTF8ToNewUnicode(message);
-+  if (!*result)
-+    return NS_ERROR_OUT_OF_MEMORY;
-+
-+  return NS_OK;
- }
- 
--//  NS_IMETHODIMP
--//  nsConsoleMessage::Init(const PRUnichar *message) {
--//      nsAutoString newMessage(message);
--//      mMessage = ToNewUnicode(newMessage);
--//      return NS_OK;
--//  }
-+NS_IMETHODIMP
-+nsConsoleMessage::GetCategory(char **result)
-+{
-+  *result = ToNewCString(mCategory);
-+  return NS_OK;
-+}
- 
-+NS_IMETHODIMP
-+nsConsoleMessage::GetOuterWindowID(uint64_t *aOuterWindowID)
-+{
-+  *aOuterWindowID = mOuterWindowID;
-+  return NS_OK;
++  info("waiting for messages");
 +}
 +
-+  NS_IMETHODIMP
-+nsConsoleMessage::GetInnerWindowID(uint64_t *aInnerWindowID)
++let receivedMessages = [];
++
++function onLogMessage(aState, aType, aPacket)
 +{
-+  *aInnerWindowID = mInnerWindowID;
-+  return NS_OK;
++  is(aPacket.from, aState.actor, "packet actor");
++
++  receivedMessages.push(aPacket);
++  if (receivedMessages.length != expectedMessages.length) {
++    return;
++  }
++
++  aState.dbgClient.removeListener("logMessage", onLogMessage_);
++
++  checkObject(receivedMessages, expectedMessages);
++
++  receivedMessages = expectedMessages = [];
++  window.onLogMessage_ = null;
++
++  closeDebugger(aState, () => {
++    if (!testingTabActor) {
++      testingTabActor = true;
++      info("start tab actor test");
++      attachConsole(["PageError"], onAttach, true);
++    } else {
++      SimpleTest.finish();
++    }
++  });
 +}
 +
-+NS_IMETHODIMP
-+nsConsoleMessage::GetTimeStamp(int64_t *aTimeStamp)
-+{
-+  *aTimeStamp = mTimeStamp;
-+  return NS_OK;
-+}
-+
-+NS_IMETHODIMP
-+nsConsoleMessage::GetIsFromPrivateWindow(bool *aIsFromPrivateWindow)
-+{
-+  *aIsFromPrivateWindow = mIsFromPrivateWindow;
-+  return NS_OK;
-+}
-+
-+NS_IMETHODIMP
-+nsConsoleMessage::ToString(nsACString& /*UTF8*/ aResult)
-+{
-+  if (!mCategory.IsEmpty())
-+    aResult.Assign(mCategory + NS_LITERAL_CSTRING(": ") +
-+                   NS_ConvertUTF16toUTF8(mMessage));
-+  else
-+    aResult.Assign(ToNewUTF8String(mMessage));
-+
-+  return NS_OK;
-+}
-diff --git a/xpcom/base/nsConsoleMessage.h b/xpcom/base/nsConsoleMessage.h
---- a/xpcom/base/nsConsoleMessage.h
-+++ b/xpcom/base/nsConsoleMessage.h
-@@ -10,19 +10,28 @@
- 
- #include "nsIConsoleMessage.h"
- #include "nsString.h"
- 
- class nsConsoleMessage MOZ_FINAL : public nsIConsoleMessage {
- public:
-     nsConsoleMessage();
-     nsConsoleMessage(const PRUnichar *message);
-+    nsConsoleMessage(const PRUnichar *message, const char *category);
-+    nsConsoleMessage(const PRUnichar *message, const char *category, uint64_t innerWindowID);
- 
-     NS_DECL_ISUPPORTS
-     NS_DECL_NSICONSOLEMESSAGE
- 
- private:
-     ~nsConsoleMessage() {}
- 
-+    void init(const PRUnichar *message, const char *category, uint64_t innerWindowID);
-+
-+    int64_t mTimeStamp;
-+    nsCString mCategory;
-+    uint64_t mOuterWindowID;
-+    uint64_t mInnerWindowID;
-+    bool mIsFromPrivateWindow;
-     nsString mMessage;
- };
- 
- #endif /* __nsconsolemessage_h__ */
-diff --git a/xpcom/base/nsIConsoleMessage.idl b/xpcom/base/nsIConsoleMessage.idl
---- a/xpcom/base/nsIConsoleMessage.idl
-+++ b/xpcom/base/nsIConsoleMessage.idl
-@@ -5,18 +5,52 @@
- 
- #include "nsISupports.idl"
- 
- /**
-  * This is intended as a base interface; implementations may want to
-  * provide an object that can be qi'ed to provide more specific
-  * message information.
-  */
--[scriptable, uuid(41bd8784-1dd2-11b2-9553-8606958fffe1)]
-+[scriptable, uuid(c14c151b-5ea4-47ed-8e85-d392cdd3e154)]
- interface nsIConsoleMessage : nsISupports
- {
-+    /**
-+     * The time (in milliseconds from the Epoch) that the message instance
-+     * was initialised.
-+     * The timestamp is initialized as JS_now/1000 so that it can be
-+     * compared to Date.now in Javascript.
-+     */
-+    readonly attribute long long timeStamp;
-+
-+    /**
-+     * Categories I know about
-+     * - nsIScriptError:
-+     *   XUL javascript
-+     *   content javascript (both of these from nsDocShell, currently)
-+     *   component javascript (errors in JS components)
-+     * - nsIConsoleMessage: none yet.
-+     */
-+    readonly attribute string category;
-+
-+    /**
-+     * Get the window id this was initialized with.
-+     */
-+    readonly attribute unsigned long long outerWindowID;
-+
-+    /**
-+     * Get the inner window id this was initialized with.
-+     */
-+    readonly attribute unsigned long long innerWindowID;
-+
-+    readonly attribute boolean isFromPrivateWindow;
-+
-     [binaryname(MessageMoz)] readonly attribute wstring message;
-+
-+    AUTF8String toString();
- };
- 
- %{ C++
- #define NS_CONSOLEMESSAGE_CID \
--{ 0x56c9d666, 0x1dd2, 0x11b2, { 0xb4, 0x3c, 0xa8, 0x4b, 0xf3, 0xb3, 0xec, 0xbb }}
-+{ 0x024efc9e, 0x54dc, 0x4844, { 0x80, 0x4b, 0x41, 0xd3, 0xf3, 0x69, 0x90, 0x73 }}
-+
-+#define NS_CONSOLEMESSAGE_CONTRACTID "@mozilla.org/consolemessage;1"
- %}
++addEventListener("load", startTest);
++</script>
++</body>
++</html>
