@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 965fa67fc4104822b16e250a4675df15e73fbed9
+# Parent 94d8c42bdc63d25488fe7e31d964179dd3b63b85
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1368561496 -10800
+# Date 1368633984 -10800
 
 Bug 859756 - [browserconsole] Add timestamp, category and window IDs to nsIConsoleMessages; r=bz
 
@@ -172,10 +172,10 @@ diff --git a/js/xpconnect/src/nsScriptError.cpp b/js/xpconnect/src/nsScriptError
  
  NS_IMETHODIMP
  nsScriptError::Init(const nsAString& message,
-+                       const char *category,
-+                       uint64_t innerWindowID)
++                    const char *category,
++                    uint64_t innerWindowID)
 +{
-+  return InitWithWindowID(message, NS_LITERAL_STRING(""), NS_LITERAL_STRING(""), 0, 0, 0, category, 0);
++  return InitWithWindowID(message, EmptyString(), EmptyString(), 0, 0, 0, category, innerWindowID);
 +}
 +
 +NS_IMETHODIMP
@@ -233,7 +233,7 @@ diff --git a/xpcom/base/Makefile.in b/xpcom/base/Makefile.in
 diff --git a/xpcom/base/nsConsoleMessage.cpp b/xpcom/base/nsConsoleMessage.cpp
 --- a/xpcom/base/nsConsoleMessage.cpp
 +++ b/xpcom/base/nsConsoleMessage.cpp
-@@ -4,34 +4,124 @@
+@@ -4,34 +4,129 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  /*
@@ -250,14 +250,22 @@ diff --git a/xpcom/base/nsConsoleMessage.cpp b/xpcom/base/nsConsoleMessage.cpp
  
  NS_IMPL_THREADSAFE_ISUPPORTS1(nsConsoleMessage, nsIConsoleMessage)
  
- nsConsoleMessage::nsConsoleMessage() 
+-nsConsoleMessage::nsConsoleMessage() 
++nsConsoleMessage::nsConsoleMessage()
++    :  mMessage(),
++       mCategory(),
++       mOuterWindowID(0),
++       mInnerWindowID(0),
++       mTimeStamp(0),
++       mIsFromPrivateWindow(false)
  {
  }
  
- nsConsoleMessage::nsConsoleMessage(const PRUnichar *message) 
+-nsConsoleMessage::nsConsoleMessage(const PRUnichar *message) 
++nsConsoleMessage::nsConsoleMessage(const PRUnichar *message)
  {
 -	mMessage.Assign(message);
-+  nsAutoString m;
++  nsString m;
 +  m.Assign(message);
 +  Init(m, nullptr, 0);
  }
@@ -276,22 +284,21 @@ diff --git a/xpcom/base/nsConsoleMessage.cpp b/xpcom/base/nsConsoleMessage.cpp
  
 -    return NS_OK;
 +  if (innerWindowID) {
-+    nsGlobalWindow* window =
-+      nsGlobalWindow::GetInnerWindowWithId(innerWindowID);
++    nsGlobalWindow* window = nsGlobalWindow::GetInnerWindowWithId(innerWindowID);
 +    if (window) {
 +      nsPIDOMWindow* outer = window->GetOuterWindow();
 +      if (outer)
-+	mOuterWindowID = outer->WindowID();
++        mOuterWindowID = outer->WindowID();
 +
 +      nsIDocShell* docShell = window->GetDocShell();
 +      nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(docShell);
 +
 +      if (loadContext) {
-+	// Never mark exceptions from chrome windows as having come from
-+	// private windows, since we always want them to be reported.
-+	nsIPrincipal* winPrincipal = window->GetPrincipal();
-+	mIsFromPrivateWindow = loadContext->UsePrivateBrowsing() &&
-+	  !nsContentUtils::IsSystemPrincipal(winPrincipal);
++        // Never mark exceptions from chrome windows as having come from
++        // private windows, since we always want them to be reported.
++        nsIPrincipal* winPrincipal = window->GetPrincipal();
++        mIsFromPrivateWindow = loadContext->UsePrivateBrowsing() &&
++                               !nsContentUtils::IsSystemPrincipal(winPrincipal);
 +      }
 +    }
 +  }
@@ -336,7 +343,7 @@ diff --git a/xpcom/base/nsConsoleMessage.cpp b/xpcom/base/nsConsoleMessage.cpp
 +  return NS_OK;
 +}
 +
-+  NS_IMETHODIMP
++NS_IMETHODIMP
 +nsConsoleMessage::GetInnerWindowID(uint64_t *aInnerWindowID)
 +{
 +  *aInnerWindowID = mInnerWindowID;
@@ -364,7 +371,7 @@ diff --git a/xpcom/base/nsConsoleMessage.cpp b/xpcom/base/nsConsoleMessage.cpp
 +    aResult.Assign(mCategory + NS_LITERAL_CSTRING(": ") +
 +                   NS_ConvertUTF16toUTF8(mMessage));
 +  else
-+    aResult.Assign(ToNewUTF8String(mMessage));
++    CopyUTF16toUTF8(mMessage, aResult);
 +
 +  return NS_OK;
 +}
