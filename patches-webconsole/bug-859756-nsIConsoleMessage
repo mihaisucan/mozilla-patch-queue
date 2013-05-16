@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 94d8c42bdc63d25488fe7e31d964179dd3b63b85
+# Parent 6f46fc3b114c018780c99dbc74d420681b214ad5
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1368650624 -10800
+# Date 1368725026 -10800
 
 Bug 859756 - [browserconsole] Add timestamp, category and window IDs to nsIConsoleMessages; r=bz
 
@@ -94,31 +94,33 @@ diff --git a/js/xpconnect/idl/nsIScriptError.idl b/js/xpconnect/idl/nsIScriptErr
 diff --git a/js/xpconnect/src/nsScriptError.cpp b/js/xpconnect/src/nsScriptError.cpp
 --- a/js/xpconnect/src/nsScriptError.cpp
 +++ b/js/xpconnect/src/nsScriptError.cpp
-@@ -90,16 +90,24 @@ nsScriptError::GetFlags(uint32_t *result
+@@ -88,16 +88,26 @@ nsScriptError::GetFlags(uint32_t *result
+ }
+ 
  NS_IMETHODIMP
  nsScriptError::GetCategory(char **result) {
      *result = ToNewCString(mCategory);
      return NS_OK;
  }
  
- NS_IMETHODIMP
- nsScriptError::Init(const nsAString& message,
-+                    const char *category,
-+                    uint64_t innerWindowID)
++// nsIConsoleMessage method
++NS_IMETHODIMP
++nsScriptError::InitMessage(const nsAString& message,
++                           const char *category,
++                           uint64_t innerWindowID)
 +{
-+  return InitWithWindowID(message, EmptyString(), EmptyString(), 0, 0, 0, category, innerWindowID);
++    return InitWithWindowID(message, EmptyString(), EmptyString(), 0, 0, 0,
++                            category, innerWindowID);
 +}
 +
-+NS_IMETHODIMP
-+nsScriptError::Init(const nsAString& message,
+ NS_IMETHODIMP
+ nsScriptError::Init(const nsAString& message,
                      const nsAString& sourceName,
                      const nsAString& sourceLine,
                      uint32_t lineNumber,
                      uint32_t columnNumber,
                      uint32_t flags,
                      const char *category)
- {
-     return InitWithWindowID(message, sourceName, sourceLine, lineNumber,
 diff --git a/xpcom/base/Makefile.in b/xpcom/base/Makefile.in
 --- a/xpcom/base/Makefile.in
 +++ b/xpcom/base/Makefile.in
@@ -177,15 +179,15 @@ diff --git a/xpcom/base/nsConsoleMessage.cpp b/xpcom/base/nsConsoleMessage.cpp
 -	mMessage.Assign(message);
 +  nsString m;
 +  m.Assign(message);
-+  Init(m, nullptr, 0);
++  InitMessage(m, nullptr, 0);
  }
  
  NS_IMETHODIMP
 -nsConsoleMessage::GetMessageMoz(PRUnichar **result) {
 -    *result = ToNewUnicode(mMessage);
-+nsConsoleMessage::Init(const nsAString& message,
-+                       const char *category,
-+                       uint64_t innerWindowID)
++nsConsoleMessage::InitMessage(const nsAString& message,
++                              const char *category,
++                              uint64_t innerWindowID)
 +{
 +  mTimeStamp = JS_Now() / 1000;
 +  mMessage.Assign(message);
@@ -300,7 +302,7 @@ diff --git a/xpcom/base/nsConsoleMessage.h b/xpcom/base/nsConsoleMessage.h
 diff --git a/xpcom/base/nsIConsoleMessage.idl b/xpcom/base/nsIConsoleMessage.idl
 --- a/xpcom/base/nsIConsoleMessage.idl
 +++ b/xpcom/base/nsIConsoleMessage.idl
-@@ -5,18 +5,53 @@
+@@ -5,18 +5,54 @@
  
  #include "nsISupports.idl"
  
@@ -313,7 +315,8 @@ diff --git a/xpcom/base/nsIConsoleMessage.idl b/xpcom/base/nsIConsoleMessage.idl
 +[scriptable, uuid(c14c151b-5ea4-47ed-8e85-d392cdd3e154)]
  interface nsIConsoleMessage : nsISupports
  {
-+    void init(in AString message, [optional] in string category, [optional] in unsigned long long innerWindowID);
++    void initMessage(in AString message, [optional] in string category, [optional] in unsigned long long innerWindowID);
++
 +    /**
 +     * The time (in milliseconds from the Epoch) that the message instance
 +     * was initialised.
