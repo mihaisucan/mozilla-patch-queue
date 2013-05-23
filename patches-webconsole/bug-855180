@@ -1,0 +1,382 @@
+# HG changeset patch
+# Parent 03f322ae358f9ad51747cdc34d5ee33d75c5dd51
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1369254778 -10800
+
+Bug 855180 - Intermittent browser_toolbar_webconsole_errors_count.js | Timed out while waiting for: web console shows the page errors followed by other timeouts, failures, leaks; r=jwalker
+
+diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/shared/DeveloperToolbar.jsm
+--- a/browser/devtools/shared/DeveloperToolbar.jsm
++++ b/browser/devtools/shared/DeveloperToolbar.jsm
+@@ -31,16 +31,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+                                   "resource://gre/modules/PluralForm.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "devtools",
+                                   "resource://gre/modules/devtools/Loader.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "require",
+                                   "resource://gre/modules/devtools/Require.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
++                                  "resource:///modules/devtools/shared/event-emitter.js");
++
+ XPCOMUtils.defineLazyGetter(this, "prefBranch", function() {
+   let prefService = Components.classes["@mozilla.org/preferences-service;1"]
+           .getService(Components.interfaces.nsIPrefService);
+   return prefService.getBranch(null)
+           .QueryInterface(Components.interfaces.nsIPrefBranch2);
+ });
+ 
+ XPCOMUtils.defineLazyGetter(this, "toolboxStrings", function () {
+@@ -210,16 +213,18 @@ this.DeveloperToolbar = function Develop
+   this._errorsCount = {};
+   this._warningsCount = {};
+   this._errorListeners = {};
+   this._errorCounterButton = this._doc
+                              .getElementById("developer-toolbar-toolbox-button");
+   this._errorCounterButton._defaultTooltipText =
+     this._errorCounterButton.getAttribute("tooltiptext");
+ 
++  EventEmitter.decorate(this);
++
+   try {
+     CmdCommands.refreshAutoCommands(aChromeWindow);
+   }
+   catch (ex) {
+     console.error(ex);
+   }
+ }
+ 
+@@ -670,16 +675,18 @@ function DT__updateErrorsCount(aChangedT
+                                             [errorsText, warningsText], 2);
+ 
+     btn.setAttribute("error-count", errors);
+     btn.setAttribute("tooltiptext", tooltiptext);
+   } else {
+     btn.removeAttribute("error-count");
+     btn.setAttribute("tooltiptext", btn._defaultTooltipText);
+   }
++
++  this.emit("errors-counter-updated");
+ };
+ 
+ /**
+  * Reset the errors counter for the given tab.
+  *
+  * @param nsIDOMElement aTab The xul:tab for which you want to reset the page
+  * errors counters.
+  */
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+--- a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+@@ -2,92 +2,55 @@
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ // Tests that the developer toolbar errors count works properly.
+ 
+ function test() {
+   const TEST_URI = "http://example.com/browser/browser/devtools/shared/test/" +
+                    "browser_toolbar_webconsole_errors_count.html";
+ 
+-  let imported = {};
+-  Components.utils.import("resource:///modules/HUDService.jsm", imported);
+-  let HUDService = imported.HUDService;
+-
+-  Components.utils.import("resource:///modules/devtools/gDevTools.jsm", imported);
+-  let gDevTools = imported.gDevTools;
++  let HUDService = Cu.import("resource:///modules/HUDService.jsm",
++                             {}).HUDService;
++  let gDevTools = Cu.import("resource:///modules/devtools/gDevTools.jsm",
++                             {}).gDevTools;
+ 
+   let webconsole = document.getElementById("developer-toolbar-toolbox-button");
+   let tab1, tab2;
+ 
+   Services.prefs.setBoolPref("javascript.options.strict", true);
+ 
++  registerCleanupFunction(() => {
++    Services.prefs.clearUserPref("javascript.options.strict");
++  });
++
++  ignoreAllUncaughtExceptions();
++  addTab(TEST_URI, openToolbar);
++
+   function openToolbar(browser, tab) {
+     tab1 = tab;
+     ignoreAllUncaughtExceptions(false);
+ 
+     expectUncaughtException();
+ 
+     if (!DeveloperToolbar.visible) {
+       DeveloperToolbar.show(true, onOpenToolbar);
+     }
+     else {
+       onOpenToolbar();
+     }
+   }
+ 
+-  ignoreAllUncaughtExceptions();
+-  addTab(TEST_URI, openToolbar);
+-
+-  function getErrorsCount() {
+-    let count = webconsole.getAttribute("error-count");
+-    return count ? count : "0";
+-  }
+-
+-  function getTooltipValues() {
+-    let matches = webconsole.getAttribute("tooltiptext")
+-                  .match(/(\d+) errors?, (\d+) warnings?/);
+-    return matches ? [matches[1], matches[2]] : [0, 0];
+-  }
+-
+-  function waitForButtonUpdate(aOptions)
+-  {
+-    aOptions.validator = function() {
+-      let errors = getErrorsCount();
+-      let tooltip = getTooltipValues();
+-      let result = errors == aOptions.errors &&
+-                   tooltip[1] == aOptions.warnings;
+-      if (result) {
+-        is(errors, tooltip[0], "button error-count is the same as in the tooltip");
+-      }
+-      return result;
+-    };
+-
+-    let originalFailure = aOptions.failure;
+-    aOptions.failure = function() {
+-      let tooltip = getTooltipValues();
+-
+-      info("expected " + aOptions.errors + " errors, " +
+-           aOptions.warnings + " warnings");
+-      info("got " + tooltip[0] + " errors, " + tooltip[1] + " warnings");
+-
+-      originalFailure();
+-    };
+-
+-    waitForValue(aOptions);
+-  }
+-
+   function onOpenToolbar() {
+     ok(DeveloperToolbar.visible, "DeveloperToolbar is visible");
+ 
+     waitForButtonUpdate({
+       name: "web console button shows page errors",
+       errors: 3,
+       warnings: 0,
+-      success: addErrors,
+-      failure: finish,
++      callback: addErrors,
+     });
+   }
+ 
+   function addErrors() {
+     expectUncaughtException();
+ 
+     waitForFocus(function() {
+       let button = content.document.querySelector("button");
+@@ -95,67 +58,47 @@ function test() {
+         EventUtils.synthesizeMouse(button, 3, 2, {}, content);
+       });
+     }, content);
+ 
+     waitForButtonUpdate({
+       name: "button shows one more error after click in page",
+       errors: 4,
+       warnings: 1,
+-      success: function() {
++      callback: () => {
+         ignoreAllUncaughtExceptions();
+         addTab(TEST_URI, onOpenSecondTab);
+       },
+-      failure: finish,
+     });
+   }
+ 
+   function onOpenSecondTab(browser, tab) {
+     tab2 = tab;
+ 
+     ignoreAllUncaughtExceptions(false);
+     expectUncaughtException();
+ 
+     waitForButtonUpdate({
+       name: "button shows correct number of errors after new tab is open",
+       errors: 3,
+       warnings: 0,
+-      success: switchToTab1,
+-      failure: finish,
++      callback: switchToTab1,
+     });
+   }
+ 
+   function switchToTab1() {
+     gBrowser.selectedTab = tab1;
+     waitForButtonUpdate({
+       name: "button shows the page errors from tab 1",
+       errors: 4,
+       warnings: 1,
+-      success: function() {
+-        openWebConsole(tab1, onWebConsoleOpen);
+-      },
+-      failure: finish,
++      callback: openWebConsole.bind(null, tab1, onWebConsoleOpen),
+     });
+   }
+ 
+-  function openWebConsole(tab, callback)
+-  {
+-    function _onWebConsoleOpen(subject)
+-    {
+-      subject.QueryInterface(Ci.nsISupportsString);
+-      let hud = HUDService.getHudReferenceById(subject.data);
+-      executeSoon(callback.bind(null, hud));
+-    }
+-
+-    oneTimeObserve("web-console-created", _onWebConsoleOpen);
+-
+-    let target = TargetFactory.forTab(tab);
+-    gDevTools.showToolbox(target, "webconsole");
+-  }
+-
+   function onWebConsoleOpen(hud) {
+     waitForValue({
+       name: "web console shows the page errors",
+       validator: function() {
+         return hud.outputNode.querySelectorAll(".hud-exception").length;
+       },
+       value: 4,
+       success: checkConsoleOutput.bind(null, hud),
+@@ -180,20 +123,17 @@ function test() {
+     expectUncaughtException();
+     let button = content.document.querySelector("button");
+     EventUtils.synthesizeMouse(button, 2, 2, {}, content);
+ 
+     waitForButtonUpdate({
+       name: "button shows one more error after another click in page",
+       errors: 5,
+       warnings: 1, // warnings are not repeated by the js engine
+-      success: function() {
+-        waitForValue(waitForNewError);
+-      },
+-      failure: finish,
++      callback: () => waitForValue(waitForNewError),
+     });
+ 
+     let waitForNewError = {
+       name: "the Web Console displays the new error",
+       validator: function() {
+         return hud.outputNode.textContent.indexOf("foobarBug762996click") > -1;
+       },
+       success: doClearConsoleButton.bind(null, hud),
+@@ -211,34 +151,33 @@ function test() {
+     is(getErrorsCount(), 0, "page errors counter has been reset");
+     let tooltip = getTooltipValues();
+     is(tooltip[1], 0, "page warnings counter has been reset");
+ 
+     doPageReload(hud);
+   }
+ 
+   function doPageReload(hud) {
+-    tab1.linkedBrowser.addEventListener("load", function _onReload() {
+-      tab1.linkedBrowser.removeEventListener("load", _onReload, true);
+-      ignoreAllUncaughtExceptions(false);
+-      expectUncaughtException();
+-    }, true);
++    tab1.linkedBrowser.addEventListener("load", onReload, true);
+ 
+     ignoreAllUncaughtExceptions();
+     content.location.reload();
+ 
+-    waitForButtonUpdate({
+-      name: "the Web Console button count has been reset after page reload",
+-      errors: 3,
+-      warnings: 0,
+-      success: function() {
+-        waitForValue(waitForConsoleOutputAfterReload);
+-      },
+-      failure: finish,
+-    });
++    function onReload() {
++      tab1.linkedBrowser.removeEventListener("load", onReload, true);
++      ignoreAllUncaughtExceptions(false);
++      expectUncaughtException();
++
++      waitForButtonUpdate({
++        name: "the Web Console button count has been reset after page reload",
++        errors: 3,
++        warnings: 0,
++        callback: waitForValue.bind(null, waitForConsoleOutputAfterReload),
++      });
++    }
+ 
+     let waitForConsoleOutputAfterReload = {
+       name: "the Web Console displays the correct number of errors after reload",
+       validator: function() {
+         return hud.outputNode.querySelectorAll(".hud-exception").length;
+       },
+       value: 3,
+       success: function() {
+@@ -251,21 +190,56 @@ function test() {
+   }
+ 
+   function testEnd() {
+     document.getElementById("developer-toolbar-closebutton").doCommand();
+     let target1 = TargetFactory.forTab(tab1);
+     gDevTools.closeToolbox(target1);
+     gBrowser.removeTab(tab1);
+     gBrowser.removeTab(tab2);
+-    Services.prefs.clearUserPref("javascript.options.strict");
+     finish();
+   }
+ 
+-  function oneTimeObserve(name, callback) {
+-    function _onObserve(aSubject, aTopic, aData) {
+-      Services.obs.removeObserver(_onObserve, name);
+-      callback(aSubject, aTopic, aData);
+-    };
+-    Services.obs.addObserver(_onObserve, name, false);
++  // Utility functions
++
++  function getErrorsCount() {
++    let count = webconsole.getAttribute("error-count");
++    return count ? count : "0";
++  }
++
++  function getTooltipValues() {
++    let matches = webconsole.getAttribute("tooltiptext")
++                  .match(/(\d+) errors?, (\d+) warnings?/);
++    return matches ? [matches[1], matches[2]] : [0, 0];
++  }
++
++  function waitForButtonUpdate(options) {
++    function check() {
++      let errors = getErrorsCount();
++      let tooltip = getTooltipValues();
++      let result = errors == options.errors && tooltip[1] == options.warnings;
++      if (result) {
++        ok(true, options.name);
++        is(errors, tooltip[0], "button error-count is the same as in the tooltip");
++
++        // Get out of the toolbar event execution loop.
++        executeSoon(options.callback);
++      }
++      return result;
++    }
++
++    if (!check()) {
++      info("wait for: " + options.name);
++      DeveloperToolbar.on("errors-counter-updated", function onUpdate(event) {
++        if (check()) {
++          DeveloperToolbar.off(event, onUpdate);
++        }
++      });
++    }
++  }
++
++  function openWebConsole(tab, callback)
++  {
++    let target = TargetFactory.forTab(tab);
++    gDevTools.showToolbox(target, "webconsole").then((toolbox) =>
++      callback(toolbox.getCurrentPanel().hud));
+   }
+ }
+-
