@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 03f322ae358f9ad51747cdc34d5ee33d75c5dd51
+# Parent af2fa5be5afd77087f6063c77ecba62f2656e7de
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1369338814 -10800
+# Date 1369414403 -10800
 
-Bug 874061 - Figure out private browsing and the browser console; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+Bug 874061 - Figure out private browsing and the browser console; r=robcee f=ehsan; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
 
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
@@ -30,7 +30,7 @@ diff --git a/browser/devtools/webconsole/test/browser_console_private_browsing.j
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_console_private_browsing.js
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,195 @@
 +/*
 + * Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/
@@ -44,46 +44,65 @@ new file mode 100644
 +  const TEST_URI = "data:text/html;charset=utf8,<p>hello world! bug 874061" +
 +                   "<button onclick='console.log(\"foobar bug 874061\");" +
 +                   "fooBazBaz.yummy()'>click</button>";
-+
-+  // Make sure we have a clean state to start with.
 +  let ConsoleAPIStorage = Cu.import("resource://gre/modules/ConsoleAPIStorage.jsm", {}).ConsoleAPIStorage;
-+  Services.console.reset();
-+  ConsoleAPIStorage.clearEvents();
++  let privateWindow, privateBrowser, privateTab, privateContent;
++  let hud, expectedMessages, nonPrivateMessage;
 +
-+  // Add a non-private message to the browser console.
-+  window.console.log("bug874061-not-private");
++  start();
 +
-+  let nonPrivateMessage = {
-+    name: "console message from a non-private window",
-+    text: "bug874061-not-private",
-+    category: CATEGORY_WEBDEV,
-+    severity: SEVERITY_LOG,
-+  };
++  function start()
++  {
++    gBrowser.selectedTab = gBrowser.addTab("data:text/html;charset=utf8," +
++                                           "<p>hello world! I am not private!");
++    gBrowser.selectedBrowser.addEventListener("load", onLoadTab, true);
++  }
 +
-+  let win = OpenBrowserWindow({ private: true });
-+  ok(win, "new window");
-+  ok(PrivateBrowsingUtils.isWindowPrivate(win), "window is private");
++  function onLoadTab()
++  {
++    gBrowser.selectedBrowser.removeEventListener("load", onLoadTab, true);
++    info("onLoadTab()");
 +
-+  let gBrowser, content, hud, expectedMessages;
-+  whenDelayedStartupFinished(win, () => {
-+    gBrowser = win.gBrowser;
++    // Make sure we have a clean state to start with.
++    Services.console.reset();
++    ConsoleAPIStorage.clearEvents();
++
++    // Add a non-private message to the browser console.
++    content.console.log("bug874061-not-private");
++
++    nonPrivateMessage = {
++      name: "console message from a non-private window",
++      text: "bug874061-not-private",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    };
++
++    privateWindow = OpenBrowserWindow({ private: true });
++    ok(privateWindow, "new private window");
++    ok(PrivateBrowsingUtils.isWindowPrivate(privateWindow), "window is private");
++
++    whenDelayedStartupFinished(privateWindow, onPrivateWindowReady);
++  }
++
++  function onPrivateWindowReady()
++  {
 +    info("private browser window opened");
++    privateBrowser = privateWindow.gBrowser;
 +
-+    gBrowser.selectedTab = gBrowser.addTab(TEST_URI);
-+    gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
++    privateTab = privateBrowser.selectedTab = privateBrowser.addTab(TEST_URI);
++    privateBrowser.selectedBrowser.addEventListener("load", function onLoad() {
 +      info("private tab opened");
-+      gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
-+      content = gBrowser.selectedBrowser.contentWindow;
-+      ok(PrivateBrowsingUtils.isWindowPrivate(content), "tab window is private");
-+      openConsole(gBrowser.selectedTab, consoleOpened);
++      privateBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
++      privateContent = privateBrowser.selectedBrowser.contentWindow;
++      ok(PrivateBrowsingUtils.isWindowPrivate(privateContent), "tab window is private");
++      openConsole(privateTab, consoleOpened);
 +    }, true);
-+  });
++  }
 +
 +  function addMessages()
 +  {
-+    let button = content.document.querySelector("button");
++    let button = privateContent.document.querySelector("button");
 +    ok(button, "button in page");
-+    EventUtils.synthesizeMouse(button, 2, 2, {}, content);
++    EventUtils.synthesizeMouse(button, 2, 2, {}, privateContent);
 +  }
 +
 +  function consoleOpened(aHud)
@@ -118,9 +137,9 @@ new file mode 100644
 +  function testCachedMessages()
 +  {
 +    info("testCachedMessages()");
-+    closeConsole(gBrowser.selectedTab, () => {
++    closeConsole(privateTab, () => {
 +      info("web console closed");
-+      openConsole(gBrowser.selectedTab, consoleReopened);
++      openConsole(privateTab, consoleReopened);
 +    });
 +  }
 +
@@ -140,9 +159,9 @@ new file mode 100644
 +  function testBrowserConsole()
 +  {
 +    info("testBrowserConsole()");
-+    closeConsole(gBrowser.selectedTab, () => {
++    closeConsole(privateTab, () => {
 +      info("web console closed");
-+      win.HUDConsoleUI.toggleBrowserConsole().then(onBrowserConsoleOpen);
++      privateWindow.HUDConsoleUI.toggleBrowserConsole().then(onBrowserConsoleOpen);
 +    });
 +  }
 +
@@ -181,13 +200,13 @@ new file mode 100644
 +      checkNoPrivateMessages();
 +
 +      info("close the browser console");
-+      win.HUDConsoleUI.toggleBrowserConsole().then(() => {
++      privateWindow.HUDConsoleUI.toggleBrowserConsole().then(() => {
 +        info("reopen the browser console");
 +        executeSoon(() =>
 +          HUDConsoleUI.toggleBrowserConsole().then(onBrowserConsoleReopen));
 +      });
 +    });
-+    win.BrowserTryToCloseWindow();
++    privateWindow.BrowserTryToCloseWindow();
 +  }
 +
 +  function onBrowserConsoleReopen(aHud)
@@ -511,6 +530,29 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
     * Process the console API call arguments in order to perform printf-like
     * string substitution.
     *
+diff --git a/dom/tests/browser/browser_ConsoleStoragePBTest_perwindowpb.js b/dom/tests/browser/browser_ConsoleStoragePBTest_perwindowpb.js
+--- a/dom/tests/browser/browser_ConsoleStoragePBTest_perwindowpb.js
++++ b/dom/tests/browser/browser_ConsoleStoragePBTest_perwindowpb.js
+@@ -48,17 +48,18 @@ function test() {
+         }
+       };
+ 
+       aWindow.Services.obs.addObserver(
+         consoleObserver, "console-api-log-event", false);
+       aWindow.console.log("foo bar baz (private: " + aIsPrivateMode + ")");
+     }, true);
+ 
+-    storageShouldOccur = !aIsPrivateMode;
++    // We expect that console API messages are always stored.
++    storageShouldOccur = true;
+     innerID = getInnerWindowId(aWindow);
+     beforeEvents = CSS.ConsoleAPIStorage.getEvents(innerID);
+     aWindow.gBrowser.selectedBrowser.loadURI(testURI);
+   }
+ 
+   function testOnWindow(aOptions, aCallback) {
+     whenNewWindowLoaded(aOptions, function(aWin) {
+       windowsToClose.push(aWin);
 diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/dbg-client.jsm
 --- a/toolkit/devtools/client/dbg-client.jsm
 +++ b/toolkit/devtools/client/dbg-client.jsm
@@ -546,7 +588,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
                             "inner-window-destroyed", false);
 +  if (this._isGlobalActor) {
 +    Services.obs.addObserver(this._onObserverNotification,
-+                             "last-pb-context-exiting", false);
++                             "last-pb-context-exited", false);
 +  }
  }
  
@@ -567,7 +609,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
                                  "inner-window-destroyed");
 +    if (this._isGlobalActor) {
 +      Services.obs.removeObserver(this._onObserverNotification,
-+                                  "last-pb-context-exiting");
++                                  "last-pb-context-exited");
 +    }
      this._actorPool = null;
      this._protoChains.clear();
@@ -681,7 +723,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +        }
 +        break;
 +      }
-+      case "last-pb-context-exiting":
++      case "last-pb-context-exited":
 +        this.conn.send({
 +          from: this.actorID,
 +          type: "lastPrivateContextExited",
@@ -745,8 +787,8 @@ diff --git a/toolkit/devtools/webconsole/NetworkHelper.jsm b/toolkit/devtools/we
        return this.getRequestLoadContext(aRequest).associatedWindow;
 -    } catch (ex) { }
 +    } catch (ex) {
-+      // getWindowForRequest() throws on b2g: there is no associatedWindow
-+      // property.
++      // TODO: bug 802246 - getWindowForRequest() throws on b2g: there is no
++      // associatedWindow property.
 +    }
      return null;
    },
