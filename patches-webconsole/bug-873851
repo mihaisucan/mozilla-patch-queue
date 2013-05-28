@@ -1,0 +1,540 @@
+# HG changeset patch
+# Parent e0ed2a79d290e69f2ea5a05a062e379d00d4ebfb
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1369761736 -10800
+
+Bug 873851 - Intermittent browser_webconsole_bug_764572_output_open_url.js | Timed out while waiting for: show TEST_URI's net activity in console; r=me; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
+--- a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
++++ b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
+@@ -8,146 +8,100 @@ const TEST_URI = "http://example.com/bro
+ const COMMAND_NAME = "consoleCmd_copyURL";
+ const CONTEXT_MENU_ID = "#menu_copyURL";
+ 
+ let HUD = null;
+ let output = null;
+ let menu = null;
+ 
+ function test() {
++  registerCleanupFunction(() => {
++    HUD = output = menu = null;
++  });
++
+   addTab(TEST_URI);
+-
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+ 
+     openConsole(null, function (aHud) {
+       HUD = aHud;
+       output = aHud.outputNode;
+       menu = HUD.iframeWindow.document.getElementById("output-contextmenu");
+ 
+       executeSoon(testWithoutNetActivity);
+     });
+   }, true);
+ }
+ 
+ // Return whether "Copy Link Location" command is enabled or not.
+ function isEnabled() {
+-  let controller = top.document.commandDispatcher.
+-    getControllerForCommand(COMMAND_NAME);
+-
++  let controller = top.document.commandDispatcher
++                   .getControllerForCommand(COMMAND_NAME);
+   return controller && controller.isCommandEnabled(COMMAND_NAME);
+ }
+ 
+-function select(query) {
+-  let target = output.querySelector(query);
+-
+-  output.focus();
+-  output.selectedItem = target;
+-
+-  return target;
+-}
+-
+ function testWithoutNetActivity() {
+   HUD.jsterm.clearOutput();
+-  output = HUD.outputNode;
+-  content.wrappedJSObject.console.log("bug 638949");
++  content.console.log("bug 638949");
+ 
+-  // Test that "Copy Link Location" command is disabled if there
+-  // were no network-related messages.
+-  waitForSuccess({
+-    name: "no net activity in console",
+-
+-    validatorFn: function () {
+-      return output.textContent.indexOf("bug 638949") > -1;
+-    },
+-
+-    successFn: function () {
+-      select(".webconsole-msg-log");
+-      goUpdateCommand(COMMAND_NAME);
+-      ok(!isEnabled(), COMMAND_NAME + "is disabled");
+-      executeSoon(testMenuWithoutNetActivity);
+-    }
+-  });
++  // Test that the "Copy Link Location" command is disabled for non-network
++  // messages.
++  waitForMessages({
++    webconsole: HUD,
++    messages: [{
++      text: "bug 638949",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(onConsoleMessage);
+ }
+ 
+-function testMenuWithoutNetActivity() {
+-  // Test that "Copy Link Location" menu item is hidden if there
+-  // were no network-related messages.
+-  let target = select(".webconsole-msg-log");
++function onConsoleMessage(aResults) {
++  output.focus();
++  output.selectedItem = [...aResults[0].matched][0];
+ 
+-  function next() {
+-    menu.hidePopup();
+-    executeSoon(testWithNetActivity);
+-  }
++  goUpdateCommand(COMMAND_NAME);
++  ok(!isEnabled(), COMMAND_NAME + "is disabled");
+ 
+-  waitForOpenContextMenu(menu, {
+-    target: target,
+-
+-    successFn: function () {
+-      let isHidden = menu.querySelector(CONTEXT_MENU_ID).hidden;
+-      ok(isHidden, CONTEXT_MENU_ID + " is hidden");
+-      next();
+-    },
+-
+-    failureFn: next
+-  });
++  // Test that the "Copy Link Location" menu item is hidden for non-network
++  // messages.
++  waitForContextMenu(menu, output.selectedItem, () => {
++    let isHidden = menu.querySelector(CONTEXT_MENU_ID).hidden;
++    ok(isHidden, CONTEXT_MENU_ID + " is hidden");
++  }, testWithNetActivity);
+ }
+ 
+ function testWithNetActivity() {
+   HUD.jsterm.clearOutput();
+   content.location.reload(); // Reloading will produce network logging
+ 
+-  // Test that "Copy Link Location" command is enabled and works
+-  // as expected if there were any network-related messages.
+-  //
+-  // This command should copy only the URL without timestamp and other
+-  // stuff.
+-  waitForSuccess({
+-    name: "net activity in console",
++  // Test that the "Copy Link Location" command is enabled and works
++  // as expected for any network-related message.
++  // This command should copy only the URL.
++  waitForMessages({
++    webconsole: HUD,
++    messages: [{
++      text: "test-console.html",
++      category: CATEGORY_NETWORK,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(onNetworkMessage);
++}
+ 
+-    validatorFn: function () {
+-      let item = select(".webconsole-msg-network");
+-      return item && item.url;
+-    },
++function onNetworkMessage(aResults) {
++  output.focus();
++  output.selectedItem = [...aResults[0].matched][0];
+ 
+-    successFn: function () {
+-      output.focus();
+-      goUpdateCommand(COMMAND_NAME);
+-      ok(isEnabled(), COMMAND_NAME + " is enabled");
++  goUpdateCommand(COMMAND_NAME);
++  ok(isEnabled(), COMMAND_NAME + " is enabled");
+ 
+-      waitForClipboard(output.selectedItem.url, function clipboardSetup() {
+-        goDoCommand(COMMAND_NAME);
+-      }, testMenuWithNetActivity, testMenuWithNetActivity);
+-    },
+-
+-    failureFn: testMenuWithNetActivity
+-  });
++  waitForClipboard(output.selectedItem.url, () => goDoCommand(COMMAND_NAME),
++                   testMenuWithNetActivity, testMenuWithNetActivity);
+ }
+ 
+ function testMenuWithNetActivity() {
+-  // Test that "Copy Link Location" menu item is visible if there
+-  // were any network-related messages.
+-  let target = select(".webconsole-msg-network");
+-
+-  function next() {
+-    menu.hidePopup();
+-    executeSoon(finalize);
+-  }
+-
+-  waitForOpenContextMenu(menu, {
+-    target: target,
+-
+-    successFn: function () {
+-      let isVisible = !menu.querySelector(CONTEXT_MENU_ID).hidden;
+-      ok(isVisible, CONTEXT_MENU_ID + " is visible");
+-      next();
+-    },
+-
+-    failureFn: next
+-  });
++  // Test that the "Copy Link Location" menu item is visible for network-related
++  // messages.
++  waitForContextMenu(menu, output.selectedItem, () => {
++    let isVisible = !menu.querySelector(CONTEXT_MENU_ID).hidden;
++    ok(isVisible, CONTEXT_MENU_ID + " is visible");
++  }, finishTest);
+ }
+-
+-function finalize() {
+-  HUD = null;
+-  output = null;
+-  menu = null;
+-  finishTest();
+-}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_764572_output_open_url.js b/browser/devtools/webconsole/test/browser_webconsole_bug_764572_output_open_url.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_764572_output_open_url.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_764572_output_open_url.js
+@@ -18,163 +18,102 @@ function test() {
+   }, true);
+ }
+ 
+ function consoleOpened(aHud) {
+   HUD = aHud;
+   outputNode = aHud.outputNode;
+   contextMenu = HUD.iframeWindow.document.getElementById("output-contextmenu");
+ 
+-  executeSoon(testOnNotNetActivity);
++  registerCleanupFunction(() => {
++    HUD = outputNode = contextMenu = null;
++  });
++
++  HUD.jsterm.clearOutput();
++
++  content.console.log("bug 764572");
++
++  waitForMessages({
++    webconsole: HUD,
++    messages: [{
++      text: "bug 764572",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(onConsoleMessage);
+ }
+ 
+-function testOnNotNetActivity() {
+-  HUD.jsterm.clearOutput();
++function onConsoleMessage(aResults) {
++  outputNode.focus();
++  outputNode.selectedItem = [...aResults[0].matched][0];
+ 
+-  outputNode = HUD.outputNode;
+-  let console = content.wrappedJSObject.console;
+-  console.log("bug 764572");
++  // Check if the command is disabled non-network messages.
++  goUpdateCommand(COMMAND_NAME);
++  let controller = top.document.commandDispatcher
++                   .getControllerForCommand(COMMAND_NAME);
+ 
+-  testOnNotNetActivity_command();
+-}
+-function testOnNotNetActivity_command () {
+-  waitForSuccess({
+-    name: "show no net activity in console",
+-    validatorFn: function () {
+-      return outputNode.textContent.indexOf("bug 764572") > -1;
+-    },
+-    successFn: function () {
+-      outputNode.focus();
+-      outputNode.selectedItem = outputNode.querySelector(".webconsole-msg-log");
++  let isDisabled = !controller || !controller.isCommandEnabled(COMMAND_NAME);
++  ok(isDisabled, COMMAND_NAME + " should be disabled.");
+ 
+-      // check whether the command is disable
+-      goUpdateCommand(COMMAND_NAME);
+-      let controller = top.document.commandDispatcher.
+-        getControllerForCommand(COMMAND_NAME);
+-
+-      let isDisabled = !controller || !controller.isCommandEnabled("consoleCmd_openURL");
+-      ok(isDisabled, COMMAND_NAME + " should be disabled.");
+-      executeSoon(testOnNotNetActivity_contextmenu);
+-    },
+-    failureFn: testOnNotNetActivity_contextmenu,
+-  });
+-}
+-function testOnNotNetActivity_contextmenu() {
+-  let target = outputNode.querySelector(".webconsole-msg-log");
+-
+-  outputNode.focus();
+-  outputNode.selectedItem = target;
+-
+-  waitForOpenContextMenu(contextMenu, {
+-    target: target,
+-    successFn: function () {
+-      let isHidden = contextMenu.querySelector(CONTEXT_MENU_ID).hidden;
+-      ok(isHidden, CONTEXT_MENU_ID + "should be hidden.");
+-
+-      closeContextMenu(contextMenu);
+-      executeSoon(testOnNetActivity);
+-    },
+-    failureFn: function(){
+-      closeContextMenu(contextMenu);
+-      executeSoon(testOnNetActivity);
+-    },
+-  });
++  waitForContextMenu(contextMenu, outputNode.selectedItem, () => {
++    let isHidden = contextMenu.querySelector(CONTEXT_MENU_ID).hidden;
++    ok(isHidden, CONTEXT_MENU_ID + " should be hidden.");
++  }, testOnNetActivity);
+ }
+ 
+ function testOnNetActivity() {
+   HUD.jsterm.clearOutput();
+ 
+-  // reload the url to show net activity in console.
++  // Reload the url to show net activity in console.
+   content.location.reload();
+ 
+-  testOnNetActivity_command();
++  waitForMessages({
++    webconsole: HUD,
++    messages: [{
++      text: "test-console.html",
++      category: CATEGORY_NETWORK,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(onNetworkMessage);
+ }
+ 
+-function testOnNetActivity_command() {
+-  waitForSuccess({
+-    name: "show TEST_URI's net activity in console",
+-    validatorFn: function () {
+-      outputNode.focus();
+-      outputNode.selectedItem = outputNode.querySelector(".webconsole-msg-network");
++function onNetworkMessage(aResults) {
++  outputNode.focus();
++  outputNode.selectedItem = [...aResults[0].matched][0];
+ 
+-      let item = outputNode.selectedItem;
+-      return item && item.url;
+-    },
+-    successFn: function () {
+-      outputNode.focus();
++  let currentTab = gBrowser.selectedTab;
++  let newTab = null;
+ 
+-      // set up the event handler for TabOpen
+-      gBrowser.tabContainer.addEventListener("TabOpen", function onOpen(aEvent) {
+-        gBrowser.tabContainer.removeEventListener("TabOpen", onOpen, true);
++  gBrowser.tabContainer.addEventListener("TabOpen", function onOpen(aEvent) {
++    gBrowser.tabContainer.removeEventListener("TabOpen", onOpen, true);
++    newTab = aEvent.target;
++    newTab.linkedBrowser.addEventListener("load", onTabLoaded, true);
++  }, true);
+ 
+-        let tab = aEvent.target;
+-        onTabOpen(tab);
+-      }, true);
++  function onTabLoaded() {
++    newTab.linkedBrowser.removeEventListener("load", onTabLoaded, true);
++    gBrowser.removeTab(newTab);
++    gBrowser.selectedTab = currentTab;
++    executeSoon(testOnNetActivity_contextmenu);
++  }
+ 
+-      // check whether the command is enable
+-      goUpdateCommand(COMMAND_NAME);
+-      let controller = top.document.commandDispatcher.
+-        getControllerForCommand(COMMAND_NAME);
+-      ok(controller.isCommandEnabled("consoleCmd_openURL"), COMMAND_NAME + " should be enabled.");
++  // Check if the command is enabled for a network message.
++  goUpdateCommand(COMMAND_NAME);
++  let controller = top.document.commandDispatcher
++                   .getControllerForCommand(COMMAND_NAME);
++  ok(controller.isCommandEnabled(COMMAND_NAME),
++     COMMAND_NAME + " should be enabled.");
+ 
+-      // try to open url.
+-      goDoCommand(COMMAND_NAME);
+-    },
+-    failureFn: testOnNetActivity_contextmenu,
+-  });
+-}
+-
+-// check TabOpen event
+-function onTabOpen(aTab) {
+-  waitForSuccess({
+-    timeout: 10000,
+-    name: "complete to initialize the opening tab",
+-    validatorFn: function()
+-    {
+-      // wait to complete initialization for the new tab.
+-      let url = aTab.linkedBrowser.currentURI.spec;
+-      return url === TEST_URI;
+-    },
+-    successFn: function()
+-    {
+-      gBrowser.removeTab(aTab);
+-      executeSoon(testOnNetActivity_contextmenu);
+-    },
+-    failureFn: function()
+-    {
+-      info("new tab currentURI " + aTab.linkedBrowser.currentURI.spec);
+-      testOnNetActivity_contextmenu();
+-    },
+-  });
++  // Try to open the URL.
++  goDoCommand(COMMAND_NAME);
+ }
+ 
+ function testOnNetActivity_contextmenu() {
+   let target = outputNode.querySelector(".webconsole-msg-network");
+ 
+   outputNode.focus();
+   outputNode.selectedItem = target;
+ 
+-  waitForOpenContextMenu(contextMenu, {
+-    target: target,
+-    successFn: function () {
+-      let isShown = !contextMenu.querySelector(CONTEXT_MENU_ID).hidden;
+-      ok(isShown, CONTEXT_MENU_ID + "should be shown.");
+-
+-      closeContextMenu(contextMenu);
+-      executeSoon(finalizeTest);
+-    },
+-    failureFn: function(){
+-      closeContextMenu(contextMenu);
+-      executeSoon(finalizeTest);
+-    },
+-  });
++  waitForContextMenu(contextMenu, target, () => {
++    let isShown = !contextMenu.querySelector(CONTEXT_MENU_ID).hidden;
++    ok(isShown, CONTEXT_MENU_ID + " should be shown.");
++  }, finishTest);
+ }
+-
+-function finalizeTest() {
+-  HUD = null;
+-  outputNode = null;
+-  contextMenu = null
+-  finishTest();
+-}
+-
+-function closeContextMenu (aContextMenu) {
+-  aContextMenu.hidePopup();
+-}
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -192,64 +192,52 @@ function closeConsole(aTab, aCallback = 
+     }
+   }
+   else {
+     aCallback();
+   }
+ }
+ 
+ /**
+- * Polls a given function waiting for opening context menu.
++ * Wait for a context menu popup to open.
+  *
+- * @Param {nsIDOMElement} aContextMenu
+- * @param object aOptions
+- *        Options object with the following properties:
+- *        - successFn
+- *        A function called if opening the given context menu - success to return.
+- *        - failureFn
+- *        A function called if not opening the given context menu - fails to return.
+- *        - target
+- *        The target element for showing a context menu.
+- *        - timeout
+- *        Timeout for popup shown, in milliseconds. Default is 5000.
++ * @param nsIDOMElement aPopup
++ *        The XUL popup you expect to open.
++ * @param nsIDOMElement aButton
++ *        The button/element that receives the contextmenu event. This is
++ *        expected to open the popup.
++ * @param function aOnShown
++ *        Function to invoke on popupshown event.
++ * @param function aOnHidden
++ *        Function to invoke on popuphidden event.
+  */
+-function waitForOpenContextMenu(aContextMenu, aOptions) {
+-  let start = Date.now();
+-  let timeout = aOptions.timeout || 5000;
+-  let targetElement = aOptions.target;
++function waitForContextMenu(aPopup, aButton, aOnShown, aOnHidden)
++{
++  function onPopupShown() {
++    info("onPopupShown");
++    aPopup.removeEventListener("popupshown", onPopupShown);
+ 
+-  if (!aContextMenu) {
+-    ok(false, "Can't get a context menu.");
+-    aOptions.failureFn();
+-    return;
++    aOnShown();
++
++    // Use executeSoon() to get out of the popupshown event.
++    aPopup.addEventListener("popuphidden", onPopupHidden);
++    executeSoon(() => aPopup.hidePopup());
+   }
+-  if (!targetElement) {
+-    ok(false, "Can't get a target element.");
+-    aOptions.failureFn();
+-    return;
++  function onPopupHidden() {
++    info("onPopupHidden");
++    aPopup.removeEventListener("popuphidden", onPopupHidden);
++    aOnHidden();
+   }
+ 
+-  function onPopupShown() {
+-    aContextMenu.removeEventListener("popupshown", onPopupShown);
+-    clearTimeout(onTimeout);
+-    aOptions.successFn();
+-  }
++  aPopup.addEventListener("popupshown", onPopupShown);
+ 
+-
+-  aContextMenu.addEventListener("popupshown", onPopupShown);
+-
+-  let onTimeout = setTimeout(function(){
+-    aContextMenu.removeEventListener("popupshown", onPopupShown);
+-    aOptions.failureFn();
+-  }, timeout);
+-
+-  // open a context menu.
+-  let eventDetails = { type : "contextmenu", button : 2};
+-  EventUtils.synthesizeMouse(targetElement, 2, 2,
+-                             eventDetails, targetElement.ownerDocument.defaultView);
++  info("wait for the context menu to open");
++  let eventDetails = { type: "contextmenu", button: 2};
++  EventUtils.synthesizeMouse(aButton, 2, 2, eventDetails,
++                             aButton.ownerDocument.defaultView);
+ }
+ 
+ /**
+  * Dump the output of all open Web Consoles - used only for debugging purposes.
+  */
+ function dumpConsoles()
+ {
+   if (gPendingOutputTest) {
