@@ -1,0 +1,204 @@
+# HG changeset patch
+# Parent e0ed2a79d290e69f2ea5a05a062e379d00d4ebfb
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1369773436 -10800
+
+Bug 705921 - Option to clear web console messages on page reload; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
+--- a/browser/app/profile/firefox.js
++++ b/browser/app/profile/firefox.js
+@@ -1128,16 +1128,21 @@ pref("devtools.webconsole.filter.warn", 
+ pref("devtools.webconsole.filter.info", true);
+ pref("devtools.webconsole.filter.log", true);
+ pref("devtools.webconsole.filter.secerror", true);
+ pref("devtools.webconsole.filter.secwarn", true);
+ 
+ // Text size in the Web Console. Use 0 for the system default size.
+ pref("devtools.webconsole.fontSize", 0);
+ 
++// Persistent logging: |true| if you want the Web Console to keep all of the
++// logged messages after reloading the page, |false| if you want the output to
++// be cleared each time page navigation happens.
++pref("devtools.webconsole.persistlog", true);
++
+ // The number of lines that are displayed in the web console for the Net,
+ // CSS, JS and Web Developer categories.
+ pref("devtools.hud.loglimit.network", 200);
+ pref("devtools.hud.loglimit.cssparser", 200);
+ pref("devtools.hud.loglimit.exception", 200);
+ pref("devtools.hud.loglimit.console", 200);
+ 
+ // The developer tools editor configuration:
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -127,16 +127,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_bug_865288_repeat_different_objects.js \
+ 	browser_jsterm_inspect.js \
+ 	browser_bug_869003_inspect_cross_domain_object.js \
+ 	browser_bug_862916_console_dir_and_filter_off.js \
+ 	browser_console_native_getters.js \
+ 	browser_bug_871156_ctrlw_close_tab.js \
+ 	browser_console_private_browsing.js \
+ 	browser_console_nsiconsolemessage.js \
++	browser_console_clear_on_reload.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+ 	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_console_clear_on_reload.js b/browser/devtools/webconsole/test/browser_console_clear_on_reload.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console_clear_on_reload.js
+@@ -0,0 +1,73 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Check that clear output on page reload works - bug 705921.
++
++function test()
++{
++  const PREF = "devtools.webconsole.persistlog";
++  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
++  let hud = null;
++
++  Services.prefs.setBoolPref(PREF, false);
++  registerCleanupFunction(() => Services.prefs.clearUserPref(PREF));
++
++  addTab(TEST_URI);
++
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++
++  function consoleOpened(aHud)
++  {
++    hud = aHud;
++    ok(hud, "Web Console opened");
++
++    hud.jsterm.clearOutput();
++    content.console.log("foobarz1");
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "foobarz1",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++      }],
++    }).then(onConsoleMessage);
++  }
++
++  function onConsoleMessage()
++  {
++    browser.addEventListener("load", onReload, true);
++    content.location.reload();
++  }
++
++  function onReload()
++  {
++    browser.removeEventListener("load", onReload, true);
++
++    content.console.log("foobarz2");
++
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "test-console.html",
++        category: CATEGORY_NETWORK,
++      },
++      {
++        text: "foobarz2",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++      }],
++    }).then(onConsoleMessageAfterReload);
++  }
++
++  function onConsoleMessageAfterReload()
++  {
++    is(hud.outputNode.textContent.indexOf("foobarz1"), -1,
++       "foobarz1 has been removed from output");
++    finishTest();
++  }
++}
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -173,16 +173,17 @@ const FILTER_PREFS_PREFIX = "devtools.we
+ 
+ // The minimum font size.
+ const MIN_FONT_SIZE = 10;
+ 
+ // The maximum length of strings to be displayed by the Web Console.
+ const MAX_LONG_STRING_LENGTH = 200000;
+ 
+ const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
++const PREF_PERSISTLOG = "devtools.webconsole.persistlog";
+ 
+ /**
+  * A WebConsoleFrame instance is an interactive console initialized *per target*
+  * that displays console log data as well as provides an interactive terminal to
+  * manipulate the target's document content.
+  *
+  * The WebConsoleFrame is responsible for the actual Web Console UI
+  * implementation.
+@@ -366,16 +367,30 @@ WebConsoleFrame.prototype = {
+ 
+     this.webConsoleClient.setPreferences(preferences, function(aResponse) {
+       if (!aResponse.error) {
+         this._saveRequestAndResponseBodies = newValue;
+       }
+     }.bind(this));
+   },
+ 
++  _persistLog: null,
++
++  /**
++   * Getter for the persistent logging preference. This value is cached per
++   * instance to avoid reading the pref too often.
++   * @type boolean
++   */
++  get persistLog() {
++    if (this._persistLog === null) {
++      this._persistLog = Services.prefs.getBoolPref(PREF_PERSISTLOG);
++    }
++    return this._persistLog;
++  },
++
+   /**
+    * Initialize the WebConsoleFrame instance.
+    * @return object
+    *         A Promise object for the initialization.
+    */
+   init: function WCF_init()
+   {
+     this._initUI();
+@@ -4890,16 +4905,20 @@ WebConsoleConnectionProxy.prototype = {
+    *        The message received from the server.
+    */
+   _onTabNavigated: function WCCP__onTabNavigated(aEvent, aPacket)
+   {
+     if (!this.owner) {
+       return;
+     }
+ 
++    if (aEvent == "will-navigate" && !this.owner.persistLog) {
++      this.owner.jsterm.clearOutput();
++    }
++
+     if (aPacket.url) {
+       this.owner.onLocationChange(aPacket.url, aPacket.title);
+     }
+ 
+     if (aEvent == "navigate" && !aPacket.nativeConsoleAPI) {
+       this.owner.logWarningAboutReplacedAPI();
+     }
+   },
