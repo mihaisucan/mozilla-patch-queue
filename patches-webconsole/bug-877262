@@ -1,0 +1,925 @@
+# HG changeset patch
+# Parent e29edc27f6fdd97348fb5f9c5aa3191ef8779c89
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1369859888 -10800
+
+Bug 877262 - Start using the new jetpack loader in the web console; r=dcamp
+
+diff --git a/browser/devtools/main.js b/browser/devtools/main.js
+--- a/browser/devtools/main.js
++++ b/browser/devtools/main.js
+@@ -8,17 +8,18 @@ const {Cc, Ci, Cu} = require("chrome");
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ // Add a couple of globals that we use all over this package.
+ let loaderOptions = require("@loader/options")
+ 
+ loaderOptions.globals.loader = {
+   lazyGetter: XPCOMUtils.defineLazyGetter.bind(XPCOMUtils),
+-  lazyImporter: XPCOMUtils.defineLazyModuleGetter.bind(XPCOMUtils)
++  lazyImporter: XPCOMUtils.defineLazyModuleGetter.bind(XPCOMUtils),
++  lazyServiceGetter: XPCOMUtils.defineLazyServiceGetter.bind(XPCOMUtils)
+ };
+ 
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource:///modules/devtools/gDevTools.jsm");
+ 
+ Object.defineProperty(exports, "Toolbox", {
+   get: () => require("devtools/framework/toolbox").Toolbox
+ });
+diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
+--- a/browser/devtools/webconsole/Makefile.in
++++ b/browser/devtools/webconsole/Makefile.in
+@@ -3,19 +3,12 @@
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ DEPTH		= @DEPTH@
+ topsrcdir	= @top_srcdir@
+ srcdir		= @srcdir@
+ VPATH		= @srcdir@
+ 
+ include $(DEPTH)/config/autoconf.mk
+-
+-EXTRA_JS_MODULES = \
+-		HUDService.jsm \
+-		NetworkPanel.jsm \
+-		WebConsolePanel.jsm \
+-		$(NULL)
+-
+ include $(topsrcdir)/config/rules.mk
+ 
+ libs::
+-	$(NSINSTALL) $(srcdir)/*.js $(FINAL_TARGET)/modules/devtools/framework
++	$(NSINSTALL) $(srcdir)/*.js $(FINAL_TARGET)/modules/devtools/webconsole
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/hudservice.js
+rename from browser/devtools/webconsole/HUDService.jsm
+rename to browser/devtools/webconsole/hudservice.js
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/hudservice.js
+@@ -1,55 +1,34 @@
+ /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+ /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+-const Cc = Components.classes;
+-const Ci = Components.interfaces;
+-const Cu = Components.utils;
++const {Cc, Ci, Cu} = require("chrome");
+ 
+-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++let WebConsoleUtils = require("devtools/webconsole/utils").Utils;
++let ViewHelpers = Cu.import("resource:///modules/devtools/ViewHelpers.jsm").ViewHelpers;
+ 
+-XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
+-    "resource:///modules/devtools/gDevTools.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "devtools",
+-    "resource://gre/modules/devtools/Loader.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "Services",
+-    "resource://gre/modules/Services.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "DebuggerServer",
+-  "resource://gre/modules/devtools/dbg-server.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "DebuggerClient",
+-  "resource://gre/modules/devtools/dbg-client.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+-    "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
+-    "resource://gre/modules/commonjs/sdk/core/promise.js");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "ViewHelpers",
+-    "resource:///modules/devtools/ViewHelpers.jsm");
+-
+-let Telemetry = devtools.require("devtools/shared/telemetry");
++loader.lazyGetter(this, "Promise", () => require("sdk/core/promise"));
++loader.lazyGetter(this, "Telemetry", () => require("devtools/shared/telemetry"));
++loader.lazyImporter(this, "gDevTools", "resource:///modules/devtools/gDevTools.jsm");
++loader.lazyImporter(this, "devtools", "resource://gre/modules/devtools/Loader.jsm");
++loader.lazyImporter(this, "Services", "resource://gre/modules/Services.jsm");
++loader.lazyImporter(this, "DebuggerServer", "resource://gre/modules/devtools/dbg-server.jsm");
++loader.lazyImporter(this, "DebuggerClient", "resource://gre/modules/devtools/dbg-client.jsm");
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ const BROWSER_CONSOLE_WINDOW_FEATURES = "chrome,titlebar,toolbar,centerscreen,resizable,dialog=no";
+ 
+-this.EXPORTED_SYMBOLS = ["HUDService"];
+-
+ ///////////////////////////////////////////////////////////////////////////
+ //// The HUD service
+ 
+ function HUD_SERVICE()
+ {
+   this.hudReferences = {};
+ }
+ 
+@@ -99,17 +78,17 @@ HUD_SERVICE.prototype =
+     let hud = new WebConsole(aTarget, aIframeWindow, aChromeWindow);
+     this.hudReferences[hud.hudId] = hud;
+     return hud.init();
+   },
+ 
+   /**
+    * Open a Browser Console for the given target.
+    *
+-   * @see devtools/framework/Target.jsm for details about targets.
++   * @see devtools/framework/target.js for details about targets.
+    *
+    * @param object aTarget
+    *        The target that the browser console will connect to.
+    * @param nsIDOMWindow aIframeWindow
+    *        The window where the browser console UI is already loaded.
+    * @param nsIDOMWindow aChromeWindow
+    *        The window of the browser console owner.
+    * @return object
+@@ -721,10 +700,15 @@ var HeadsUpDisplayUICommands = {
+     return this._browserConsoleDefer.promise;
+   },
+ 
+   get browserConsole() {
+     return HUDService.getHudReferenceById(this._browserConsoleID);
+   },
+ };
+ 
+-const HUDService = new HUD_SERVICE();
+-
++(() => {
++  let service = new HUD_SERVICE();
++  let methods = ["openWebConsole", "openBrowserConsole"];
++  for (let method of methods) {
++    exports[method] = service[method].bind(service);
++  }
++})();
+diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/network-panel.js
+rename from browser/devtools/webconsole/NetworkPanel.jsm
+rename to browser/devtools/webconsole/network-panel.js
+--- a/browser/devtools/webconsole/NetworkPanel.jsm
++++ b/browser/devtools/webconsole/network-panel.js
+@@ -1,52 +1,40 @@
+ /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+ /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+-const Cc = Components.classes;
+-const Ci = Components.interfaces;
+-const Cu = Components.utils;
++const {Cc, Ci, Cu} = require("chrome");
+ 
+-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++loader.lazyGetter(this, "NetworkHelper", () => require("devtools/shared/network-helper"));
++loader.lazyImporter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm");
++loader.lazyServiceGetter(this, "mimeService", "@mozilla.org/mime;1", "nsIMIMEService");
+ 
+-XPCOMUtils.defineLazyServiceGetter(this, "mimeService", "@mozilla.org/mime;1",
+-                                   "nsIMIMEService");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
+-                                  "resource://gre/modules/devtools/NetworkHelper.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+-                                  "resource://gre/modules/NetUtil.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+-                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
++let WebConsoleUtils = require("devtools/webconsole/utils").Utils;
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+-this.EXPORTED_SYMBOLS = ["NetworkPanel"];
+ 
+ /**
+  * Creates a new NetworkPanel.
+  *
+  * @constructor
+  * @param nsIDOMNode aParent
+  *        Parent node to append the created panel to.
+  * @param object aHttpActivity
+  *        HttpActivity to display in the panel.
+  * @param object aWebConsoleFrame
+  *        The parent WebConsoleFrame object that owns this network panel
+  *        instance.
+  */
+-this.NetworkPanel =
+ function NetworkPanel(aParent, aHttpActivity, aWebConsoleFrame)
+ {
+   let doc = aParent.ownerDocument;
+   this.httpActivity = aHttpActivity;
+   this.webconsole = aWebConsoleFrame;
+   this._longStringClick = this._longStringClick.bind(this);
+   this._responseBodyFetch = this._responseBodyFetch.bind(this);
+   this._requestBodyFetch = this._requestBodyFetch.bind(this);
+@@ -103,16 +91,17 @@ function NetworkPanel(aParent, aHttpActi
+   let footer = createElement(doc, "hbox", { align: "end" });
+   createAndAppendElement(footer, "spacer", { flex: 1 });
+ 
+   createAndAppendElement(footer, "resizer", { dir: "bottomend" });
+   this.panel.appendChild(footer);
+ 
+   aParent.appendChild(this.panel);
+ }
++exports.NetworkPanel = NetworkPanel;
+ 
+ NetworkPanel.prototype =
+ {
+   /**
+    * The current state of the output.
+    */
+   _state: 0,
+ 
+diff --git a/browser/devtools/webconsole/WebConsolePanel.jsm b/browser/devtools/webconsole/panel.js
+rename from browser/devtools/webconsole/WebConsolePanel.jsm
+rename to browser/devtools/webconsole/panel.js
+--- a/browser/devtools/webconsole/WebConsolePanel.jsm
++++ b/browser/devtools/webconsole/panel.js
+@@ -1,37 +1,30 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+-this.EXPORTED_SYMBOLS = [ "WebConsolePanel" ];
++const {Cc, Ci, Cu} = require("chrome");
+ 
+-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+-
+-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
+-    "resource://gre/modules/commonjs/sdk/core/promise.js");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "HUDService",
+-    "resource:///modules/HUDService.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
+-    "resource:///modules/devtools/shared/event-emitter.js");
++loader.lazyGetter(this, "Promise", () => require("sdk/core/promise"));
++loader.lazyGetter(this, "HUDService", () => require("devtools/webconsole/hudservice"));
++loader.lazyGetter(this, "EventEmitter", () => require("devtools/shared/event-emitter"));
+ 
+ /**
+  * A DevToolPanel that controls the Web Console.
+  */
+-function WebConsolePanel(iframeWindow, toolbox) {
++function WebConsolePanel(iframeWindow, toolbox)
++{
+   this._frameWindow = iframeWindow;
+   this._toolbox = toolbox;
+   EventEmitter.decorate(this);
+ }
++exports.WebConsolePanel = WebConsolePanel;
+ 
+ WebConsolePanel.prototype = {
+   hud: null,
+ 
+   /**
+    * Open is effectively an asynchronous constructor.
+    *
+    * @return object
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -1,52 +1,34 @@
+ /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+ /* vim: set ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+-const Cc = Components.classes;
+-const Ci = Components.interfaces;
+-const Cu = Components.utils;
+-
+-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "Services",
+-                                  "resource://gre/modules/Services.jsm");
+-
+-XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
+-                                   "@mozilla.org/widget/clipboardhelper;1",
+-                                   "nsIClipboardHelper");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "GripClient",
+-                                  "resource://gre/modules/devtools/dbg-client.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "NetworkPanel",
+-                                  "resource:///modules/NetworkPanel.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "AutocompletePopup",
+-                                  "resource:///modules/devtools/AutocompletePopup.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
+-                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "Promise",
+-                                  "resource://gre/modules/commonjs/sdk/core/promise.js");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "VariablesView",
+-                                  "resource:///modules/devtools/VariablesView.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
+-                                  "resource:///modules/devtools/shared/event-emitter.js");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "devtools",
+-                                  "resource://gre/modules/devtools/Loader.jsm");
++const {Cc, Ci, Cu} = require("chrome");
++
++let WebConsoleUtils = require("devtools/webconsole/utils").Utils;
++
++loader.lazyServiceGetter(this, "clipboardHelper",
++                         "@mozilla.org/widget/clipboardhelper;1",
++                         "nsIClipboardHelper");
++loader.lazyImporter(this, "Services", "resource://gre/modules/Services.jsm");
++loader.lazyGetter(this, "Promise", () => require("sdk/core/promise"));
++loader.lazyGetter(this, "EventEmitter", () => require("devtools/shared/event-emitter"));
++loader.lazyGetter(this, "AutocompletePopup",
++                  () => require("devtools/shared/autocomplete-popup").AutocompletePopup);
++loader.lazyGetter(this, "ToolSidebar",
++                  () => require("devtools/framework/sidebar").ToolSidebar);
++loader.lazyGetter(this, "NetworkPanel",
++                  () => require("devtools/webconsole/network-panel").NetworkPanel);
++loader.lazyImporter(this, "GripClient", "resource://gre/modules/devtools/dbg-client.jsm");
++loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ 
+ // The XUL namespace.
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ 
+@@ -204,16 +186,17 @@ function WebConsoleFrame(aWebConsoleOwne
+   this._toggleFilter = this._toggleFilter.bind(this);
+   this._flushMessageQueue = this._flushMessageQueue.bind(this);
+ 
+   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+   this._outputTimerInitialized = false;
+ 
+   EventEmitter.decorate(this);
+ }
++exports.WebConsoleFrame = WebConsoleFrame;
+ 
+ WebConsoleFrame.prototype = {
+   /**
+    * The WebConsole instance that owns this frame.
+    * @see HUDService.jsm::WebConsole
+    * @type object
+    */
+   owner: null,
+@@ -3128,17 +3111,16 @@ JSTerm.prototype = {
+    * Create the Web Console sidebar.
+    *
+    * @see devtools/framework/sidebar.js
+    * @private
+    */
+   _createSidebar: function JST__createSidebar()
+   {
+     let tabbox = this.hud.document.querySelector("#webconsole-sidebar");
+-    let ToolSidebar = devtools.require("devtools/framework/sidebar").ToolSidebar;
+     this.sidebar = new ToolSidebar(tabbox, this);
+     this.sidebar.show();
+   },
+ 
+   /**
+    * Add the variables view tab to the sidebar.
+    *
+    * @private
+@@ -5089,8 +5071,9 @@ let ConsoleContextMenu = {
+         shouldHide = false;
+         break;
+       }
+     }
+ 
+     return shouldHide;
+   },
+ };
++
+diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
+--- a/toolkit/devtools/webconsole/Makefile.in
++++ b/toolkit/devtools/webconsole/Makefile.in
+@@ -7,9 +7,9 @@ topsrcdir = @top_srcdir@
+ srcdir = @srcdir@
+ VPATH = @srcdir@
+ 
+ include $(DEPTH)/config/autoconf.mk
+ 
+ include $(topsrcdir)/config/rules.mk
+ 
+ libs::
+-	$(INSTALL) $(IFLAGS1) $(srcdir)/*.jsm $(FINAL_TARGET)/modules/devtools
++	$(INSTALL) $(IFLAGS1) $(srcdir)/*.js $(FINAL_TARGET)/modules/devtools/webconsole
+diff --git a/toolkit/devtools/webconsole/NetworkHelper.jsm b/toolkit/devtools/webconsole/NetworkHelper.jsm
+--- a/toolkit/devtools/webconsole/NetworkHelper.jsm
++++ b/toolkit/devtools/webconsole/NetworkHelper.jsm
+@@ -47,39 +47,26 @@
+  *  Mike Ratcliffe (Comartis AG)
+  *  Hernan Rodríguez Colmeiro
+  *  Austin Andrews
+  *  Christoph Dorn
+  *  Steven Roussey (AppCenter Inc, Network54)
+  *  Mihai Sucan (Mozilla Corp.)
+  */
+ 
+-const Cc = Components.classes;
+-const Ci = Components.interfaces;
+-const Cu = Components.utils;
+-
+-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+-
+-XPCOMUtils.defineLazyGetter(this, "NetUtil", function () {
+-  var obj = {};
+-  Cu.import("resource://gre/modules/NetUtil.jsm", obj);
+-  return obj.NetUtil;
+-});
+-
+-this.EXPORTED_SYMBOLS = ["NetworkHelper"];
++const {Cc, Ci, Cu} = require("chrome");
++loader.lazyImporter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm");
+ 
+ /**
+  * Helper object for networking stuff.
+  *
+  * Most of the following functions have been taken from the Firebug source. They
+  * have been modified to match the Firefox coding rules.
+  */
+-
+-this.NetworkHelper =
+-{
++let NetworkHelper = {
+   /**
+    * Converts aText with a given aCharset to unicode.
+    *
+    * @param string aText
+    *        Text to convert.
+    * @param string aCharset
+    *        Charset to convert the text to.
+    * @returns string
+@@ -448,8 +435,12 @@ this.NetworkHelper =
+       case "xml":
+         return true;
+ 
+       default:
+         return false;
+     }
+   },
+ }
++
++for (let prop of Object.getOwnPropertyNames(NetworkHelper)) {
++  exports[prop] = NetworkHelper[prop];
++}
+diff --git a/toolkit/devtools/webconsole/WebConsoleClient.jsm b/toolkit/devtools/webconsole/client.js
+rename from toolkit/devtools/webconsole/WebConsoleClient.jsm
+rename to toolkit/devtools/webconsole/client.js
+--- a/toolkit/devtools/webconsole/WebConsoleClient.jsm
++++ b/toolkit/devtools/webconsole/client.js
+@@ -1,42 +1,36 @@
+ /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+ /* vim: set ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+-const Cc = Components.classes;
+-const Ci = Components.interfaces;
+-const Cu = Components.utils;
++const {Cc, Ci, Cu} = require("chrome");
+ 
+-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "LongStringClient",
+-                                  "resource://gre/modules/devtools/dbg-client.jsm");
+-
+-this.EXPORTED_SYMBOLS = ["WebConsoleClient"];
++loader.lazyImporter(this, "LongStringClient", "resource://gre/modules/devtools/dbg-client.jsm");
+ 
+ /**
+  * A WebConsoleClient is used as a front end for the WebConsoleActor that is
+  * created on the server, hiding implementation details.
+  *
+  * @param object aDebuggerClient
+  *        The DebuggerClient instance we live for.
+  * @param string aActor
+  *        The WebConsoleActor ID.
+  */
+-this.WebConsoleClient = function WebConsoleClient(aDebuggerClient, aActor)
++function WebConsoleClient(aDebuggerClient, aActor)
+ {
+   this._actor = aActor;
+   this._client = aDebuggerClient;
+   this._longStrings = {};
+ }
++exports.WebConsoleClient = WebConsoleClient;
+ 
+ WebConsoleClient.prototype = {
+   _longStrings: null,
+ 
+   /**
+    * Retrieve the cached messages from the server.
+    *
+    * @see this.CACHED_MESSAGES
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/utils.js
+rename from toolkit/devtools/webconsole/WebConsoleUtils.jsm
+rename to toolkit/devtools/webconsole/utils.js
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/utils.js
+@@ -1,68 +1,47 @@
+ /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
+ /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+-const Cc = Components.classes;
+-const Ci = Components.interfaces;
+-const Cu = Components.utils;
++const {Cc, Ci, Cu} = require("chrome");
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+-XPCOMUtils.defineLazyModuleGetter(this, "Services",
+-                                  "resource://gre/modules/Services.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "ConsoleAPIStorage",
+-                                  "resource://gre/modules/ConsoleAPIStorage.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+-                                  "resource://gre/modules/NetUtil.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
+-                                  "resource://gre/modules/devtools/NetworkHelper.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+-                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
+-
+-XPCOMUtils.defineLazyServiceGetter(this, "gActivityDistributor",
+-                                   "@mozilla.org/network/http-activity-distributor;1",
+-                                   "nsIHttpActivityDistributor");
++loader.lazyGetter(this, "NetworkHelper", () => require("devtools/shared/network-helper"));
++loader.lazyImporter(this, "Services", "resource://gre/modules/Services.jsm");
++loader.lazyImporter(this, "ConsoleAPIStorage", "resource://gre/modules/ConsoleAPIStorage.jsm");
++loader.lazyImporter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm");
++loader.lazyImporter(this, "PrivateBrowsingUtils", "resource://gre/modules/PrivateBrowsingUtils.jsm");
++loader.lazyServiceGetter(this, "gActivityDistributor",
++                         "@mozilla.org/network/http-activity-distributor;1",
++                         "nsIHttpActivityDistributor");
+ 
+ // TODO: Bug 842672 - toolkit/ imports modules from browser/.
+ // Note that these are only used in JSTermHelpers, see $0 and pprint().
+-XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
+-                                  "resource:///modules/devtools/gDevTools.jsm");
+-XPCOMUtils.defineLazyModuleGetter(this, "devtools",
+-                                  "resource://gre/modules/devtools/Loader.jsm");
+-
+-XPCOMUtils.defineLazyModuleGetter(this, "VariablesView",
+-                                  "resource:///modules/devtools/VariablesView.jsm");
+-
+-this.EXPORTED_SYMBOLS = ["WebConsoleUtils", "JSPropertyProvider", "JSTermHelpers",
+-                         "ConsoleServiceListener", "ConsoleAPIListener",
+-                         "NetworkResponseListener", "NetworkMonitor",
+-                         "ConsoleProgressListener"];
++loader.lazyImporter(this, "gDevTools", "resource:///modules/devtools/gDevTools.jsm");
++loader.lazyImporter(this, "devtools", "resource://gre/modules/devtools/Loader.jsm");
++loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
+ 
+ // Match the function name from the result of toString() or toSource().
+ //
+ // Examples:
+ // (function foobar(a, b) { ...
+ // function foobar2(a) { ...
+ // function() { ...
+ const REGEX_MATCH_FUNCTION_NAME = /^\(?function\s+([^(\s]+)\s*\(/;
+ 
+ // Match the function arguments from the result of toString() or toSource().
+ const REGEX_MATCH_FUNCTION_ARGS = /^\(?function\s*[^\s(]*\s*\((.+?)\)/;
+ 
+-this.WebConsoleUtils = {
++let Utils = exports.Utils = {
+   /**
+    * Convenience function to unwrap a wrapped object.
+    *
+    * @param aObject the object to unwrap.
+    * @return aObject unwrapped.
+    */
+   unwrap: function WCU_unwrap(aObject)
+   {
+@@ -487,22 +466,22 @@ this.WebConsoleUtils = {
+     return aGrip && typeof(aGrip) == "object" && aGrip.actor;
+   },
+ };
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // Localization
+ //////////////////////////////////////////////////////////////////////////
+ 
+-WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
++Utils.l10n = function WCU_l10n(aBundleURI)
+ {
+   this._bundleUri = aBundleURI;
+ };
+ 
+-WebConsoleUtils.l10n.prototype = {
++Utils.l10n.prototype = {
+   _stringBundle: null,
+ 
+   get stringBundle()
+   {
+     if (!this._stringBundle) {
+       this._stringBundle = Services.strings.createBundle(this._bundleUri);
+     }
+     return this._stringBundle;
+@@ -572,17 +551,17 @@ WebConsoleUtils.l10n.prototype = {
+   },
+ };
+ 
+ 
+ //////////////////////////////////////////////////////////////////////////
+ // JS Completer
+ //////////////////////////////////////////////////////////////////////////
+ 
+-this.JSPropertyProvider = (function _JSPP(WCU) {
++(function _JSPP(WCU) {
+ const STATE_NORMAL = 0;
+ const STATE_QUOTE = 2;
+ const STATE_DQUOTE = 3;
+ 
+ const OPEN_BODY = "{[(".split("");
+ const CLOSE_BODY = "}])".split("");
+ const OPEN_CLOSE_BODY = {
+   "{": "}",
+@@ -863,41 +842,42 @@ function getMatchedProps(aObj, aOptions 
+     }
+     aObj = Object.getPrototypeOf(aObj);
+   }
+ 
+   return names;
+ }
+ 
+ 
+-return JSPropertyProvider;
+-})(WebConsoleUtils);
++exports.JSPropertyProvider = JSPropertyProvider;
++})(Utils);
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+ // The page errors listener
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ /**
+  * The nsIConsoleService listener. This is used to send all of the console
+  * messages (JavaScript, CSS and more) to the remote Web Console instance.
+  *
+  * @constructor
+  * @param nsIDOMWindow [aWindow]
+  *        Optional - the window object for which we are created. This is used
+  *        for filtering out messages that belong to other windows.
+  * @param object aListener
+  *        The listener object must have one method:
+- *        - onConsoleServiceMessage(). This method is invoked with one argument, the
+- *        nsIConsoleMessage, whenever a relevant message is received.
++ *        - onConsoleServiceMessage(). This method is invoked with one argument,
++ *        the nsIConsoleMessage, whenever a relevant message is received.
+  */
+-this.ConsoleServiceListener = function ConsoleServiceListener(aWindow, aListener)
++function ConsoleServiceListener(aWindow, aListener)
+ {
+   this.window = aWindow;
+   this.listener = aListener;
+ }
++exports.ConsoleServiceListener = ConsoleServiceListener;
+ 
+ ConsoleServiceListener.prototype =
+ {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
+ 
+   /**
+    * The content window for which we listen to page errors.
+    * @type nsIDOMWindow
+@@ -987,18 +967,17 @@ ConsoleServiceListener.prototype =
+    *        Tells if you want to also retrieve messages coming from private
+    *        windows. Defaults to false.
+    * @return array
+    *         The array of cached messages. Each element is an nsIScriptError or
+    *         an nsIConsoleMessage
+    */
+   getCachedMessages: function CSL_getCachedMessages(aIncludePrivate = false)
+   {
+-    let innerWindowID = this.window ?
+-                        WebConsoleUtils.getInnerWindowId(this.window) : null;
++    let innerWindowID = this.window ? Utils.getInnerWindowId(this.window) : null;
+     let errors = Services.console.getMessageArray() || [];
+ 
+     return errors.filter((aError) => {
+       if (aError instanceof Ci.nsIScriptError) {
+         if (!aIncludePrivate && aError.isFromPrivateWindow) {
+           return false;
+         }
+         if (innerWindowID &&
+@@ -1041,21 +1020,22 @@ ConsoleServiceListener.prototype =
+  *        Optional - the window object for which we are created. This is used
+  *        for filtering out messages that belong to other windows.
+  * @param object aOwner
+  *        The owner object must have the following methods:
+  *        - onConsoleAPICall(). This method is invoked with one argument, the
+  *        Console API message that comes from the observer service, whenever
+  *        a relevant console API call is received.
+  */
+-this.ConsoleAPIListener = function ConsoleAPIListener(aWindow, aOwner)
++function ConsoleAPIListener(aWindow, aOwner)
+ {
+   this.window = aWindow;
+   this.owner = aOwner;
+ }
++exports.ConsoleAPIListener = ConsoleAPIListener;
+ 
+ ConsoleAPIListener.prototype =
+ {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+ 
+   /**
+    * The content window for which we listen to window.console API calls.
+    * @type nsIDOMWindow
+@@ -1115,18 +1095,17 @@ ConsoleAPIListener.prototype =
+    * @param boolean [aIncludePrivate=false]
+    *        Tells if you want to also retrieve messages coming from private
+    *        windows. Defaults to false.
+    * @return array
+    *         The array of cached messages.
+    */
+   getCachedMessages: function CAL_getCachedMessages(aIncludePrivate = false)
+   {
+-    let innerWindowId = this.window ?
+-                        WebConsoleUtils.getInnerWindowId(this.window) : null;
++    let innerWindowId = this.window ? Utils.getInnerWindowId(this.window) : null;
+     let events = ConsoleAPIStorage.getEvents(innerWindowId);
+     if (aIncludePrivate) {
+       return events;
+     }
+ 
+     return events.filter((m) => !m.private);
+   },
+ 
+@@ -1149,17 +1128,17 @@ ConsoleAPIListener.prototype =
+  * Web Console but not from the web page.
+  *
+  * A list of helper functions used by Firebug can be found here:
+  *   http://getfirebug.com/wiki/index.php/Command_Line_API
+  *
+  * @param object aOwner
+  *        The owning object.
+  */
+-this.JSTermHelpers = function JSTermHelpers(aOwner)
++function JSTermHelpers(aOwner)
+ {
+   /**
+    * Find a node by ID.
+    *
+    * @param string aId
+    *        The ID of the element you want.
+    * @return nsIDOMNode or null
+    *         The result of calling document.querySelector(aSelector).
+@@ -1262,30 +1241,30 @@ this.JSTermHelpers = function JSTermHelp
+    * Returns the result of Object.keys(aObject).
+    *
+    * @param object aObject
+    *        Object to return the property names from.
+    * @return array of strings
+    */
+   aOwner.sandbox.keys = function JSTH_keys(aObject)
+   {
+-    return aOwner.window.wrappedJSObject.Object.keys(WebConsoleUtils.unwrap(aObject));
++    return aOwner.window.wrappedJSObject.Object.keys(Utils.unwrap(aObject));
+   };
+ 
+   /**
+    * Returns the values of all properties on aObject.
+    *
+    * @param object aObject
+    *        Object to display the values from.
+    * @return array of string
+    */
+   aOwner.sandbox.values = function JSTH_values(aObject)
+   {
+     let arrValues = new aOwner.window.wrappedJSObject.Array();
+-    let obj = WebConsoleUtils.unwrap(aObject);
++    let obj = Utils.unwrap(aObject);
+ 
+     for (let prop in obj) {
+       arrValues.push(obj[prop]);
+     }
+ 
+     return arrValues;
+   };
+ 
+@@ -1335,19 +1314,19 @@ this.JSTermHelpers = function JSTermHelp
+     aOwner.helperResult = { rawOutput: true };
+ 
+     if (typeof aObject == "function") {
+       return aObject + "\n";
+     }
+ 
+     let output = [];
+ 
+-    let obj = WebConsoleUtils.unwrap(aObject);
++    let obj = Utils.unwrap(aObject);
+     for (let name in obj) {
+-      let desc = WebConsoleUtils.getPropertyDescriptor(obj, name) || {};
++      let desc = Utils.getPropertyDescriptor(obj, name) || {};
+       if (desc.get || desc.set) {
+         // TODO: Bug 842672 - toolkit/ imports modules from browser/.
+         let getGrip = VariablesView.getGrip(desc.get);
+         let setGrip = VariablesView.getGrip(desc.set);
+         let getString = VariablesView.getString(getGrip);
+         let setString = VariablesView.getString(setGrip);
+         output.push(name + ":", "  get: " + getString, "  set: " + setString);
+       }
+@@ -1368,20 +1347,20 @@ this.JSTermHelpers = function JSTermHelp
+    *        A string you want to output.
+    * @return void
+    */
+   aOwner.sandbox.print = function JSTH_print(aString)
+   {
+     aOwner.helperResult = { rawOutput: true };
+     return String(aString);
+   };
+-};
++}
++exports.JSTermHelpers = JSTermHelpers;
+ 
+-
+-(function(_global, WCU) {
++(function(WCU) {
+ ///////////////////////////////////////////////////////////////////////////////
+ // Network logging
+ ///////////////////////////////////////////////////////////////////////////////
+ 
+ // The maximum uint32 value.
+ const PR_UINT32_MAX = 4294967295;
+ 
+ // HTTP status codes.
+@@ -2277,40 +2256,40 @@ NetworkMonitor.prototype = {
+ 
+     this.openRequests = {};
+     this.openResponses = {};
+     this.owner = null;
+     this.window = null;
+   },
+ };
+ 
+-_global.NetworkMonitor = NetworkMonitor;
+-_global.NetworkResponseListener = NetworkResponseListener;
+-})(this, WebConsoleUtils);
++exports.NetworkMonitor = NetworkMonitor;
++exports.NetworkResponseListener = NetworkResponseListener;
++})(Utils);
+ 
+ /**
+  * A WebProgressListener that listens for location changes.
+  *
+  * This progress listener is used to track file loads and other kinds of
+  * location changes.
+  *
+  * @constructor
+  * @param object aWindow
+  *        The window for which we need to track location changes.
+  * @param object aOwner
+  *        The listener owner which needs to implement two methods:
+  *        - onFileActivity(aFileURI)
+  *        - onLocationChange(aState, aTabURI, aPageTitle)
+  */
+-this.ConsoleProgressListener =
+- function ConsoleProgressListener(aWindow, aOwner)
++function ConsoleProgressListener(aWindow, aOwner)
+ {
+   this.window = aWindow;
+   this.owner = aOwner;
+ }
++exports.ConsoleProgressListener = ConsoleProgressListener;
+ 
+ ConsoleProgressListener.prototype = {
+   /**
+    * Constant used for startMonitor()/stopMonitor() that tells you want to
+    * monitor file loads.
+    */
+   MONITOR_FILE_ACTIVITY: 1,
+ 

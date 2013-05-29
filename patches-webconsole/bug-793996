@@ -1,0 +1,74 @@
+# HG changeset patch
+# Parent 2d519ec6fb951ce064d5bf8f6bf90c20eb34f13e
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1369845547 -10800
+
+Bug 793996 - Create reload marker in the Web Console; r=robcee
+
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -1683,16 +1683,34 @@ WebConsoleFrame.prototype = {
+   {
+     this.contentLocation = aURI;
+     if (this.owner.onLocationChange) {
+       this.owner.onLocationChange(aURI, aTitle);
+     }
+   },
+ 
+   /**
++   * Handler for the tabNavigated notification.
++   */
++  handleTabNavigated: function WCF_handleTabNavigated(aEvent, aPacket)
++  {
++    if (aEvent == "will-navigate" && !this.persistLog) {
++      this.jsterm.clearOutput();
++    }
++
++    if (aPacket.url) {
++      this.onLocationChange(aPacket.url, aPacket.title);
++    }
++
++    if (aEvent == "navigate" && !aPacket.nativeConsoleAPI) {
++      this.logWarningAboutReplacedAPI();
++    }
++  },
++
++  /**
+    * Output a message node. This filters a node appropriately, then sends it to
+    * the output, regrouping and pruning output as necessary.
+    *
+    * Note: this call is async - the given message node may not be displayed when
+    * you call this method.
+    *
+    * @param integer aCategory
+    *        The category of the message you want to output. See the CATEGORY_*
+@@ -4905,27 +4923,17 @@ WebConsoleConnectionProxy.prototype = {
+    *        The message received from the server.
+    */
+   _onTabNavigated: function WCCP__onTabNavigated(aEvent, aPacket)
+   {
+     if (!this.owner) {
+       return;
+     }
+ 
+-    if (aEvent == "will-navigate" && !this.owner.persistLog) {
+-      this.owner.jsterm.clearOutput();
+-    }
+-
+-    if (aPacket.url) {
+-      this.owner.onLocationChange(aPacket.url, aPacket.title);
+-    }
+-
+-    if (aEvent == "navigate" && !aPacket.nativeConsoleAPI) {
+-      this.owner.logWarningAboutReplacedAPI();
+-    }
++    this.owner.handleTabNavigated(aEvent, aPacket);
+   },
+ 
+   /**
+    * Release an object actor.
+    *
+    * @param string aActor
+    *        The actor ID to send the request to.
+    */
