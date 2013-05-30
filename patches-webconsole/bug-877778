@@ -1,0 +1,134 @@
+# HG changeset patch
+# Parent 6c2b9c444d9bd9ced3b1e59f6f9bfba5eda7ed03
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1369945432 -10800
+
+Bug 877778 - Browser Console, clicking JS/CSS error/warning link does not open source file; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -333,16 +333,22 @@ WebConsole.prototype = {
+    * @param integer aSourceLine
+    *        The line number which you want to place the caret.
+    * TODO: This function breaks the client-server boundaries.
+    *       To be fixed in bug 793259.
+    */
+   viewSourceInStyleEditor:
+   function WC_viewSourceInStyleEditor(aSourceURL, aSourceLine)
+   {
++    let toolbox = gDevTools.getToolbox(this.target);
++    if (!toolbox) {
++      this.viewSource(aSourceURL, aSourceLine);
++      return;
++    }
++
+     gDevTools.showToolbox(this.target, "styleeditor").then(function(toolbox) {
+       try {
+         toolbox.getCurrentPanel().selectStyleSheet(aSourceURL, aSourceLine);
+       } catch(e) {
+         // Open view source if style editor fails.
+         this.viewSource(aSourceURL, aSourceLine);
+       }
+     });
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -128,16 +128,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_jsterm_inspect.js \
+ 	browser_bug_869003_inspect_cross_domain_object.js \
+ 	browser_bug_862916_console_dir_and_filter_off.js \
+ 	browser_console_native_getters.js \
+ 	browser_bug_871156_ctrlw_close_tab.js \
+ 	browser_console_private_browsing.js \
+ 	browser_console_nsiconsolemessage.js \
+ 	browser_console_addonsdk_loader_exception.js \
++	browser_console_error_source_click.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+ 	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_console_error_source_click.js b/browser/devtools/webconsole/test/browser_console_error_source_click.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console_error_source_click.js
+@@ -0,0 +1,75 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Check that JS errors and CSS warnings open view source when their source link
++// is clicked in the Browser Console. See bug 877778.
++
++const TEST_URI = "data:text/html;charset=utf8,<p>hello world from bug 877778 " +
++                 "<button onclick='foobar.explode()' " +
++                 "style='test-color: green-please'>click!</button>";
++function test()
++{
++  let hud;
++
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    HUDConsoleUI.toggleBrowserConsole().then(browserConsoleOpened);
++  }, true);
++
++  function browserConsoleOpened(aHud)
++  {
++    hud = aHud;
++    ok(hud, "browser console opened");
++
++    let button = content.document.querySelector("button");
++    ok(button, "button element found");
++
++    info("generate exception and wait for the message");
++    executeSoon(() => {
++      expectUncaughtException();
++      button.click();
++    });
++
++    waitForMessages({
++      webconsole: hud,
++      messages: [
++        {
++          text: "ReferenceError: foobar is not defined",
++          category: CATEGORY_JS,
++          severity: SEVERITY_ERROR,
++        },
++        {
++          text: "Unknown property 'test-color'",
++          category: CATEGORY_CSS,
++          severity: SEVERITY_WARNING,
++        },
++      ],
++    }).then(onMessageFound);
++  }
++
++  function onMessageFound(results)
++  {
++    let viewSource = hud.viewSource;
++    let viewSourceCalled = false;
++    hud.viewSource = () => viewSourceCalled = true;
++
++    for (let result of results) {
++      viewSourceCalled = false;
++
++      let msg = [...results[0].matched][0];
++      ok(msg, "message element found for: " + result.text);
++      let locationNode = msg.querySelector(".webconsole-location");
++      ok(locationNode, "message location element found");
++
++      EventUtils.synthesizeMouse(locationNode, 2, 2, {}, hud.iframeWindow);
++
++      ok(viewSourceCalled, "view source opened");
++    }
++
++    hud.viewSource = viewSource;
++    finishTest();
++  }
++}
