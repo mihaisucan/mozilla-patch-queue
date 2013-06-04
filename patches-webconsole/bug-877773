@@ -1,30 +1,13 @@
 # HG changeset patch
-# Parent 2eca9b40b86fa6315eb2815eca1bf3bc58bbb03d
+# Parent ce5ab0de1b092e51f5aba1304588ec0f508566ef
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1370034409 -10800
+# Date 1370360859 -10800
+Bug 877773 - If Browser console is staying opened, Browser UI freezes for a while when open youtube page; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc,mochitest-o -t none
 
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -205,16 +205,17 @@ function WebConsoleFrame(aWebConsoleOwne
- 
-   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-   this._outputTimerInitialized = false;
- 
-   EventEmitter.decorate(this);
- }
- 
- WebConsoleFrame.prototype = {
-+
-   /**
-    * The WebConsole instance that owns this frame.
-    * @see HUDService.jsm::WebConsole
-    * @type object
-    */
-   owner: null,
- 
-   /**
-@@ -1172,24 +1173,46 @@ WebConsoleFrame.prototype = {
+@@ -1172,24 +1172,44 @@ WebConsoleFrame.prototype = {
    {
      // Warnings and legacy strict errors become warnings; other types become
      // errors.
@@ -36,7 +19,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    let objectActors = new Set();
 +
 +    // Gather the actor IDs.
-+    for (let prop of ["errorMessage", "message", "lineText"]) {
++    for (let prop of ["errorMessage", "lineText"]) {
 +      let grip = aScriptError[prop];
 +      if (WebConsoleUtils.isActorGrip(grip)) {
 +        objectActors.add(grip.actor);
@@ -62,8 +45,6 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      node._objectActors = objectActors;
 +    }
 +
-+    //dump(Date.now() + " DBG-CLIENT: error " + aScriptError._count + " displayed\n");
-+
      return node;
    },
  
@@ -72,7 +53,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * given error.
     *
     * @param nsIScriptError aPageError
-@@ -1205,20 +1228,40 @@ WebConsoleFrame.prototype = {
+@@ -1205,20 +1225,42 @@ WebConsoleFrame.prototype = {
     * Handle log messages received from the server. This method outputs the given
     * message.
     *
@@ -85,7 +66,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      return this.createMessageNode(CATEGORY_JS, SEVERITY_LOG, aPacket.message,
 -                                    null, null, null, null, aPacket.timeStamp);
 -    });
-+    this.outputMessage(CATEGORY_JS, this._reportLogMessage, [aPacket]);
++    if (aPacket.message) {
++      this.outputMessage(CATEGORY_JS, this._reportLogMessage, [aPacket]);
++    }
 +  },
 +
 +  /**
@@ -117,7 +100,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param object aActorId
     *        The network event actor ID to log.
     * @return nsIDOMElement|null
-@@ -1972,16 +2015,32 @@ WebConsoleFrame.prototype = {
+@@ -1972,16 +2014,32 @@ WebConsoleFrame.prototype = {
      else if (category == CATEGORY_WEBDEV &&
               methodOrNode == this.logConsoleAPIMessage) {
        args[0].arguments.forEach((aValue) => {
@@ -129,7 +112,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    else if (category == CATEGORY_JS &&
 +             methodOrNode == this.reportPageError) {
 +      let pageError = args[1];
-+      for (let prop of ["errorMessage", "message", "lineText"]) {
++      for (let prop of ["errorMessage", "lineText"]) {
 +        let grip = pageError[prop];
 +        if (WebConsoleUtils.isActorGrip(grip)) {
 +          this._releaseObject(grip.actor);
@@ -150,122 +133,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param integer aCategory
     *        The category of message nodes to prune if needed.
-@@ -4325,16 +4384,18 @@ JSTerm.prototype = {
-     this.inputNode.removeEventListener("keypress", this._keyPress, false);
-     this.inputNode.removeEventListener("input", this._inputEventHandler, false);
-     this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
- 
-     this.hud = null;
-   },
- };
- 
-+let _count = 0;
-+
- /**
-  * Utils: a collection of globally used functions.
-  */
- var Utils = {
-   /**
-    * Flag to turn on and off scrolling.
-    */
-   scroll: true,
-@@ -4389,16 +4450,19 @@ var Utils = {
-    * @param nsIScriptError aScriptError
-    *        The script error you want to determine the category for.
-    * @return CATEGORY_JS|CATEGORY_CSS|CATEGORY_SECURITY
-    *         Depending on the script error CATEGORY_JS, CATEGORY_CSS, or
-    *         CATEGORY_SECURITY can be returned.
-    */
-   categoryForScriptError: function Utils_categoryForScriptError(aScriptError)
-   {
-+    aScriptError._count = _count++;
-+    //dump(Date.now() + " DBG-CLIENT: error " + aScriptError._count + " received\n");
-+
-     switch (aScriptError.category) {
-       case "CSS Parser":
-       case "CSS Loader":
-         return CATEGORY_CSS;
- 
-       case "Mixed Content Blocker":
-       case "CSP":
-         return CATEGORY_SECURITY;
-diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/dbg-client.jsm
---- a/toolkit/devtools/client/dbg-client.jsm
-+++ b/toolkit/devtools/client/dbg-client.jsm
-@@ -564,21 +564,22 @@ DebuggerClient.prototype = {
-    * Called by DebuggerTransport to dispatch incoming packets as appropriate.
-    *
-    * @param aPacket object
-    *        The incoming packet.
-    * @param aIgnoreCompatibility boolean
-    *        Set true to not pass the packet through the compatibility layer.
-    */
-   onPacket: function DC_onPacket(aPacket, aIgnoreCompatibility=false) {
--    let packet = aIgnoreCompatibility
--      ? aPacket
--      : this.compat.onPacket(aPacket);
-+    aIgnoreCompatibility = true;
-+    //let packet = aIgnoreCompatibility
-+    //  ? aPacket
-+    //  : this.compat.onPacket(aPacket);
- 
--    resolve(packet).then((aPacket) => {
-+    //resolve(packet).then((aPacket) => {
-       if (!this._connected) {
-         // Hello packet.
-         this._connected = true;
-         this.notify("connected",
-                     aPacket.applicationType,
-                     aPacket.traits);
-         return;
-       }
-@@ -621,20 +622,20 @@ DebuggerClient.prototype = {
-         this.notify(aPacket.type, aPacket);
-       }
- 
-       if (onResponse) {
-         onResponse(aPacket);
-       }
- 
-       this._sendRequests();
--    }, function (ex) {
--      dumpn("Error handling response: " + ex + " - stack:\n" + ex.stack);
--      Cu.reportError(ex.message + "\n" + ex.stack);
--    });
-+    //}, function (ex) {
-+    //  dumpn("Error handling response: " + ex + " - stack:\n" + ex.stack);
-+    //  Cu.reportError(ex.message + "\n" + ex.stack);
-+    //});
-   },
- 
-   /**
-    * Called by DebuggerTransport when the underlying stream is closed.
-    *
-    * @param aStatus nsresult
-    *        The status code that corresponds to the reason for closing
-    *        the stream.
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -84,17 +84,17 @@ function WebConsoleActor(aConnection, aP
-   this.conn.addActorPool(this._actorPool);
- 
-   this._prefs = {};
- 
-   this.dbg = new Debugger();
- 
-   this._protoChains = new Map();
-   this._dbgGlobals = new Map();
--  this._getDebuggerGlobal(this.window);
-+  //this._getDebuggerGlobal(this.window);
- 
-   this._onObserverNotification = this._onObserverNotification.bind(this);
-   Services.obs.addObserver(this._onObserverNotification,
-                            "inner-window-destroyed", false);
-   if (this._isGlobalActor) {
-     Services.obs.addObserver(this._onObserverNotification,
-                              "last-pb-context-exited", false);
-   }
 @@ -337,16 +337,34 @@ WebConsoleActor.prototype =
    longStringGrip: function WCA_longStringGrip(aString, aPool)
    {
@@ -286,7 +156,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +   */
 +  _createStringGrip: function NEA__createStringGrip(aString)
 +  {
-+    if (this._stringIsLong(aString)) {
++    if (aString && this._stringIsLong(aString)) {
 +      return this.longStringGrip(aString, this._actorPool);
 +    }
 +    return aString;
@@ -320,7 +190,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
  
    /**
     * Prepare an nsIScriptError to be sent to the client.
-@@ -926,20 +944,20 @@ WebConsoleActor.prototype =
+@@ -926,20 +944,19 @@ WebConsoleActor.prototype =
     * @param nsIScriptError aPageError
     *        The page error we need to send to the client.
     * @return object
@@ -331,7 +201,6 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
      return {
 -      message: aPageError.message,
 -      errorMessage: aPageError.errorMessage,
-+      message: this._createStringGrip(aPageError.message),
 +      errorMessage: this._createStringGrip(aPageError.errorMessage),
        sourceName: aPageError.sourceName,
 -      lineText: aPageError.sourceLine,
@@ -344,7 +213,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
        error: !!(aPageError.flags & aPageError.errorFlag),
        exception: !!(aPageError.flags & aPageError.exceptionFlag),
        strict: !!(aPageError.flags & aPageError.strictFlag),
-@@ -1134,16 +1152,18 @@ function NetworkEventActor(aNetworkEvent
+@@ -1134,16 +1151,18 @@ function NetworkEventActor(aNetworkEvent
  
    this._response = {
      headers: [],
@@ -363,7 +232,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
  }
  
  NetworkEventActor.prototype =
-@@ -1348,17 +1368,17 @@ NetworkEventActor.prototype =
+@@ -1348,17 +1367,17 @@ NetworkEventActor.prototype =
     * Add network request POST data.
     *
     * @param object aPostData
@@ -382,7 +251,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "requestPostData",
-@@ -1443,17 +1463,17 @@ NetworkEventActor.prototype =
+@@ -1443,17 +1462,17 @@ NetworkEventActor.prototype =
     *        The response content.
     * @param boolean aDiscardedResponseBody
     *        Tells if the response content was recorded or not.
@@ -401,7 +270,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
        from: this.actorID,
        type: "networkEventUpdate",
        updateType: "responseContent",
-@@ -1493,40 +1513,22 @@ NetworkEventActor.prototype =
+@@ -1493,40 +1512,22 @@ NetworkEventActor.prototype =
     * LongStringActor for the header values, when needed.
     *
     * @private
@@ -446,76 +315,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -899,28 +899,55 @@ ConsoleServiceListener.prototype =
-   QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
- 
-   /**
-    * The content window for which we listen to page errors.
-    * @type nsIDOMWindow
-    */
-   window: null,
- 
-+  _timer: null,
-+  _queue: null,
-+
-+  _count: 0,
-+
-   /**
-    * The listener object which is notified of messages from the console service.
-    * @type object
-    */
-   listener: null,
- 
-   /**
-    * Initialize the nsIConsoleService listener.
-    */
-   init: function CSL_init()
-   {
-     Services.console.registerListener(this);
-+    this._timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-+    this._timer.initWithCallback(this._timerCallback.bind(this), 250,
-+                                 Ci.nsITimer.TYPE_REPEATING_SLACK);
-+    this._queue = new Set();
-+  },
-+
-+  _timerCallback: function CSL__timerCallback()
-+  {
-+    if (!this._queue.size) {
-+      return;
-+    }
-+
-+    let i = 0, max = 20;
-+    for (let item of this._queue) {
-+      //dump(Date.now() + " DBG-SERVER: error " + (this._count++) + " logged\n");
-+      this.listener.onConsoleServiceMessage(item);
-+      this._queue.delete(item);
-+      i++;
-+      if (i == max) {
-+        break;
-+      }
-+    }
-   },
- 
-   /**
-    * The nsIConsoleService observer. This method takes all the script error
-    * messages belonging to the current window and sends them to the remote Web
-    * Console instance.
-    *
-    * @param nsIConsoleMessage aMessage
-@@ -928,31 +955,32 @@ ConsoleServiceListener.prototype =
-    */
-   observe: function CSL_observe(aMessage)
-   {
-     if (!this.listener) {
-       return;
-     }
- 
-     if (this.window) {
-+      dump("lolz\n");
-       if (!(aMessage instanceof Ci.nsIScriptError) ||
-           !aMessage.outerWindowID ||
-           !this.isCategoryAllowed(aMessage.category)) {
-         return;
+@@ -940,19 +940,17 @@ ConsoleServiceListener.prototype =
        }
  
        let errorWindow = Services.wm.getOuterWindowWithId(aMessage.outerWindowID);
@@ -527,9 +327,7 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
 -    if (aMessage.message) {
 -      this.listener.onConsoleServiceMessage(aMessage);
 -    }
-+    //if (aMessage.message) {
-+      //this._queue.add(aMessage);
-+    //}
++    this.listener.onConsoleServiceMessage(aMessage);
    },
  
    /**
@@ -538,21 +336,3 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
     *
     * @param string aCategory
     *        The message category you want to check.
-@@ -1008,16 +1036,17 @@ ConsoleServiceListener.prototype =
-         }
-       }
-       else if (innerWindowID) {
-         // If this is not an nsIScriptError and we need to do window-based
-         // filtering we skip this message.
-         return false;
-       }
- 
-+      //dump(Date.now() + " DBG-SERVER: error " + (this._count++) + " logged\n");
-       return true;
-     });
-   },
- 
-   /**
-    * Remove the nsIConsoleService listener.
-    */
-   destroy: function CSL_destroy()
