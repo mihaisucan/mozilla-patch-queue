@@ -1,0 +1,198 @@
+# HG changeset patch
+# Parent 72b10430789049c46fe5653cf0f4e26ac65c6695
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1370608615 -10800
+
+Bug 628458 - Fix for intermittent browser_webconsole_bug_603750_websocket.js | Test timed out followed by 2969 others; r=me; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js b/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_603750_websocket.js
+@@ -4,73 +4,36 @@
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  *
+  * Contributor(s):
+  *  Mihai Șucan <mihai.sucan@gmail.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-603750-websocket.html";
+-const pref_ws = "network.websocket.enabled";
+-const pref_block = "network.websocket.override-security-block";
+ 
+-let errors = 0;
+-let lastWindowId = 0;
+-let oldPref_ws;
+-
+-let TestObserver = {
+-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+-
+-  observe: function test_observe(aSubject)
+-  {
+-    if (!(aSubject instanceof Ci.nsIScriptError)) {
+-      return;
+-    }
+-
+-    is(aSubject.category, "Web Socket", "received a Web Socket error");
+-    isnot(aSubject.sourceName.indexOf("test-bug-603750-websocket.js"), -1,
+-          "sourceName is correct");
+-
+-    if (++errors == 2) {
+-      executeSoon(performTest);
+-    }
+-    else {
+-      lastWindowId = aSubject.outerWindowID;
+-    }
+-  }
+-};
+-
+-function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, tabLoad, true);
+-
+-  openConsole(null, function(aHud) {
+-    hud = aHud;
+-    Services.console.registerListener(TestObserver);
+-    content.location = TEST_URI;
+-  });
++function test() {
++  addTab("data:text/html;charset=utf-8,Web Console test for bug 603750: Web Socket errors");
++  browser.addEventListener("load", function tabLoad() {
++    browser.removeEventListener("load", tabLoad, true);
++    openConsole(null, (hud) => {
++      content.location = TEST_URI;
++      info("waiting for websocket errors");
++      waitForMessages({
++        webconsole: hud,
++        messages: [
++          {
++            text: "ws://0.0.0.0:81",
++            source: { url: "test-bug-603750-websocket.js" },
++            category: CATEGORY_JS,
++            severity: SEVERITY_ERROR,
++          },
++          {
++            text: "ws://0.0.0.0:82",
++            source: { url: "test-bug-603750-websocket.js" },
++            category: CATEGORY_JS,
++            severity: SEVERITY_ERROR,
++          },
++        ]}).then(finishTest);
++    });
++  }, true);
+ }
+ 
+-function performTest() {
+-  Services.console.unregisterListener(TestObserver);
+-  Services.prefs.setBoolPref(pref_ws, oldPref_ws);
+-
+-  waitForSuccess({
+-    name: "websocket error messages displayed",
+-    validatorFn: function()
+-    {
+-      let textContent = hud.outputNode.textContent;
+-      return textContent.indexOf("ws://0.0.0.0:81") > -1 &&
+-             textContent.indexOf("ws://0.0.0.0:82") > -1;
+-    },
+-    successFn: finishTest,
+-    failureFn: finishTest,
+-  });
+-}
+-
+-function test() {
+-  oldPref_ws = Services.prefs.getBoolPref(pref_ws);
+-
+-  Services.prefs.setBoolPref(pref_ws, true);
+-
+-  addTab("data:text/html;charset=utf-8,Web Console test for bug 603750: Web Socket errors");
+-  browser.addEventListener("load", tabLoad, true);
+-}
+-
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -876,16 +876,18 @@ function getMessageElementText(aElement)
+  *            Provide this if you want to match a console.time() message.
+  *            - consoleTimeEnd: same as above, but for console.timeEnd().
+  *            - consoleDir: boolean, set to |true| to match a console.dir()
+  *            message.
+  *            - longString: boolean, set to |true} to match long strings in the
+  *            message.
+  *            - objects: boolean, set to |true| if you expect inspectable
+  *            objects in the message.
++ *            - source: object that can hold one property: url. This is used to
++ *            match the source URL of the message.
+  * @return object
+  *         A Promise object is returned once the messages you want are found.
+  *         The promise is resolved with the array of rule objects you give in
+  *         the |messages| property. Each objects is the same as provided, with
+  *         additional properties:
+  *         - matched: a Set of web console messages that matched the rule.
+  *         - clickableElements: a list of inspectable objects. This is available
+  *         if any of the following properties are present in the rule:
+@@ -976,17 +978,17 @@ function waitForMessages(aOptions)
+ 
+     return true;
+   }
+ 
+   function checkConsoleTimeEnd(aRule, aElement)
+   {
+     let elemText = getMessageElementText(aElement);
+     let time = aRule.consoleTimeEnd;
+-    let regex = new RegExp(time + ": \\d+ms");
++    let regex = new RegExp(time + ": -?\\d+ms");
+ 
+     if (!checkText(regex, elemText)) {
+       return false;
+     }
+ 
+     aRule.category = CATEGORY_WEBDEV;
+     aRule.severity = SEVERITY_LOG;
+ 
+@@ -1008,16 +1010,26 @@ function waitForMessages(aOptions)
+     if (!iframe) {
+       ok(false, "console.dir message has no iframe");
+       return false;
+     }
+ 
+     return true;
+   }
+ 
++  function checkSource(aRule, aElement)
++  {
++    let location = aElement.querySelector(".webconsole-location");
++    if (!location) {
++      return false;
++    }
++
++    return checkText(aRule.source.url, location.getAttribute("title"));
++  }
++
+   function checkMessage(aRule, aElement)
+   {
+     let elemText = getMessageElementText(aElement);
+ 
+     if (aRule.text && !checkText(aRule.text, elemText)) {
+       return false;
+     }
+ 
+@@ -1036,16 +1048,20 @@ function waitForMessages(aOptions)
+     if (aRule.consoleTimeEnd && !checkConsoleTimeEnd(aRule, aElement)) {
+       return false;
+     }
+ 
+     if (aRule.consoleDir && !checkConsoleDir(aRule, aElement)) {
+       return false;
+     }
+ 
++    if (aRule.source && !checkSource(aRule, aElement)) {
++      return false;
++    }
++
+     let partialMatch = !!(aRule.consoleTrace || aRule.consoleTime ||
+                           aRule.consoleTimeEnd);
+ 
+     if (aRule.category && aElement.category != aRule.category) {
+       if (partialMatch) {
+         is(aElement.category, aRule.category,
+            "message category for rule: " + displayRule(aRule));
+         displayErrorContext(aRule, aElement);
