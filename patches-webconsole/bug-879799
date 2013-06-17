@@ -1,14 +1,349 @@
 # HG changeset patch
-# Parent a1f52bbe9a43693cbb7a74b902b179206fff5479
+# Parent 2347bd9390d10e32c0bc8e655a3f4c3d7fcc9530
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1371244261 -10800
+# Date 1371502920 -10800
 
-Bug 879799 - Browser console lacks keyboard access; r=robcee
+Bug 879799 - Browser console lacks keyboard access; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
 
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -132,16 +132,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_console_native_getters.js \
+ 	browser_bug_871156_ctrlw_close_tab.js \
+ 	browser_console_private_browsing.js \
+ 	browser_console_nsiconsolemessage.js \
+ 	browser_webconsole_bug_817834_add_edited_input_to_history.js \
+ 	browser_console_addonsdk_loader_exception.js \
+ 	browser_console_error_source_click.js \
+ 	browser_console_clear_on_reload.js \
++	browser_console_keyboard_accessibility.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+ 	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_console_keyboard_accessibility.js b/browser/devtools/webconsole/test/browser_console_keyboard_accessibility.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console_keyboard_accessibility.js
+@@ -0,0 +1,64 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Check that basic keyboard shortcuts work in the web console.
++
++function test()
++{
++  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
++  let hud = null;
++
++  addTab(TEST_URI);
++
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++
++  function consoleOpened(aHud)
++  {
++    hud = aHud;
++    ok(hud, "Web Console opened");
++
++    content.console.log("foobarz1");
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "foobarz1",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++      }],
++    }).then(onConsoleMessage);
++  }
++
++  function onConsoleMessage()
++  {
++    hud.jsterm.once("messages-cleared", onClear);
++    info("try ctrl-k to clear output");
++    EventUtils.synthesizeKey("K", { accelKey: true });
++  }
++
++  function onClear()
++  {
++    is(hud.outputNode.textContent.indexOf("foobarz1"), -1, "output cleared");
++    is(hud.jsterm.inputNode.getAttribute("focused"), "true",
++       "jsterm input is focused");
++
++    info("try ctrl-f to focus filter");
++    EventUtils.synthesizeKey("F", { accelKey: true });
++    ok(!hud.jsterm.inputNode.getAttribute("focused"),
++       "jsterm input is not focused");
++    is(hud.ui.filterBox.getAttribute("focused"), "true",
++       "filter input is focused");
++
++    EventUtils.synthesizeKey("N", { altKey: true });
++
++    let net = hud.ui.document.querySelector("toolbarbutton[category=net]");
++    is(hud.ui.document.activeElement, net,
++       "accesskey for Network category focuses the Net button");
++
++    finishTest();
++  }
++}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+@@ -1,37 +1,39 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ const TEST_URI = "data:text/html;charset=utf-8,<p>bug 585991 - autocomplete popup keyboard usage test";
+-let HUD;
++let HUD, popup, jsterm, inputNode, completeNode;
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+ }
+ 
+ function consoleOpened(aHud) {
+   HUD = aHud;
++  info("web console opened");
+ 
+   content.wrappedJSObject.foobarBug585991 = {
+     "item0": "value0",
+     "item1": "value1",
+     "item2": "value2",
+     "item3": "value3",
+   };
+ 
+-  let jsterm = HUD.jsterm;
+-  let popup = jsterm.autocompletePopup;
+-  let completeNode = jsterm.completeNode;
++  jsterm = HUD.jsterm;
++  popup = jsterm.autocompletePopup;
++  completeNode = jsterm.completeNode;
++  inputNode = jsterm.inputNode;
+ 
+   ok(!popup.isOpen, "popup is not open");
+ 
+   popup._panel.addEventListener("popupshown", function onShown() {
+     popup._panel.removeEventListener("popupshown", onShown, false);
+ 
+     ok(popup.isOpen, "popup is open");
+ 
+@@ -85,33 +87,30 @@ function consoleOpened(aHud) {
+ 
+     EventUtils.synthesizeKey("VK_UP", {});
+ 
+     is(popup.selectedIndex, 0, "index 0 is selected");
+     is(popup.selectedItem.label, "watch", "watch is selected");
+     is(completeNode.value, prefix + "watch",
+         "completeNode.value holds watch");
+ 
+-    popup._panel.addEventListener("popuphidden", autocompletePopupHidden, false);
+-
++    info("press Tab and wait for popup to hide");
++    popup._panel.addEventListener("popuphidden", popupHideAfterTab, false);
+     EventUtils.synthesizeKey("VK_TAB", {});
+   }, false);
+ 
++  info("wait for completion: window.foobarBug585991.");
+   jsterm.setInputValue("window.foobarBug585991");
+   EventUtils.synthesizeKey(".", {});
+ }
+ 
+-function autocompletePopupHidden()
++function popupHideAfterTab()
+ {
+-  let jsterm = HUD.jsterm;
+-  let popup = jsterm.autocompletePopup;
+-  let completeNode = jsterm.completeNode;
+-  let inputNode = jsterm.inputNode;
+-
+-  popup._panel.removeEventListener("popuphidden", autocompletePopupHidden, false);
++  // At this point the completion suggestion should be accepted.
++  popup._panel.removeEventListener("popuphidden", popupHideAfterTab, false);
+ 
+   ok(!popup.isOpen, "popup is not open");
+ 
+   is(inputNode.value, "window.foobarBug585991.watch",
+      "completion was successful after VK_TAB");
+ 
+   ok(!completeNode.value, "completeNode is empty");
+ 
+@@ -141,34 +140,31 @@ function autocompletePopupHidden()
+       is(inputNode.value, "window.foobarBug585991.",
+          "completion was cancelled");
+ 
+       ok(!completeNode.value, "completeNode is empty");
+ 
+       executeSoon(testReturnKey);
+     }, false);
+ 
++    info("press Escape to close the popup");
+     executeSoon(function() {
+       EventUtils.synthesizeKey("VK_ESCAPE", {});
+     });
+   }, false);
+ 
++  info("wait for completion: window.foobarBug585991.");
+   executeSoon(function() {
+     jsterm.setInputValue("window.foobarBug585991");
+     EventUtils.synthesizeKey(".", {});
+   });
+ }
+ 
+ function testReturnKey()
+ {
+-  let jsterm = HUD.jsterm;
+-  let popup = jsterm.autocompletePopup;
+-  let completeNode = jsterm.completeNode;
+-  let inputNode = jsterm.inputNode;
+-
+   popup._panel.addEventListener("popupshown", function onShown() {
+     popup._panel.removeEventListener("popupshown", onShown, false);
+ 
+     ok(popup.isOpen, "popup is open");
+ 
+     is(popup.itemCount, 18, "popup.itemCount is correct");
+ 
+     is(popup.selectedIndex, 17, "First index from bottom is selected");
+@@ -182,63 +178,106 @@ function testReturnKey()
+     is(completeNode.value, prefix + "watch",
+         "completeNode.value holds watch");
+ 
+     EventUtils.synthesizeKey("VK_DOWN", {});
+ 
+     is(popup.selectedIndex, 1, "index 1 is selected");
+     is(popup.selectedItem.label, "valueOf", "valueOf is selected");
+     is(completeNode.value, prefix + "valueOf",
+-        "completeNode.value holds valueOf");
++       "completeNode.value holds valueOf");
+ 
+     popup._panel.addEventListener("popuphidden", function onHidden() {
+       popup._panel.removeEventListener("popuphidden", onHidden, false);
+ 
+       ok(!popup.isOpen, "popup is not open after VK_RETURN");
+ 
+-      // modified by bug 873250
+-      is(inputNode.value, "", "no completion after VK_RETURN");
+-      isnot(jsterm.lastInputValue, "window.foobarBug585991.valueOf",
+-        "lastInputValue is not window.foobarBug585991.valueOf");
+-      EventUtils.synthesizeKey("VK_UP", {});
+-      is(inputNode.value, jsterm.lastInputValue, "previous entry was lastInputNode")
++      is(inputNode.value, "window.foobarBug585991.valueOf",
++         "completion was successful after VK_RETURN");
+ 
+       ok(!completeNode.value, "completeNode is empty");
+ 
+       dontShowArrayNumbers();
+     }, false);
+ 
+-    EventUtils.synthesizeKey("VK_RETURN", {});
++    info("press Return to accept suggestion. wait for popup to hide");
++
++    executeSoon(() => EventUtils.synthesizeKey("VK_RETURN", {}));
+   }, false);
+ 
++  info("wait for completion suggestions: window.foobarBug585991.");
++
+   executeSoon(function() {
+     jsterm.setInputValue("window.foobarBug58599");
+     EventUtils.synthesizeKey("1", {});
+     EventUtils.synthesizeKey(".", {});
+   });
+ }
+ 
+ function dontShowArrayNumbers()
+ {
++  info("dontShowArrayNumbers");
+   content.wrappedJSObject.foobarBug585991 = ["Sherlock Holmes"];
+ 
+   let jsterm = HUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+ 
+   popup._panel.addEventListener("popupshown", function onShown() {
+     popup._panel.removeEventListener("popupshown", onShown, false);
+ 
+     let sameItems = popup.getItems().map(function(e) {return e.label;});
+     ok(!sameItems.some(function(prop, index) { prop === "0"; }),
+        "Completing on an array doesn't show numbers.");
+ 
+-    popup._panel.addEventListener("popuphidden", consoleOpened, false);
++    popup._panel.addEventListener("popuphidden", testReturnWithNoSelection, false);
+ 
+-    EventUtils.synthesizeKey("VK_TAB", {});
+-
+-    executeSoon(finishTest);
++    info("wait for popup to hide");
++    executeSoon(() => EventUtils.synthesizeKey("VK_ESCAPE", {}));
+   }, false);
+ 
+-  jsterm.setInputValue("window.foobarBug585991");
+-  EventUtils.synthesizeKey(".", {});
++  info("wait for popup to show");
++  executeSoon(() => {
++    jsterm.setInputValue("window.foobarBug585991");
++    EventUtils.synthesizeKey(".", {});
++  });
+ }
+ 
++function testReturnWithNoSelection()
++{
++  popup._panel.removeEventListener("popuphidden", testReturnWithNoSelection, false);
++
++  info("test pressing return with open popup, but no selection, see bug 873250");
++  content.wrappedJSObject.testBug873250a = "hello world";
++  content.wrappedJSObject.testBug873250b = "hello world 2";
++
++  popup._panel.addEventListener("popupshown", function onShown() {
++    popup._panel.removeEventListener("popupshown", onShown);
++
++    ok(popup.isOpen, "popup is open");
++    is(popup.itemCount, 2, "popup.itemCount is correct");
++    isnot(popup.selectedIndex, -1, "popup.selectedIndex is correct");
++
++    info("press Return and wait for popup to hide");
++    popup._panel.addEventListener("popuphidden", popupHideAfterReturnWithNoSelection);
++    executeSoon(() => EventUtils.synthesizeKey("VK_RETURN", {}));
++  });
++
++  executeSoon(() => {
++    info("wait for popup to show");
++    jsterm.setInputValue("window.testBu");
++    EventUtils.synthesizeKey("g", {});
++  });
++}
++
++function popupHideAfterReturnWithNoSelection()
++{
++  popup._panel.removeEventListener("popuphidden", popupHideAfterReturnWithNoSelection);
++
++  ok(!popup.isOpen, "popup is not open after VK_RETURN");
++
++  is(inputNode.value, "", "inputNode is empty after VK_RETURN");
++  is(completeNode.value, "", "completeNode is empty");
++  is(jsterm.history[jsterm.history.length-1], "window.testBug",
++     "jsterm history is correct");
++
++  executeSoon(finishTest);
++}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -2823,24 +2823,32 @@ JSTerm.prototype = {
+@@ -2849,24 +2849,32 @@ JSTerm.prototype = {
  
    /**
     * Last input value.
@@ -42,7 +377,51 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    inputNode: null,
    completeNode: null,
  
-@@ -3859,41 +3867,45 @@ JSTerm.prototype = {
+@@ -3593,16 +3601,18 @@ JSTerm.prototype = {
+     node._outputAfterNode = aNodeAfter;
+     this.hud.outputMessage(aCategory, node);
+     return node;
+   },
+ 
+   /**
+    * Clear the Web Console output.
+    *
++   * This method emits the "messages-cleared" notification.
++   *
+    * @param boolean aClearStorage
+    *        True if you want to clear the console messages storage associated to
+    *        this Web Console.
+    */
+   clearOutput: function JST_clearOutput(aClearStorage)
+   {
+     let hud = this.hud;
+     let outputNode = hud.outputNode;
+@@ -3615,20 +3625,24 @@ JSTerm.prototype = {
+     hud._outputQueue.forEach(hud._pruneItemFromQueue, hud);
+     hud._outputQueue = [];
+     hud._networkRequests = {};
+     hud._repeatNodes = {};
+ 
+     if (aClearStorage) {
+       this.webConsoleClient.clearMessagesCache();
+     }
++
++    this.emit("messages-cleared");
+   },
+ 
+   /**
+    * Remove all of the private messages from the Web Console output.
++   *
++   * This method emits the "private-messages-cleared" notification.
+    */
+   clearPrivateMessages: function JST_clearPrivateMessages()
+   {
+     let nodes = this.hud.outputNode.querySelectorAll("richlistitem[private]");
+     for (let node of nodes) {
+       this.hud.removeOutputMessage(node);
+     }
+     this.emit("private-messages-cleared");
+@@ -3689,41 +3703,45 @@ JSTerm.prototype = {
    /**
     * The inputNode "keypress" event handler.
     *
@@ -92,7 +471,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            let lineEndPos = inputNode.value.length;
            if (this.hasMultilineInput()) {
              // find index of closest newline >= cursor
-@@ -3902,99 +3914,136 @@ JSTerm.prototype = {
+@@ -3732,99 +3750,135 @@ JSTerm.prototype = {
                    inputNode.value.charAt(i) == "\n") {
                  lineEndPos = i;
                  break;
@@ -220,9 +599,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +                             this.inputNode.value.length;
 +        let haveSuggestion = this.autocompletePopup.isOpen ||
 +                             this.lastCompletion.value;
-+        let useCompletion = haveSuggestion &&
-+                            (cursorAtTheEnd || this._autocompletePopupNavigated);
-+        if (useCompletion &&
++        let useCompletion = cursorAtTheEnd || this._autocompletePopupNavigated;
++        if (haveSuggestion && useCompletion &&
 +            this.complete(this.COMPLETE_HINT_ONLY) &&
 +            this.lastCompletion.value &&
 +            this.acceptProposedCompletion()) {
@@ -241,27 +619,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            aEvent.preventDefault();
          }
          else if (this._inputChanged) {
-@@ -4152,18 +4201,17 @@ JSTerm.prototype = {
-     let inputValue = inputNode.value;
-     // If the inputNode has no value, then don't try to complete on it.
-     if (!inputValue) {
-       this.clearCompletion();
-       return false;
-     }
- 
-     // Only complete if the selection is empty and at the end of the input.
--    if (inputNode.selectionStart == inputNode.selectionEnd &&
--        inputNode.selectionEnd != inputValue.length) {
-+    if (inputNode.selectionStart != inputNode.selectionEnd) {
-       this.clearCompletion();
-       return false;
-     }
- 
-     // Update the completion results.
-     if (this.lastCompletion.value != inputValue) {
-       this._updateCompletionResult(aType, aCallback);
-       return false;
-@@ -4261,19 +4309,21 @@ JSTerm.prototype = {
+@@ -4091,19 +4145,21 @@ JSTerm.prototype = {
      let completionType = this.lastCompletion.completionType;
      this.lastCompletion = {
        value: inputValue,
@@ -283,29 +641,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      this.onAutocompleteSelect();
  
-@@ -4287,16 +4337,21 @@ JSTerm.prototype = {
-       popup.selectNextItem();
-     }
- 
-     aCallback && aCallback(this);
-   },
- 
-   onAutocompleteSelect: function JSTF_onAutocompleteSelect()
-   {
-+    // Render the suggestion only if the cursor is at the end of the input.
-+    if (this.inputNode.selectionStart != this.inputNode.value.length) {
-+      return;
-+    }
-+
-     let currentItem = this.autocompletePopup.selectedItem;
-     if (currentItem && this.lastCompletion.value) {
-       let suffix = currentItem.label.substring(this.lastCompletion.
-                                                matchProp.length);
-       this.updateCompleteNode(suffix);
-     }
-     else {
-       this.updateCompleteNode("");
-@@ -4309,16 +4364,17 @@ JSTerm.prototype = {
+@@ -4139,16 +4195,17 @@ JSTerm.prototype = {
     */
    clearCompletion: function JSTF_clearCompletion()
    {
@@ -323,28 +659,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @return boolean
     *         True if there was a selected completion item and the input value
-@@ -4327,17 +4383,19 @@ JSTerm.prototype = {
-   acceptProposedCompletion: function JSTF_acceptProposedCompletion()
-   {
-     let updated = false;
- 
-     let currentItem = this.autocompletePopup.selectedItem;
-     if (currentItem && this.lastCompletion.value) {
-       let suffix = currentItem.label.substring(this.lastCompletion.
-                                                matchProp.length);
--      this.setInputValue(this.inputNode.value + suffix);
-+      let cursor = this.inputNode.selectionStart;
-+      let value = this.inputNode.value;
-+      this.setInputValue(value.substr(0, cursor) + suffix + value.substr(cursor));
-       updated = true;
-     }
- 
-     this.clearCompletion();
- 
-     return updated;
-   },
- 
-@@ -4580,20 +4638,22 @@ CommandController.prototype = {
+@@ -4406,20 +4463,22 @@ CommandController.prototype = {
          // Only enable "copy" if nodes are selected.
          return this.owner.outputNode.selectedCount > 0;
        case "consoleCmd_openURL":
@@ -367,7 +682,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    doCommand: function CommandController_doCommand(aCommand)
-@@ -4603,16 +4663,22 @@ CommandController.prototype = {
+@@ -4429,16 +4488,22 @@ CommandController.prototype = {
          this.copy();
          break;
        case "consoleCmd_openURL":
@@ -428,10 +743,156 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
      <menupopup id="output-contextmenu"
                 onpopupshowing="ConsoleContextMenu.build(event);">
        <menuitem id="saveBodiesContextMenu" type="checkbox" label="&saveBodies.label;"
+@@ -67,90 +72,101 @@
+     </menupopup>
+   </popupset>
+ 
+   <box class="hud-outer-wrapper devtools-responsive-container" flex="1">
+     <vbox class="hud-console-wrapper" flex="1">
+       <toolbar class="hud-console-filter-toolbar devtools-toolbar" mode="full">
+         <toolbarbutton label="&btnPageNet.label;" type="menu-button"
+                        category="net" class="devtools-toolbarbutton webconsole-filter-button"
+-                       tooltiptext="&btnPageNet.tooltip;">
++                       tooltiptext="&btnPageNet.tooltip;"
++                       accesskey="&btnPageNet.accesskey;"
++                       tabindex="3">
+           <menupopup>
+             <menuitem label="&btnConsoleErrors;" type="checkbox" autocheck="false"
+                       prefKey="network"/>
+             <menuitem label="&btnConsoleLog;" type="checkbox" autocheck="false"
+                       prefKey="networkinfo"/>
+             <menuseparator id="saveBodiesSeparator" />
+             <menuitem id="saveBodies" type="checkbox" label="&saveBodies.label;"
+                       accesskey="&saveBodies.accesskey;"/>
+           </menupopup>
+         </toolbarbutton>
+         <toolbarbutton label="&btnPageCSS.label;" type="menu-button"
+                        category="css" class="devtools-toolbarbutton webconsole-filter-button"
+-                       tooltiptext="&btnPageCSS.tooltip;">
++                       tooltiptext="&btnPageCSS.tooltip;"
++                       accesskey="&btnPageCSS.accesskey;"
++                       tabindex="4">
+           <menupopup>
+             <menuitem label="&btnConsoleErrors;" type="checkbox" autocheck="false"
+                       prefKey="csserror"/>
+             <menuitem label="&btnConsoleWarnings;" type="checkbox"
+                       autocheck="false" prefKey="cssparser"/>
+           </menupopup>
+         </toolbarbutton>
+         <toolbarbutton label="&btnPageJS.label;" type="menu-button"
+                        category="js" class="devtools-toolbarbutton webconsole-filter-button"
+-                       tooltiptext="&btnPageJS.tooltip;">
++                       tooltiptext="&btnPageJS.tooltip;"
++                       accesskey="&btnPageJS.accesskey;"
++                       tabindex="5">
+           <menupopup>
+             <menuitem label="&btnConsoleErrors;" type="checkbox"
+                       autocheck="false" prefKey="exception"/>
+             <menuitem label="&btnConsoleWarnings;" type="checkbox"
+                       autocheck="false" prefKey="jswarn"/>
+           </menupopup>
+         </toolbarbutton>
+         <toolbarbutton label="&btnPageSecurity.label;" type="menu-button"
+                        category="security" class="devtools-toolbarbutton webconsole-filter-button"
+-                       tooltiptext="&btnPageSecurity.tooltip;">
++                       tooltiptext="&btnPageSecurity.tooltip;"
++                       accesskey="&btnPageSecurity.accesskey;"
++                       tabindex="6">
+           <menupopup>
+             <menuitem label="&btnConsoleErrors;" type="checkbox"
+                       autocheck="false" prefKey="secerror"/>
+             <menuitem label="&btnConsoleWarnings;" type="checkbox"
+                       autocheck="false" prefKey="secwarn"/>
+           </menupopup>
+         </toolbarbutton>
+         <toolbarbutton label="&btnPageLogging.label;" type="menu-button"
+                        category="logging" class="devtools-toolbarbutton webconsole-filter-button"
+-                       tooltiptext="&btnPageLogging.tooltip;">
++                       tooltiptext="&btnPageLogging.tooltip;"
++                       accesskey="&btnPageLogging.accesskey;"
++                       tabindex="7">
+           <menupopup>
+             <menuitem label="&btnConsoleErrors;" type="checkbox"
+                       autocheck="false" prefKey="error"/>
+             <menuitem label="&btnConsoleWarnings;" type="checkbox"
+                       autocheck="false" prefKey="warn"/>
+             <menuitem label="&btnConsoleInfo;" type="checkbox" autocheck="false"
+                       prefKey="info"/>
+             <menuitem label="&btnConsoleLog;" type="checkbox" autocheck="false"
+                       prefKey="log"/>
+           </menupopup>
+         </toolbarbutton>
+ 
+         <toolbarbutton class="webconsole-clear-console-button devtools-toolbarbutton"
+-                       label="&btnClear.label;" tooltiptext="&btnClear.tooltip;"/>
++                       label="&btnClear.label;" tooltiptext="&btnClear.tooltip;"
++                       tabindex="8"/>
+ 
+         <spacer flex="1"/>
+ 
+         <textbox class="compact hud-filter-box devtools-searchinput" type="search"
+-                 placeholder="&filterOutput.placeholder;"/>
++                 placeholder="&filterOutput.placeholder;" tabindex="2"/>
+       </toolbar>
+ 
+       <richlistbox class="hud-output-node" orient="vertical" flex="1"
+                    seltype="multiple" context="output-contextmenu"
+-                   style="direction:ltr;"/>
++                   style="direction:ltr;" tabindex="1"/>
+ 
+       <hbox class="jsterm-input-container" style="direction:ltr">
+         <stack class="jsterm-stack-node" flex="1">
+           <textbox class="jsterm-complete-node" multiline="true" rows="1"
+                    tabindex="-1"/>
+-          <textbox class="jsterm-input-node" multiline="true" rows="1"/>
++          <textbox class="jsterm-input-node" multiline="true" rows="1" tabindex="0"/>
+         </stack>
+       </hbox>
+     </vbox>
+ 
+     <splitter class="devtools-side-splitter"/>
+ 
+     <tabbox id="webconsole-sidebar" class="devtools-sidebar-tabs" hidden="true" width="300">
+       <tabs/>
 diff --git a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
 --- a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
 +++ b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
-@@ -75,9 +75,11 @@
+@@ -40,29 +40,34 @@
+ <!ENTITY openURL.accesskey "T">
+ 
+ <!-- LOCALIZATION NOTE (btnPageNet.label): This string is used for the menu
+   -  button that allows users to toggle the network logging output.
+   -  This string and the following strings toggle various kinds of output
+   -  filters. -->
+ <!ENTITY btnPageNet.label   "Net">
+ <!ENTITY btnPageNet.tooltip "Log network access">
++<!ENTITY btnPageNet.accesskey "N">
+ <!ENTITY btnPageCSS.label   "CSS">
+ <!ENTITY btnPageCSS.tooltip "Log CSS parsing errors">
++<!ENTITY btnPageCSS.accesskey "C">
+ <!ENTITY btnPageJS.label    "JS">
+ <!ENTITY btnPageJS.tooltip  "Log JavaScript exceptions">
++<!ENTITY btnPageJS.accesskey  "J">
+ <!ENTITY btnPageSecurity.label "Security">
+ <!ENTITY btnPageSecurity.tooltip "Log security errors and warnings">
++<!ENTITY btnPageSecurity.accesskey "S">
+ 
+ <!-- LOCALIZATION NOTE (btnPageLogging): This is used as the text of the
+   -  the toolbar. It shows or hides messages that the web developer inserted on
+   -  the page for debugging purposes, using calls such console.log() and
+   -  console.error(). -->
+ <!ENTITY btnPageLogging.label   "Logging">
+ <!ENTITY btnPageLogging.tooltip "Log messages sent to the window.console object">
++<!ENTITY btnPageLogging.accesskey "L">
+ <!ENTITY btnConsoleErrors       "Errors">
+ <!ENTITY btnConsoleInfo         "Info">
+ <!ENTITY btnConsoleWarnings     "Warnings">
+ <!ENTITY btnConsoleLog          "Log">
+ 
+ <!ENTITY filterOutput.placeholder "Filter output">
+ <!ENTITY btnClear.label        "Clear">
+ <!ENTITY btnClear.tooltip      "Clear the Web Console output">
+@@ -75,9 +80,11 @@
  <!ENTITY fullZoomReduceCmd.commandkey2  "">
  
  <!ENTITY fullZoomResetCmd.commandkey    "0">
@@ -444,94 +905,97 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd b/brow
 +<!ENTITY closeCmd.key         "W">
 +<!ENTITY findCmd.key          "F">
 +<!ENTITY clearOutputCmd.key   "K">
-diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
---- a/toolkit/devtools/server/actors/webconsole.js
-+++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -628,17 +628,18 @@ WebConsoleActor.prototype =
-    *        The request message - what input to autocomplete.
-    * @return object
-    *         The response message - matched properties.
-    */
-   onAutocomplete: function WCA_onAutocomplete(aRequest)
-   {
-     // TODO: Bug 842682 - use the debugger API for autocomplete in the Web
-     // Console, and provide suggestions from the selected debugger stack frame.
--    let result = JSPropertyProvider(this.window, aRequest.text) || {};
-+    let result = JSPropertyProvider(this.window, aRequest.text, 
-+                                    aRequest.cursor) || {};
-     return {
-       from: this.actorID,
-       matches: result.matches || [],
-       matchProp: result.matchProp,
-     };
-   },
- 
-   /**
-diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
---- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-+++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -698,49 +698,58 @@ function findCompletionBeginning(aStr)
+diff --git a/browser/themes/linux/devtools/common.css b/browser/themes/linux/devtools/common.css
+--- a/browser/themes/linux/devtools/common.css
++++ b/browser/themes/linux/devtools/common.css
+@@ -41,17 +41,17 @@
  }
  
- /**
-  * Provides a list of properties, that are possible matches based on the passed
-  * scope and inputValue.
-  *
-  * @param object aScope
-  *        Scope to use for the completion.
-- *
-  * @param string aInputValue
-  *        Value that should be completed.
-- *
-+ * @param number [aCursor=aInputValue.length]
-+ *        Optional offset in the input where the cursor is located. If this is
-+ *        omitted then the cursor is assumed to be at the end of the input
-+ *        value.
-  * @returns null or object
-  *          If no completion valued could be computed, null is returned,
-  *          otherwise a object with the following form is returned:
-  *            {
-  *              matches: [ string, string, string ],
-  *              matchProp: Last part of the inputValue that was used to find
-  *                         the matches-strings.
-  *            }
-  */
--function JSPropertyProvider(aScope, aInputValue)
-+function JSPropertyProvider(aScope, aInputValue, aCursor)
- {
-+  if (aCursor === undefined) {
-+    aCursor = aInputValue.length;
-+  }
+ .devtools-toolbarbutton > .toolbarbutton-menubutton-button {
+   -moz-box-orient: horizontal;
+ }
+ 
+ .devtools-menulist:-moz-focusring,
+ .devtools-toolbarbutton:-moz-focusring {
+-  outline: 1px dotted hsla(210,30%,85%,0.4);
++  outline: 1px dotted hsla(210,30%,85%,0.7);
+   outline-offset: -4px;
+ }
+ 
+ .devtools-toolbarbutton:not([label]) {
+   min-width: 32px;
+ }
+ 
+ .devtools-toolbarbutton:not([label]) > .toolbarbutton-text {
+diff --git a/browser/themes/linux/devtools/webconsole.css b/browser/themes/linux/devtools/webconsole.css
+--- a/browser/themes/linux/devtools/webconsole.css
++++ b/browser/themes/linux/devtools/webconsole.css
+@@ -106,16 +106,20 @@
+   display: block;
+   visibility: hidden;
+   height: 0;
+   overflow: hidden;
+ }
+ 
+ /* WebConsole colored drops */
+ 
++.webconsole-filter-button {
++  -moz-user-focus: normal;
++}
 +
-+  dump("jspp1 " + aCursor + " '" + aInputValue + "'\n");
-+  let inputValue = aInputValue.substring(0, aCursor);
-+  dump("jspp2 " + aCursor + " '" + aInputValue + "' '" + inputValue + "'\n");
-   let obj = WCU.unwrap(aScope);
+ .webconsole-filter-button[checked] {
+   color: white !important;
+ }
  
--  // Analyse the aInputValue and find the beginning of the last part that
-+  // Analyse the inputValue and find the beginning of the last part that
-   // should be completed.
--  let beginning = findCompletionBeginning(aInputValue);
-+  let beginning = findCompletionBeginning(inputValue);
+ .webconsole-filter-button > .toolbarbutton-menubutton-button:before {
+   content: "";
+   display: inline-block;
+   height: 8px;
+diff --git a/browser/themes/osx/devtools/webconsole.css b/browser/themes/osx/devtools/webconsole.css
+--- a/browser/themes/osx/devtools/webconsole.css
++++ b/browser/themes/osx/devtools/webconsole.css
+@@ -98,16 +98,20 @@
+   display: block;
+   visibility: hidden;
+   height: 0;
+   overflow: hidden;
+ }
  
-   // There was an error analysing the string.
-   if (beginning.err) {
-     return null;
-   }
+ /* WebConsole colored drops */
  
-   // If the current state is not STATE_NORMAL, then we are inside of an string
-   // which means that no completion is possible.
-   if (beginning.state != STATE_NORMAL) {
-     return null;
-   }
++.webconsole-filter-button {
++  -moz-user-focus: normal;
++}
++
+ .webconsole-filter-button[checked] {
+   color: white !important;
+ }
  
--  let completionPart = aInputValue.substring(beginning.startPos);
-+  let completionPart = inputValue.substring(beginning.startPos);
+ .webconsole-filter-button > .toolbarbutton-menubutton-button:before {
+   content: "";
+   display: inline-block;
+   height: 8px;
+diff --git a/browser/themes/windows/devtools/webconsole.css b/browser/themes/windows/devtools/webconsole.css
+--- a/browser/themes/windows/devtools/webconsole.css
++++ b/browser/themes/windows/devtools/webconsole.css
+@@ -96,16 +96,20 @@
+   display: block;
+   visibility: hidden;
+   height: 0;
+   overflow: hidden;
+ }
  
-   // Don't complete on just an empty string.
-   if (completionPart.trim() == "") {
-     return null;
-   }
+ /* WebConsole colored drops */
  
-   let matches = null;
-   let matchProp = "";
++.webconsole-filter-button {
++  -moz-user-focus: normal;
++}
++
+ .webconsole-filter-button[checked] {
+   color: white !important;
+ }
+ 
+ .webconsole-filter-button > .toolbarbutton-menubutton-button:before {
+   content: "";
+   display: inline-block;
+   height: 8px;
