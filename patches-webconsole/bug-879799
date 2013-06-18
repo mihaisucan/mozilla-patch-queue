@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 2347bd9390d10e32c0bc8e655a3f4c3d7fcc9530
+# Parent 70f7e8cded0cbcf91e78870b36e29fc47e7f3e43
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1371502920 -10800
+# Date 1371557903 -10800
 
 Bug 879799 - Browser console lacks keyboard access; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
 
@@ -30,7 +30,7 @@ diff --git a/browser/devtools/webconsole/test/browser_console_keyboard_accessibi
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_console_keyboard_accessibility.js
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,69 @@
 +/*
 + * Any copyright is dedicated to the Public Domain.
 + * http://creativecommons.org/publicdomain/zero/1.0/
@@ -86,7 +86,12 @@ new file mode 100644
 +    is(hud.ui.filterBox.getAttribute("focused"), "true",
 +       "filter input is focused");
 +
-+    EventUtils.synthesizeKey("N", { altKey: true });
++    if (Services.appinfo.OS == "Darwin") {
++      EventUtils.synthesizeKey("N", { ctrlKey: true });
++    }
++    else {
++      EventUtils.synthesizeKey("N", { altKey: true });
++    }
 +
 +    let net = hud.ui.document.querySelector("toolbarbutton[category=net]");
 +    is(hud.ui.document.activeElement, net,
@@ -471,7 +476,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            let lineEndPos = inputNode.value.length;
            if (this.hasMultilineInput()) {
              // find index of closest newline >= cursor
-@@ -3732,99 +3750,135 @@ JSTerm.prototype = {
+@@ -3732,99 +3750,144 @@ JSTerm.prototype = {
                    inputNode.value.charAt(i) == "\n") {
                  lineEndPos = i;
                  break;
@@ -491,6 +496,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                this.canCaretGoNext() &&
                this.historyPeruse(HISTORY_FORWARD)) {
              aEvent.preventDefault();
++            // Ctrl-N is also used to focus the Network category button on MacOSX.
++            // The preventDefault() call doesn't prevent the focus from moving
++            // away from the input.
++            inputNode.focus();
            }
 -          closePopup = true;
 +          this.clearCompletion();
@@ -504,6 +513,10 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                this.canCaretGoPrevious() &&
                this.historyPeruse(HISTORY_BACK)) {
              aEvent.preventDefault();
++            // Ctrl-P may also be used to focus some category button on MacOSX.
++            // The preventDefault() call doesn't prevent the focus from moving
++            // away from the input.
++            inputNode.focus();
            }
 -          closePopup = true;
 +          this.clearCompletion();
@@ -550,6 +563,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +        }
 +        else {
 +          this.execute();
++          this._inputChanged = false;
 +        }
          aEvent.preventDefault();
          break;
@@ -619,7 +633,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            aEvent.preventDefault();
          }
          else if (this._inputChanged) {
-@@ -4091,19 +4145,21 @@ JSTerm.prototype = {
+@@ -4091,19 +4154,21 @@ JSTerm.prototype = {
      let completionType = this.lastCompletion.completionType;
      this.lastCompletion = {
        value: inputValue,
@@ -641,7 +655,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      this.onAutocompleteSelect();
  
-@@ -4139,16 +4195,17 @@ JSTerm.prototype = {
+@@ -4139,16 +4204,17 @@ JSTerm.prototype = {
     */
    clearCompletion: function JSTF_clearCompletion()
    {
@@ -659,7 +673,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @return boolean
     *         True if there was a selected completion item and the input value
-@@ -4406,20 +4463,22 @@ CommandController.prototype = {
+@@ -4406,20 +4472,22 @@ CommandController.prototype = {
          // Only enable "copy" if nodes are selected.
          return this.owner.outputNode.selectedCount > 0;
        case "consoleCmd_openURL":
@@ -682,7 +696,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    doCommand: function CommandController_doCommand(aCommand)
-@@ -4429,16 +4488,22 @@ CommandController.prototype = {
+@@ -4429,16 +4497,22 @@ CommandController.prototype = {
          this.copy();
          break;
        case "consoleCmd_openURL":
@@ -951,6 +965,28 @@ diff --git a/browser/themes/linux/devtools/webconsole.css b/browser/themes/linux
    content: "";
    display: inline-block;
    height: 8px;
+diff --git a/browser/themes/osx/devtools/common.css b/browser/themes/osx/devtools/common.css
+--- a/browser/themes/osx/devtools/common.css
++++ b/browser/themes/osx/devtools/common.css
+@@ -45,17 +45,17 @@
+ }
+ 
+ .devtools-menulist {
+   margin: 0 2px;
+ }
+ 
+ .devtools-menulist:-moz-focusring,
+ .devtools-toolbarbutton:-moz-focusring {
+-  outline: 1px dotted hsla(210,30%,85%,0.4);
++  outline: 1px dotted hsla(210,30%,85%,0.7);
+   outline-offset: -4px;
+ }
+ 
+ .devtools-toolbarbutton > .toolbarbutton-text {
+   margin: 1px 6px;
+ }
+ 
+ .devtools-toolbarbutton:not([label]) {
 diff --git a/browser/themes/osx/devtools/webconsole.css b/browser/themes/osx/devtools/webconsole.css
 --- a/browser/themes/osx/devtools/webconsole.css
 +++ b/browser/themes/osx/devtools/webconsole.css
@@ -975,6 +1011,28 @@ diff --git a/browser/themes/osx/devtools/webconsole.css b/browser/themes/osx/dev
    content: "";
    display: inline-block;
    height: 8px;
+diff --git a/browser/themes/windows/devtools/common.css b/browser/themes/windows/devtools/common.css
+--- a/browser/themes/windows/devtools/common.css
++++ b/browser/themes/windows/devtools/common.css
+@@ -41,17 +41,17 @@
+ }
+ 
+ .devtools-toolbarbutton > .toolbarbutton-menubutton-button {
+   -moz-box-orient: horizontal;
+ }
+ 
+ .devtools-menulist:-moz-focusring,
+ .devtools-toolbarbutton:-moz-focusring {
+-  outline: 1px dotted hsla(210,30%,85%,0.4);
++  outline: 1px dotted hsla(210,30%,85%,0.7);
+   outline-offset: -4px;
+ }
+ 
+ .devtools-toolbarbutton > .toolbarbutton-icon {
+   margin: 0;
+ }
+ 
+ .devtools-toolbarbutton:not([label]) {
 diff --git a/browser/themes/windows/devtools/webconsole.css b/browser/themes/windows/devtools/webconsole.css
 --- a/browser/themes/windows/devtools/webconsole.css
 +++ b/browser/themes/windows/devtools/webconsole.css
