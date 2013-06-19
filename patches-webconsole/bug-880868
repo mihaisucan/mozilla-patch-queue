@@ -1,8 +1,83 @@
 # HG changeset patch
-# Parent 1f15e7a5b82d7dd5ae150b0ad690016e69c65c6b
-# Date 1371660114 -10800
+# Parent 7a97d9798f66d5237a8eefdf0b7e3c5a822abba8
+# Date 1371668645 -10800
 Bug 880868 - Browser Console JS Error/Warning filtering doesn't seem to work; r=robcee
 
+diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
+--- a/browser/app/profile/firefox.js
++++ b/browser/app/profile/firefox.js
+@@ -1132,16 +1132,17 @@ pref("devtools.gcli.eagerHelper", 2);
+ 
+ // Remember the Web Console filters
+ pref("devtools.webconsole.filter.network", true);
+ pref("devtools.webconsole.filter.networkinfo", true);
+ pref("devtools.webconsole.filter.csserror", true);
+ pref("devtools.webconsole.filter.cssparser", true);
+ pref("devtools.webconsole.filter.exception", true);
+ pref("devtools.webconsole.filter.jswarn", true);
++pref("devtools.webconsole.filter.jslog", true);
+ pref("devtools.webconsole.filter.error", true);
+ pref("devtools.webconsole.filter.warn", true);
+ pref("devtools.webconsole.filter.info", true);
+ pref("devtools.webconsole.filter.log", true);
+ pref("devtools.webconsole.filter.secerror", true);
+ pref("devtools.webconsole.filter.secwarn", true);
+ 
+ // Text size in the Web Console. Use 0 for the system default size.
+diff --git a/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js b/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
+--- a/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
++++ b/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
+@@ -70,10 +70,26 @@ function onBrowserConsoleOpen(hud)
+         text: "test2 for bug859756",
+         category: CATEGORY_JS,
+       },
+       {
+         text: "do-not-show-me",
+         category: CATEGORY_JS,
+       },
+     ],
+-  }).then(finishTest);
++  }).then(testFiltering);
++
++  function testFiltering(results)
++  {
++    let msg = [...results[2].matched][0];
++    ok(msg, "message element for do-not-show-me (nsIConsoleMessage)");
++    isnot(msg.textContent.indexOf("do-not-show"), -1, "element content is correct");
++    ok(!msg.classList.contains("hud-filtered-by-type"), "element is not filtered");
++
++    hud.setFilterState("jslog", false);
++
++    ok(msg.classList.contains("hud-filtered-by-type"), "element is filtered");
++
++    hud.setFilterState("jslog", true);
++
++    finishTest();
++  }
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_622303_persistent_filters.js b/browser/devtools/webconsole/test/browser_webconsole_bug_622303_persistent_filters.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_622303_persistent_filters.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_622303_persistent_filters.js
+@@ -7,17 +7,18 @@ let prefs = {
+     "networkinfo"
+   ],
+   "css": [
+     "csserror",
+     "cssparser"
+   ],
+   "js": [
+     "exception",
+-    "jswarn"
++    "jswarn",
++    "jslog",
+   ],
+   "logging": [
+      "error",
+      "warn",
+      "info",
+      "log"
+   ]
+ };
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -43,6 +118,31 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        secwarn: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "secwarn"),
      };
    },
+@@ -591,16 +592,24 @@ WebConsoleFrame.prototype = {
+         let prefKey = aMenuItem.getAttribute("prefKey");
+         let checked = this.filterPrefs[prefKey];
+         aMenuItem.setAttribute("checked", checked);
+         someChecked = someChecked || checked;
+       }, this);
+ 
+       aButton.setAttribute("checked", someChecked);
+     }, this);
++
++    if (!this.owner._browserConsole) {
++      // The Browser Console displays nsIConsoleMessages which are messages that
++      // end up in the JS category, but they are not errors or warnings, they
++      // are just log messages. The Web Console does not show such messages.
++      let jslog = this.document.querySelector("menuitem[prefKey=jslog]");
++      jslog.hidden = true;
++    }
+   },
+ 
+   /**
+    * Increase, decrease or reset the font size.
+    *
+    * @param string size
+    *        The size of the font change. Accepted values are "+" and "-".
+    *        An unmatched size assumes a font reset.
 diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webconsole/webconsole.xul
 --- a/browser/devtools/webconsole/webconsole.xul
 +++ b/browser/devtools/webconsole/webconsole.xul
