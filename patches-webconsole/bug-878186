@@ -1,0 +1,361 @@
+# HG changeset patch
+# Parent 7580f4f9b39e92520da55b9bff9d72973ed80aa6
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1371734941 -10800
+
+Bug 878186 - Save different filter prefs for browser vs. webdev console; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc,mochitest-o -t none
+
+diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
+--- a/browser/app/profile/firefox.js
++++ b/browser/app/profile/firefox.js
+@@ -1140,16 +1140,31 @@ pref("devtools.webconsole.filter.jswarn"
+ pref("devtools.webconsole.filter.jslog", true);
+ pref("devtools.webconsole.filter.error", true);
+ pref("devtools.webconsole.filter.warn", true);
+ pref("devtools.webconsole.filter.info", true);
+ pref("devtools.webconsole.filter.log", true);
+ pref("devtools.webconsole.filter.secerror", true);
+ pref("devtools.webconsole.filter.secwarn", true);
+ 
++// Remember the Browser Console filters
++pref("devtools.browserconsole.filter.network", true);
++pref("devtools.browserconsole.filter.networkinfo", true);
++pref("devtools.browserconsole.filter.csserror", true);
++pref("devtools.browserconsole.filter.cssparser", true);
++pref("devtools.browserconsole.filter.exception", true);
++pref("devtools.browserconsole.filter.jswarn", true);
++pref("devtools.browserconsole.filter.jslog", true);
++pref("devtools.browserconsole.filter.error", true);
++pref("devtools.browserconsole.filter.warn", true);
++pref("devtools.browserconsole.filter.info", true);
++pref("devtools.browserconsole.filter.log", true);
++pref("devtools.browserconsole.filter.secerror", true);
++pref("devtools.browserconsole.filter.secwarn", true);
++
+ // Text size in the Web Console. Use 0 for the system default size.
+ pref("devtools.webconsole.fontSize", 0);
+ 
+ // Persistent logging: |true| if you want the Web Console to keep all of the
+ // logged messages after reloading the page, |false| if you want the output to
+ // be cleared each time page navigation happens.
+ pref("devtools.webconsole.persistlog", false);
+ 
+diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webconsole/HUDService.jsm
+--- a/browser/devtools/webconsole/HUDService.jsm
++++ b/browser/devtools/webconsole/HUDService.jsm
+@@ -38,16 +38,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ 
+ let Telemetry = devtools.require("devtools/shared/telemetry");
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ const BROWSER_CONSOLE_WINDOW_FEATURES = "chrome,titlebar,toolbar,centerscreen,resizable,dialog=no";
+ 
++// The preference prefix for all of the Browser Console filters.
++const BROWSER_CONSOLE_FILTER_PREFS_PREFIX = "devtools.browserconsole.filter.";
++
+ this.EXPORTED_SYMBOLS = ["HUDService"];
+ 
+ ///////////////////////////////////////////////////////////////////////////
+ //// The HUD service
+ 
+ function HUD_SERVICE()
+ {
+   this.hudReferences = {};
+@@ -200,24 +203,27 @@ function WebConsole(aTarget, aIframeWind
+   this.target = aTarget;
+ 
+   this.browserWindow = this.chromeWindow.top;
+ 
+   let element = this.browserWindow.document.documentElement;
+   if (element.getAttribute("windowtype") != "navigator:browser") {
+     this.browserWindow = HUDService.currentContext();
+   }
++
++  this.ui = new this.iframeWindow.WebConsoleFrame(this);
+ }
+ 
+ WebConsole.prototype = {
+   iframeWindow: null,
+   chromeWindow: null,
+   browserWindow: null,
+   hudId: null,
+   target: null,
++  ui: null,
+   _browserConsole: false,
+   _destroyer: null,
+ 
+   /**
+    * Getter for HUDService.lastFinishedRequestCallback.
+    *
+    * @see HUDService.lastFinishedRequestCallback
+    * @type function
+@@ -247,17 +253,16 @@ WebConsole.prototype = {
+   /**
+    * Initialize the Web Console instance.
+    *
+    * @return object
+    *         A Promise for the initialization.
+    */
+   init: function WC_init()
+   {
+-    this.ui = new this.iframeWindow.WebConsoleFrame(this);
+     return this.ui.init().then(() => this);
+   },
+ 
+   /**
+    * Retrieve the Web Console panel title.
+    *
+    * @return string
+    *         The Web Console panel title.
+@@ -540,16 +545,18 @@ ViewHelpers.create({ constructor: Browse
+    *         A Promise for the initialization.
+    */
+   init: function BC_init()
+   {
+     if (this._bc_init) {
+       return this._bc_init;
+     }
+ 
++    this.ui._filterPrefsPrefix = BROWSER_CONSOLE_FILTER_PREFS_PREFIX;
++
+     let window = this.iframeWindow;
+ 
+     // Make sure that the closing of the Browser Console window destroys this
+     // instance.
+     let onClose = () => {
+       window.removeEventListener("unload", onClose);
+       this.destroy();
+     };
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -133,16 +133,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_bug_871156_ctrlw_close_tab.js \
+ 	browser_console_private_browsing.js \
+ 	browser_console_nsiconsolemessage.js \
+ 	browser_webconsole_bug_817834_add_edited_input_to_history.js \
+ 	browser_console_addonsdk_loader_exception.js \
+ 	browser_console_error_source_click.js \
+ 	browser_console_clear_on_reload.js \
+ 	browser_console_keyboard_accessibility.js \
++	browser_console_filters.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+ 	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_console_filters.js b/browser/devtools/webconsole/test/browser_console_filters.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console_filters.js
+@@ -0,0 +1,71 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Check that the Browser Console does not use the same filter prefs as the Web
++// Console. See bug 878186.
++
++const TEST_URI = "data:text/html;charset=utf8,<p>browser console filters";
++const WEB_CONSOLE_PREFIX = "devtools.webconsole.filter.";
++const BROWSER_CONSOLE_PREFIX = "devtools.browserconsole.filter.";
++
++function test()
++{
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    info("open the web console");
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function consoleOpened(hud)
++{
++  ok(hud, "web console opened");
++
++  is(Services.prefs.getBoolPref(BROWSER_CONSOLE_PREFIX + "exception"), true,
++     "'exception' filter is enabled (browser console)");
++  is(Services.prefs.getBoolPref(WEB_CONSOLE_PREFIX + "exception"), true,
++     "'exception' filter is enabled (web console)");
++
++  info("toggle 'exception' filter");
++  hud.setFilterState("exception", false);
++
++  is(Services.prefs.getBoolPref(BROWSER_CONSOLE_PREFIX + "exception"), true,
++     "'exception' filter is enabled (browser console)");
++  is(Services.prefs.getBoolPref(WEB_CONSOLE_PREFIX + "exception"), false,
++     "'exception' filter is disabled (web console)");
++
++  hud.setFilterState("exception", true);
++
++  executeSoon(() => closeConsole(null, onWebConsoleClose));
++}
++
++function onWebConsoleClose()
++{
++  info("web console closed");
++  HUDConsoleUI.toggleBrowserConsole().then(onBrowserConsoleOpen);
++}
++
++function onBrowserConsoleOpen(hud)
++{
++  ok(hud, "browser console opened");
++
++  is(Services.prefs.getBoolPref(BROWSER_CONSOLE_PREFIX + "exception"), true,
++     "'exception' filter is enabled (browser console)");
++  is(Services.prefs.getBoolPref(WEB_CONSOLE_PREFIX + "exception"), true,
++     "'exception' filter is enabled (web console)");
++
++  info("toggle 'exception' filter");
++  hud.setFilterState("exception", false);
++
++  is(Services.prefs.getBoolPref(BROWSER_CONSOLE_PREFIX + "exception"), false,
++     "'exception' filter is disabled (browser console)");
++  is(Services.prefs.getBoolPref(WEB_CONSOLE_PREFIX + "exception"), true,
++     "'exception' filter is enabled (web console)");
++
++  hud.setFilterState("exception", true);
++
++  executeSoon(finishTest);
++}
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -198,16 +198,17 @@ function WebConsoleFrame(aWebConsoleOwne
+ {
+   this.owner = aWebConsoleOwner;
+   this.hudId = this.owner.hudId;
+ 
+   this._repeatNodes = {};
+   this._outputQueue = [];
+   this._pruneCategoriesQueue = {};
+   this._networkRequests = {};
++  this.filterPrefs = {};
+ 
+   this._toggleFilter = this._toggleFilter.bind(this);
+   this._flushMessageQueue = this._flushMessageQueue.bind(this);
+ 
+   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+   this._outputTimerInitialized = false;
+ 
+   EventEmitter.decorate(this);
+@@ -305,16 +306,23 @@ WebConsoleFrame.prototype = {
+   /**
+    * Preferences for filtering messages by type.
+    * @see this._initDefaultFilterPrefs()
+    * @type object
+    */
+   filterPrefs: null,
+ 
+   /**
++   * Prefix used for filter preferences.
++   * @private
++   * @type string
++   */
++  _filterPrefsPrefix: FILTER_PREFS_PREFIX,
++
++  /**
+    * The nesting depth of the currently active console group.
+    */
+   groupDepth: 0,
+ 
+   /**
+    * The current target location.
+    * @type string
+    */
+@@ -514,58 +522,41 @@ WebConsoleFrame.prototype = {
+   },
+ 
+   /**
+    * Initialize the default filter preferences.
+    * @private
+    */
+   _initDefaultFilterPrefs: function WCF__initDefaultFilterPrefs()
+   {
+-    this.filterPrefs = {
+-      network: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "network"),
+-      networkinfo: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "networkinfo"),
+-      csserror: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "csserror"),
+-      cssparser: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "cssparser"),
+-      exception: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "exception"),
+-      jswarn: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "jswarn"),
+-      jslog: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "jslog"),
+-      error: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "error"),
+-      info: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "info"),
+-      warn: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "warn"),
+-      log: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "log"),
+-      secerror: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "secerror"),
+-      secwarn: Services.prefs.getBoolPref(FILTER_PREFS_PREFIX + "secwarn"),
+-    };
++    let prefs = ["network", "networkinfo", "csserror", "cssparser", "exception",
++                 "jswarn", "jslog", "error", "info", "warn", "log", "secerror",
++                 "secwarn"];
++    for (let pref of prefs) {
++      this.filterPrefs[pref] = Services.prefs
++                               .getBoolPref(this._filterPrefsPrefix + pref);
++    }
+   },
+ 
+   /**
+-   * Sets the click events for all binary toggle filter buttons.
++   * Sets the events for the filter input field.
+    * @private
+    */
+   _setFilterTextBoxEvents: function WCF__setFilterTextBoxEvents()
+   {
+-    let timer = null;
++    let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+     let timerEvent = this.adjustVisibilityOnSearchStringChange.bind(this);
+ 
+     let onChange = function _onChange() {
+-      let timer;
+-
+       // To improve responsiveness, we let the user finish typing before we
+       // perform the search.
+-      if (timer == null) {
+-        let timerClass = Cc["@mozilla.org/timer;1"];
+-        timer = timerClass.createInstance(Ci.nsITimer);
+-      }
+-      else {
+-        timer.cancel();
+-      }
+-
++      timer.cancel();
+       timer.initWithCallback(timerEvent, SEARCH_DELAY,
+                              Ci.nsITimer.TYPE_ONE_SHOT);
+-    }.bind(this);
++    };
+ 
+     this.filterBox.addEventListener("command", onChange, false);
+     this.filterBox.addEventListener("input", onChange, false);
+   },
+ 
+   /**
+    * Creates one of the filter buttons on the toolbar.
+    *
+@@ -745,17 +736,17 @@ WebConsoleFrame.prototype = {
+    * @param string aToggleType
+    * @param boolean aState
+    * @returns void
+    */
+   setFilterState: function WCF_setFilterState(aToggleType, aState)
+   {
+     this.filterPrefs[aToggleType] = aState;
+     this.adjustVisibilityForMessageType(aToggleType, aState);
+-    Services.prefs.setBoolPref(FILTER_PREFS_PREFIX + aToggleType, aState);
++    Services.prefs.setBoolPref(this._filterPrefsPrefix + aToggleType, aState);
+   },
+ 
+   /**
+    * Get the filter state for a specific toggle button.
+    *
+    * @param string aToggleType
+    * @returns boolean
+    */
