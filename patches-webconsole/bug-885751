@@ -1,0 +1,56 @@
+# HG changeset patch
+# Parent 1d0d9f1d632179355a516c4bf3cb0eb5758cc443
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1371987322 -10800
+
+Bug 885751 - dbg-server.jsm compartment is leaking 500,000-char JavaScript warning strings like a sieve
+
+diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
+--- a/toolkit/devtools/server/actors/webconsole.js
++++ b/toolkit/devtools/server/actors/webconsole.js
+@@ -546,17 +546,17 @@ WebConsoleActor.prototype =
+             let message = null;
+             if (aMessage instanceof Ci.nsIScriptError) {
+               message = this.preparePageErrorForRemote(aMessage);
+               message._type = type;
+             }
+             else {
+               message = {
+                 _type: "LogMessage",
+-                message: aMessage.message,
++                message: this._createStringGrip(aMessage.message),
+                 timeStamp: aMessage.timeStamp,
+               };
+             }
+             messages.push(message);
+           });
+           break;
+         }
+       }
+@@ -943,20 +943,25 @@ WebConsoleActor.prototype =
+    *
+    * @param nsIScriptError aPageError
+    *        The page error we need to send to the client.
+    * @return object
+    *         The object you can send to the remote client.
+    */
+   preparePageErrorForRemote: function WCA_preparePageErrorForRemote(aPageError)
+   {
++    let lineText = aPageError.sourceLine;
++    if (lineText && lineText.length > DebuggerServer.LONG_STRING_INITIAL_LENGTH) {
++      lineText = lineText.substr(0, DebuggerServer.LONG_STRING_INITIAL_LENGTH);
++    }
++
+     return {
+       errorMessage: this._createStringGrip(aPageError.errorMessage),
+       sourceName: aPageError.sourceName,
+-      lineText: this._createStringGrip(aPageError.sourceLine),
++      lineText: lineText,
+       lineNumber: aPageError.lineNumber,
+       columnNumber: aPageError.columnNumber,
+       category: aPageError.category,
+       timeStamp: aPageError.timeStamp,
+       warning: !!(aPageError.flags & aPageError.warningFlag),
+       error: !!(aPageError.flags & aPageError.errorFlag),
+       exception: !!(aPageError.flags & aPageError.exceptionFlag),
+       strict: !!(aPageError.flags & aPageError.strictFlag),
