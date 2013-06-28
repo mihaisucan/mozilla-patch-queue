@@ -1,14 +1,74 @@
 # HG changeset patch
-# Parent a173f58fb30fecba6fd77298aeaa49daf6b368ef
+# Parent ea6054cc318dd5f3d0c5c0050acfba9bdf67aa0b
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1371836999 -10800
+# Date 1372442193 -10800
 
-Bug 812618 - Autocomplete at cursor location; f=robcee
+Bug 812618 - Autocomplete at cursor location; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-bc,mochitest-o -t none
 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585991_autocomplete_keys.js
+@@ -274,10 +274,55 @@ function popupHideAfterReturnWithNoSelec
+ 
+   ok(!popup.isOpen, "popup is not open after VK_RETURN");
+ 
+   is(inputNode.value, "", "inputNode is empty after VK_RETURN");
+   is(completeNode.value, "", "completeNode is empty");
+   is(jsterm.history[jsterm.history.length-1], "window.testBug",
+      "jsterm history is correct");
+ 
+-  executeSoon(finishTest);
++  executeSoon(testCompletionInText);
+ }
++
++function testCompletionInText()
++{
++  info("test that completion works inside text, see bug 812618");
++
++  popup._panel.addEventListener("popupshown", function onShown() {
++    popup._panel.removeEventListener("popupshown", onShown);
++
++    ok(popup.isOpen, "popup is open");
++    is(popup.itemCount, 2, "popup.itemCount is correct");
++
++    EventUtils.synthesizeKey("VK_DOWN", {});
++    EventUtils.synthesizeKey("VK_DOWN", {});
++    is(popup.selectedIndex, 0, "popup.selectedIndex is correct");
++    ok(!completeNode.value, "completeNode.value is empty");
++
++    let items = popup.getItems().reverse().map(e => e.label);
++    let sameItems = items.every((prop, index) =>
++      ["testBug873250a", "testBug873250b"][index] === prop);
++    ok(sameItems, "getItems returns the items we expect");
++
++    info("press Tab and wait for popup to hide");
++    popup._panel.addEventListener("popuphidden", popupHideAfterCompletionInText);
++    EventUtils.synthesizeKey("VK_TAB", {});
++  });
++
++  jsterm.setInputValue("dump(window.testBu)");
++  inputNode.selectionStart = inputNode.selectionEnd = 18;
++  EventUtils.synthesizeKey("g", {});
++}
++
++function popupHideAfterCompletionInText()
++{
++  // At this point the completion suggestion should be accepted.
++  popup._panel.removeEventListener("popuphidden", popupHideAfterCompletionInText);
++
++  ok(!popup.isOpen, "popup is not open");
++  is(inputNode.value, "dump(window.testBug873250b)",
++     "completion was successful after VK_TAB");
++  is(inputNode.selectionStart, 26, "cursor location is correct");
++  is(inputNode.selectionStart, inputNode.selectionEnd, "cursor location (confirmed)");
++  ok(!completeNode.value, "completeNode is empty");
++
++  finishTest();
++}
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -4042,19 +4042,18 @@ JSTerm.prototype = {
+@@ -4072,19 +4072,18 @@ JSTerm.prototype = {
      let inputNode = this.inputNode;
      let inputValue = inputNode.value;
      // If the inputNode has no value, then don't try to complete on it.
@@ -30,7 +90,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (this.lastCompletion.value != inputValue) {
        this._updateCompletionResult(aType, aCallback);
        return false;
-@@ -4180,16 +4179,21 @@ JSTerm.prototype = {
+@@ -4210,16 +4209,21 @@ JSTerm.prototype = {
        popup.selectNextItem();
      }
  
@@ -52,7 +112,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
      else {
        this.updateCompleteNode("");
-@@ -4221,17 +4225,21 @@ JSTerm.prototype = {
+@@ -4251,17 +4255,21 @@ JSTerm.prototype = {
    acceptProposedCompletion: function JSTF_acceptProposedCompletion()
    {
      let updated = false;
@@ -78,7 +138,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -628,17 +628,18 @@ WebConsoleActor.prototype =
+@@ -620,17 +620,18 @@ WebConsoleActor.prototype =
     *        The request message - what input to autocomplete.
     * @return object
     *         The response message - matched properties.
@@ -101,7 +161,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 --- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
 +++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
-@@ -698,49 +698,56 @@ function findCompletionBeginning(aStr)
+@@ -722,49 +722,56 @@ function findCompletionBeginning(aStr)
  }
  
  /**
@@ -164,3 +224,102 @@ diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/
  
    let matches = null;
    let matchProp = "";
+diff --git a/toolkit/devtools/webconsole/test/test_jsterm.html b/toolkit/devtools/webconsole/test/test_jsterm.html
+--- a/toolkit/devtools/webconsole/test/test_jsterm.html
++++ b/toolkit/devtools/webconsole/test/test_jsterm.html
+@@ -32,56 +32,91 @@ function onAttach(aState, aResponse)
+   top.foobarObject.omg = 4;
+   top.foobarObject.omgfoo = 5;
+   top.foobarObject.strfoo = "foobarz";
+   top.foobarObject.omgstr = "foobarz" +
+     (new Array(DebuggerServer.LONG_STRING_LENGTH * 2)).join("abb");
+ 
+   gState = aState;
+ 
+-  let tests = [doAutocomplete1, doAutocomplete2, doSimpleEval, doWindowEval,
+-    doEvalWithException, doEvalWithHelper, doEvalString, doEvalLongString];
++  let tests = [doAutocomplete1, doAutocomplete2, doAutocomplete3,
++               doAutocomplete4, doSimpleEval, doWindowEval, doEvalWithException,
++               doEvalWithHelper, doEvalString, doEvalLongString];
+   runTests(tests, testEnd);
+ }
+ 
+ function doAutocomplete1()
+ {
+   info("test autocomplete for 'window.foo'");
+-  gState.client.autocomplete("window.foo", 0, onAutocomplete1);
++  gState.client.autocomplete("window.foo", 10, onAutocomplete1);
+ }
+ 
+ function onAutocomplete1(aResponse)
+ {
+   let matches = aResponse.matches;
+ 
+   is(aResponse.matchProp, "foo", "matchProp");
+   is(matches.length, 1, "matches.length");
+   is(matches[0], "foobarObject", "matches[0]");
+ 
+   nextTest();
+ }
+ 
+ function doAutocomplete2()
+ {
+   info("test autocomplete for 'window.foobarObject.'");
+-  gState.client.autocomplete("window.foobarObject.", 0, onAutocomplete2);
++  gState.client.autocomplete("window.foobarObject.", 20, onAutocomplete2);
+ }
+ 
+ function onAutocomplete2(aResponse)
+ {
+   let matches = aResponse.matches;
+ 
+   ok(!aResponse.matchProp, "matchProp");
+   is(matches.length, 7, "matches.length");
+   checkObject(matches,
+     ["foo", "foobar", "foobaz", "omg", "omgfoo", "omgstr", "strfoo"]);
+ 
+   nextTest();
+ }
+ 
++function doAutocomplete3()
++{
++  // Check that completion suggestions are offered inside the string.
++  info("test autocomplete for 'dump(window.foobarObject.)'");
++  gState.client.autocomplete("dump(window.foobarObject.)", 25, onAutocomplete3);
++}
++
++function onAutocomplete3(aResponse)
++{
++  let matches = aResponse.matches;
++
++  ok(!aResponse.matchProp, "matchProp");
++  is(matches.length, 7, "matches.length");
++  checkObject(matches,
++    ["foo", "foobar", "foobaz", "omg", "omgfoo", "omgstr", "strfoo"]);
++
++  nextTest();
++}
++
++function doAutocomplete4()
++{
++  // Check that completion requests can have no suggestions.
++  info("test autocomplete for 'dump(window.foobarObject.)'");
++  gState.client.autocomplete("dump(window.foobarObject.)", 26, onAutocomplete4);
++}
++
++function onAutocomplete4(aResponse)
++{
++  ok(!aResponse.matchProp, "matchProp");
++  is(aResponse.matches.length, 0, "matches.length");
++
++  nextTest();
++}
++
+ function doSimpleEval()
+ {
+   info("test eval '2+2'");
+   gState.client.evaluateJS("2+2", onSimpleEval);
+ }
+ 
+ function onSimpleEval(aResponse)
+ {

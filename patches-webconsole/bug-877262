@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 68760713a30f90ecd3b0c7ff2cfafac070920131
+# Parent e487625f28d037126a5501f0b716df339bec069d
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1371157467 -10800
+# Date 1372444855 -10800
 
 Bug 877262 - Start using the new jetpack loader in the web console; r=dcamp
 
@@ -16,7 +16,7 @@ diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browse
      <command id="Tools:DevToolbox" oncommand="gDevToolsBrowser.toggleToolboxCommand(gBrowser);"/>
      <command id="Tools:DevToolbar" oncommand="DeveloperToolbar.toggle();" disabled="true" hidden="true"/>
      <command id="Tools:DevToolbarFocus" oncommand="DeveloperToolbar.focusToggle();" disabled="true"/>
-     <command id="Tools:ChromeDebugger" oncommand="DebuggerUI.toggleChromeDebugger();" disabled="true" hidden="true"/>
+     <command id="Tools:ChromeDebugger" oncommand="BrowserDebuggerProcess.init();" disabled="true" hidden="true"/>
 -    <command id="Tools:BrowserConsole" oncommand="HUDConsoleUI.toggleBrowserConsole();"/>
 +    <command id="Tools:BrowserConsole" oncommand="HUDService.toggleBrowserConsole();"/>
      <command id="Tools:Scratchpad" oncommand="Scratchpad.openScratchpad();" disabled="true" hidden="true"/>
@@ -30,7 +30,7 @@ diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browse
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 --- a/browser/base/content/browser.js
 +++ b/browser/base/content/browser.js
-@@ -6972,18 +6972,19 @@ var TabContextMenu = {
+@@ -7016,18 +7016,19 @@ var TabContextMenu = {
  };
  
  XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
@@ -56,9 +56,9 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
 --- a/browser/devtools/debugger/debugger-controller.js
 +++ b/browser/devtools/debugger/debugger-controller.js
 @@ -24,18 +24,22 @@ Cu.import("resource:///modules/devtools/
- Cu.import("resource:///modules/devtools/BreadcrumbsWidget.jsm");
  Cu.import("resource:///modules/devtools/SideMenuWidget.jsm");
  Cu.import("resource:///modules/devtools/VariablesView.jsm");
+ Cu.import("resource:///modules/devtools/VariablesViewController.jsm");
  Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
  
  XPCOMUtils.defineLazyModuleGetter(this, "Parser",
@@ -93,7 +93,7 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
      content/browser/devtools/netmonitor-view.js                        (netmonitor/netmonitor-view.js)
      content/browser/devtools/NetworkPanel.xhtml                        (webconsole/NetworkPanel.xhtml)
 -    content/browser/devtools/webconsole.js                             (webconsole/webconsole.js)
-     content/browser/devtools/webconsole.xul                            (webconsole/webconsole.xul)
+ *   content/browser/devtools/webconsole.xul                            (webconsole/webconsole.xul)
  *   content/browser/devtools/scratchpad.xul                            (scratchpad/scratchpad.xul)
      content/browser/devtools/scratchpad.js                             (scratchpad/scratchpad.js)
      content/browser/devtools/splitview.css                             (shared/splitview.css)
@@ -117,7 +117,7 @@ diff --git a/browser/devtools/main.js b/browser/devtools/main.js
 +loader.lazyGetter(this, "WebConsolePanel", () => require("devtools/webconsole/panel").WebConsolePanel);
  loader.lazyImporter(this, "DebuggerPanel", "resource:///modules/devtools/DebuggerPanel.jsm");
  loader.lazyImporter(this, "StyleEditorPanel", "resource:///modules/devtools/StyleEditorPanel.jsm");
- loader.lazyImporter(this, "ProfilerPanel", "resource:///modules/devtools/ProfilerPanel.jsm");
+ loader.lazyGetter(this, "ProfilerPanel", function() require("devtools/profiler/panel"));
  loader.lazyImporter(this, "NetMonitorPanel", "resource:///modules/devtools/NetMonitorPanel.jsm");
  
  // Strings
@@ -217,21 +217,24 @@ diff --git a/browser/devtools/shared/widgets/SideMenuWidget.jsm b/browser/devtoo
  
  /**
   * A simple side menu, with the ability of grouping menu items.
+  * This widget should be used in tandem with the WidgetMethods in ViewHelpers.jsm
   *
-  * You can use this widget alone, but it works great with a MenuContainer!
-  * In that case, you should never need to access the methods in the
+  * @param nsIDOMNode aNode
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -19,18 +19,26 @@ const SEARCH_ACTION_MAX_DELAY = 300; // 
+@@ -18,21 +18,26 @@ const PAGE_SIZE_MAX_JUMPS = 30;
+ const SEARCH_ACTION_MAX_DELAY = 300; // ms
  
  Cu.import("resource://gre/modules/Services.jsm");
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
  Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
+ Cu.import("resource:///modules/devtools/shared/event-emitter.js");
+ Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
  
- XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
-   "resource://gre/modules/devtools/NetworkHelper.jsm");
- 
+-XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
+-  "resource://gre/modules/devtools/NetworkHelper.jsm");
+-
 -XPCOMUtils.defineLazyModuleGetter(this, "WebConsoleUtils",
 -  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
 +XPCOMUtils.defineLazyModuleGetter(this, "devtools",
@@ -281,7 +284,7 @@ rename from browser/devtools/webconsole/HUDService.jsm
 rename to browser/devtools/webconsole/hudservice.js
 --- a/browser/devtools/webconsole/HUDService.jsm
 +++ b/browser/devtools/webconsole/hudservice.js
-@@ -1,79 +1,50 @@
+@@ -1,82 +1,56 @@
  /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
  /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
  /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -320,7 +323,7 @@ rename to browser/devtools/webconsole/hudservice.js
 -XPCOMUtils.defineLazyModuleGetter(this, "Promise",
 -    "resource://gre/modules/commonjs/sdk/core/promise.js");
 -
--XPCOMUtils.defineLazyModuleGetter(this, "ViewHelpers",
+-XPCOMUtils.defineLazyModuleGetter(this, "Heritage",
 -    "resource:///modules/devtools/ViewHelpers.jsm");
 -
 -let Telemetry = devtools.require("devtools/shared/telemetry");
@@ -338,11 +341,14 @@ rename to browser/devtools/webconsole/hudservice.js
  
  const BROWSER_CONSOLE_WINDOW_FEATURES = "chrome,titlebar,toolbar,centerscreen,resizable,dialog=no";
  
+ // The preference prefix for all of the Browser Console filters.
+ const BROWSER_CONSOLE_FILTER_PREFS_PREFIX = "devtools.browserconsole.filter.";
+ 
 -this.EXPORTED_SYMBOLS = ["HUDService"];
 -
--///////////////////////////////////////////////////////////////////////////
--//// The HUD service
--
+ ///////////////////////////////////////////////////////////////////////////
+ //// The HUD service
+ 
  function HUD_SERVICE()
  {
 -  this.hudReferences = {};
@@ -351,21 +357,21 @@ rename to browser/devtools/webconsole/hudservice.js
  
  HUD_SERVICE.prototype =
  {
+-  /**
+-   * Keeps a reference for each HeadsUpDisplay that is created
+-   * @type object
+-   */
+-  hudReferences: null,
 +  _browserConsoleID: null,
 +  _browserConsoleDefer: null,
-+
+ 
    /**
--   * Keeps a reference for each HeadsUpDisplay that is created
-+   * Keeps a reference for each Web Console / Browser Console that is created.
-    * @type object
-    */
--  hudReferences: null,
--
--  /**
 -   * getter for UI commands to be used by the frontend
 -   *
 -   * @returns object
--   */
++   * Keeps a reference for each Web Console / Browser Console that is created.
++   * @type Map
+    */
 -  get consoleUI() {
 -    return HeadsUpDisplayUICommands;
 -  },
@@ -378,7 +384,7 @@ rename to browser/devtools/webconsole/hudservice.js
     */
    currentContext: function HS_currentContext() {
      return Services.wm.getMostRecentWindow("navigator:browser");
-@@ -92,51 +63,51 @@ HUD_SERVICE.prototype =
+@@ -95,51 +69,51 @@ HUD_SERVICE.prototype =
     *        The window of the web console owner.
     * @return object
     *         A Promise object for the opening of the new WebConsole instance.
@@ -435,7 +441,7 @@ rename to browser/devtools/webconsole/hudservice.js
      return null;
    },
  
-@@ -149,34 +120,155 @@ HUD_SERVICE.prototype =
+@@ -152,34 +126,155 @@ HUD_SERVICE.prototype =
     */
    getHudIdByWindow: function HS_getHudIdByWindow(aContentWindow)
    {
@@ -598,11 +604,26 @@ rename to browser/devtools/webconsole/hudservice.js
   * that displays console log data as well as provides an interactive terminal to
   * manipulate the target's document content.
   *
-@@ -212,22 +304,23 @@ WebConsole.prototype = {
+@@ -204,36 +299,37 @@ function WebConsole(aTarget, aIframeWind
+ 
+   this.browserWindow = this.chromeWindow.top;
+ 
+   let element = this.browserWindow.document.documentElement;
+   if (element.getAttribute("windowtype") != "navigator:browser") {
+     this.browserWindow = HUDService.currentContext();
+   }
+ 
+-  this.ui = new this.iframeWindow.WebConsoleFrame(this);
++  this.ui = new WebConsoleFrame(this);
+ }
+ 
+ WebConsole.prototype = {
+   iframeWindow: null,
    chromeWindow: null,
    browserWindow: null,
    hudId: null,
    target: null,
+   ui: null,
    _browserConsole: false,
    _destroyer: null,
  
@@ -625,26 +646,7 @@ rename to browser/devtools/webconsole/hudservice.js
    get mainPopupSet()
    {
      return this.browserWindow.document.getElementById("mainPopupSet");
-@@ -247,17 +340,17 @@ WebConsole.prototype = {
-   /**
-    * Initialize the Web Console instance.
-    *
-    * @return object
-    *         A Promise for the initialization.
-    */
-   init: function WC_init()
-   {
--    this.ui = new this.iframeWindow.WebConsoleFrame(this);
-+    this.ui = new WebConsoleFrame(this, this.iframeWindow);
-     return this.ui.init().then(() => this);
-   },
- 
-   /**
-    * Retrieve the Web Console panel title.
-    *
-    * @return string
-    *         The Web Console panel title.
-@@ -461,17 +554,17 @@ WebConsole.prototype = {
+@@ -466,17 +562,17 @@ WebConsole.prototype = {
     *         A Promise object that is resolved once the Web Console is closed.
     */
    destroy: function WC_destroy()
@@ -663,7 +665,7 @@ rename to browser/devtools/webconsole/hudservice.js
      for (let panel of panels) {
        panel.hidePopup();
      }
-@@ -580,158 +673,29 @@ ViewHelpers.create({ constructor: Browse
+@@ -587,158 +683,29 @@ BrowserConsole.prototype = Heritage.exte
  
      this._telemetry.toolClosed("browserconsole");
  
@@ -1352,20 +1354,18 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_600183_char
  function test()
  {
    addTab("data:text/html;charset=utf-8,Web Console - bug 600183 test");
-@@ -46,16 +46,16 @@ function test()
-       waitForSuccess({
-         name: "saveRequestAndResponseBodies update",
-         validatorFn: function()
-         {
-           return hud.ui.saveRequestAndResponseBodies;
-         },
-         successFn: function()
-         {
--          HUDService.lastFinishedRequestCallback = performTest;
-+          HUDService.lastFinishedRequest.callback = performTest;
-           content.location = TEST_URI;
-         },
-         failureFn: finishTest,
+@@ -40,14 +40,14 @@ function test()
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+ 
+     openConsole(null, function(hud) {
+       hud.ui.setSaveRequestAndResponseBodies(true).then(() => {
+         ok(hud.ui._saveRequestAndResponseBodies,
+           "The saveRequestAndResponseBodies property was successfully set.");
+ 
+-        HUDService.lastFinishedRequestCallback = performTest;
++        HUDService.lastFinishedRequest.callback = performTest;
+         content.location = TEST_URI;
        });
      });
    }, true);
@@ -1524,7 +1524,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_
    else {
      menuitems[1] = huds[1].ui.rootElement.querySelector("#saveBodiesContextMenu");
    }
-@@ -111,18 +110,17 @@ function onpopupshown2b(aEvent)
+@@ -96,18 +95,17 @@ function testpopup2b(aEvent) {
  
      info("menupopups[1] hidden");
  
@@ -1547,32 +1547,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
-@@ -8,51 +8,49 @@ const TEST_URI = "http://example.com/bro
- function test() {
-   addTab(TEST_URI);
-   browser.addEventListener("load", function onLoad() {
-     browser.removeEventListener("load", onLoad, true);
- 
-     openConsole(null, function(hud) {
-       content.location.reload();
- 
--      waitForSuccess({
--        name: "network message displayed",
--        validatorFn: function()
--        {
--          return hud.outputNode.querySelector(".webconsole-msg-network");
--        },
--        successFn: performTest,
--        failureFn: finishTest,
--      });
-+      waitForMessages({
-+        webconsole: hud,
-+        messages: [{
-+          name: "network message displayed",
-+          category: CATEGORY_NETWORK,
-+          severity: SEVERITY_LOG,
-+        }],
-+      }).then(performTest);
+@@ -20,38 +20,37 @@ function test() {
+           category: CATEGORY_NETWORK,
+           severity: SEVERITY_LOG,
+         }],
+       }).then(performTest);
      });
    }, true);
  }
@@ -1612,7 +1591,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_clos
          is(hiddenPopups, 1, "correct number of popups hidden");
          if (hiddenPopups != 1) {
            document.removeEventListener("popuphidden", onpopuphidden, false);
-@@ -63,17 +61,17 @@ function performTest() {
+@@ -62,17 +61,17 @@ function performTest() {
      });
    };
  
@@ -1634,26 +1613,26 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_clos
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
-@@ -26,17 +26,17 @@ function consoleOpened(hud)
-   waitForSuccess({
-     name: "saveRequestAndResponseBodies update",
-     validatorFn: function()
-     {
-       return hud.ui.saveRequestAndResponseBodies;
-     },
-     successFn: function()
-     {
--      HUDService.lastFinishedRequestCallback = requestDoneCallback;
-+      HUDService.lastFinishedRequest.callback = requestDoneCallback;
-       waitForSuccess(waitForResponses);
-       content.location = TEST_URI;
-     },
-     failureFn: finishTest,
+@@ -20,17 +20,17 @@ function requestDoneCallback(aHttpReques
+ 
+ function consoleOpened(hud)
+ {
+   webConsoleClient = hud.ui.webConsoleClient;
+   hud.ui.setSaveRequestAndResponseBodies(true).then(() => {
+     ok(hud.ui._saveRequestAndResponseBodies,
+       "The saveRequestAndResponseBodies property was successfully set.");
+ 
+-    HUDService.lastFinishedRequestCallback = requestDoneCallback;
++    HUDService.lastFinishedRequest.callback = requestDoneCallback;
+     waitForSuccess(waitForResponses);
+     content.location = TEST_URI;
    });
  
    let waitForResponses = {
      name: "301 and 404 responses",
-@@ -47,17 +47,17 @@ function consoleOpened(hud)
+     validatorFn: function()
+     {
+@@ -39,17 +39,17 @@ function consoleOpened(hud)
      },
      successFn: getHeaders,
      failureFn: finishTest,
@@ -1749,6 +1728,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +  TargetFactory = tools.TargetFactory;
 +  WebConsoleUtils = utils.Utils;
 +})();
+ // Promise._reportErrors = true; // please never leave me.
  
  let gPendingOutputTest = 0;
  
@@ -1756,8 +1736,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  const CATEGORY_NETWORK = 0;
  const CATEGORY_CSS = 1;
  const CATEGORY_JS = 2;
- const CATEGORY_WEBDEV = 3;
-@@ -283,24 +284,22 @@ function dumpMessageElement(aMessage)
+@@ -284,24 +285,22 @@ function dumpMessageElement(aMessage)
  }
  
  function finishTest()
@@ -1787,7 +1766,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      finish();
      return;
    }
-@@ -313,18 +312,18 @@ function finishTest()
+@@ -314,18 +313,18 @@ function finishTest()
  
    hud = null;
  }
@@ -1811,7 +1790,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -1,52 +1,34 @@
+@@ -1,55 +1,35 @@
  /* -*- Mode: js2; js2-basic-offset: 2; indent-tabs-mode: nil; -*- */
  /* vim: set ts=2 et sw=2 tw=80: */
  /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -1851,6 +1830,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -XPCOMUtils.defineLazyModuleGetter(this, "VariablesView",
 -                                  "resource:///modules/devtools/VariablesView.jsm");
 -
+-XPCOMUtils.defineLazyModuleGetter(this, "VariablesViewController",
+-                                  "resource:///modules/devtools/VariablesViewController.jsm");
+-
 -XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
 -                                  "resource:///modules/devtools/shared/event-emitter.js");
 -
@@ -1874,6 +1856,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +                  () => require("devtools/webconsole/network-panel").NetworkPanel);
 +loader.lazyImporter(this, "GripClient", "resource://gre/modules/devtools/dbg-client.jsm");
 +loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
++loader.lazyImporter(this, "VariablesViewController", "resource:///modules/devtools/VariablesViewController.jsm");
  
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
  let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
@@ -1882,29 +1865,22 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // The XUL namespace.
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
  
-@@ -185,35 +167,39 @@ const PREF_PERSISTLOG = "devtools.webcon
-  * that displays console log data as well as provides an interactive terminal to
-  * manipulate the target's document content.
-  *
-  * The WebConsoleFrame is responsible for the actual Web Console UI
-  * implementation.
+@@ -193,36 +173,38 @@ const PREF_PERSISTLOG = "devtools.webcon
   *
   * @param object aWebConsoleOwner
   *        The WebConsole owner object.
-+ * @param nsIDOMWindow aWindow
-+ *        The window object for the UI container.
   */
--function WebConsoleFrame(aWebConsoleOwner)
-+function WebConsoleFrame(aWebConsoleOwner, aWindow)
+ function WebConsoleFrame(aWebConsoleOwner)
  {
    this.owner = aWebConsoleOwner;
    this.hudId = this.owner.hudId;
-+  this.window = aWindow;
++  this.window = this.owner.iframeWindow;
  
    this._repeatNodes = {};
    this._outputQueue = [];
    this._pruneCategoriesQueue = {};
    this._networkRequests = {};
+   this.filterPrefs = {};
  
    this._toggleFilter = this._toggleFilter.bind(this);
    this._flushMessageQueue = this._flushMessageQueue.bind(this);
@@ -1919,11 +1895,17 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  WebConsoleFrame.prototype = {
    /**
     * The WebConsole instance that owns this frame.
-    * @see HUDService.jsm::WebConsole
+-   * @see HUDService.jsm::WebConsole
++   * @see hudservice.js::WebConsole
     * @type object
     */
    owner: null,
-@@ -433,26 +419,27 @@ WebConsoleFrame.prototype = {
+ 
+   /**
+    * Proxy between the Web Console and the remote Web Console instance. This
+    * object holds methods used for connecting, listening and disconnecting from
+    * the remote server, using the remote debugging protocol.
+@@ -468,26 +450,27 @@ WebConsoleFrame.prototype = {
    /**
     * Find the Web Console UI elements and setup event listeners as needed.
     * @private
@@ -1952,7 +1934,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.inputNode = doc.querySelector(".jsterm-input-node");
  
      this._setFilterTextBoxEvents();
-@@ -2719,16 +2706,20 @@ WebConsoleFrame.prototype = {
+@@ -2748,16 +2731,20 @@ WebConsoleFrame.prototype = {
        this._outputTimer.cancel();
      }
      this._outputTimer = null;
@@ -1973,7 +1955,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }.bind(this);
  
      if (this.proxy) {
-@@ -3197,17 +3188,16 @@ JSTerm.prototype = {
+@@ -3268,17 +3255,16 @@ JSTerm.prototype = {
     * Create the Web Console sidebar.
     *
     * @see devtools/framework/sidebar.js
@@ -1983,7 +1965,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    {
      let tabbox = this.hud.document.querySelector("#webconsole-sidebar");
 -    let ToolSidebar = devtools.require("devtools/framework/sidebar").ToolSidebar;
-     this.sidebar = new ToolSidebar(tabbox, this);
+     this.sidebar = new ToolSidebar(tabbox, this, "webconsole");
      this.sidebar.show();
    },
  
@@ -1991,7 +1973,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Add the variables view tab to the sidebar.
     *
     * @private
-@@ -5042,50 +5032,44 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4998,50 +4984,44 @@ WebConsoleConnectionProxy.prototype = {
  
  function gSequenceId()
  {
@@ -2057,7 +2039,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Get selection information from the view.
     *
     * @param nsIDOMElement aView
-@@ -5152,9 +5136,20 @@ let ConsoleContextMenu = {
+@@ -5108,9 +5088,20 @@ let ConsoleContextMenu = {
        if (itemData.indexOf(type) !== -1) {
          shouldHide = false;
          break;
@@ -2105,10 +2087,10 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
                events="richlistbox-select"
                oncommandupdate="goUpdateConsoleCommands();">
      <command id="consoleCmd_openURL"
-@@ -47,18 +52,17 @@
-     <key key="&fullZoomEnlargeCmd.commandkey3;" command="cmd_fullZoomEnlarge" modifiers="accel"/>
-     <key id="key_fullZoomReset" key="&fullZoomResetCmd.commandkey;" command="cmd_fullZoomReset" modifiers="accel"/>
+@@ -52,18 +57,17 @@
      <key key="&fullZoomResetCmd.commandkey2;" command="cmd_fullZoomReset" modifiers="accel"/>
+     <key key="&findCmd.key;" command="cmd_find" modifiers="accel"/>
+     <key key="&clearOutputCmd.key;" command="consoleCmd_clearOutput" modifiers="accel"/>
      <key key="&closeCmd.key;" command="cmd_close" modifiers="accel"/>
    </keyset>
    <keyset id="editMenuKeys"/>
@@ -2158,7 +2140,7 @@ diff --git a/toolkit/devtools/Loader.jsm b/toolkit/devtools/Loader.jsm
  let loader = Cu.import("resource://gre/modules/commonjs/toolkit/loader.js", {}).Loader;
  let Promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
  
-+Promise._reportErrors = true;
++Promise._reportErrors = true; // FIXME !!!
 +
  this.EXPORTED_SYMBOLS = ["devtools"];
  
@@ -2189,21 +2171,20 @@ diff --git a/toolkit/devtools/Loader.jsm b/toolkit/devtools/Loader.jsm
          "": "resource://gre/modules/commonjs/",
          "main": "resource:///modules/devtools/main.js",
          "devtools": "resource:///modules/devtools",
--        "devtools/server": "resource://gre/modules/devtools/server"
-+        "devtools/server": "resource://gre/modules/devtools/server",
-+        "devtools/toolkit": "resource://gre/modules/devtools/toolkit"
+         "devtools/server": "resource://gre/modules/devtools/server",
++        "devtools/toolkit": "resource://gre/modules/devtools/toolkit",
+ 
+         // Allow access to xpcshell test items from the loader.
+         "xpcshell-test": "resource://test"
        },
        globals: loaderGlobals
      });
  
      return Promise.resolve(undefined);
-   },
- 
-   unload: function(reason) {
 diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/dbg-client.jsm
 --- a/toolkit/devtools/client/dbg-client.jsm
 +++ b/toolkit/devtools/client/dbg-client.jsm
-@@ -21,18 +21,20 @@ Cu.import("resource://gre/modules/NetUti
+@@ -22,18 +22,20 @@ Cu.import("resource://gre/modules/NetUti
  Cu.import("resource://gre/modules/Services.jsm");
  Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
  const { defer, resolve, reject } = Promise;
@@ -2220,7 +2201,7 @@ diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/db
 +});
  
  Components.utils.import("resource://gre/modules/devtools/DevToolsUtils.jsm");
- var { makeInfallible } = DevToolsUtils;
+ this.makeInfallible = DevToolsUtils.makeInfallible;
  
  let wantLogging = Services.prefs.getBoolPref("devtools.debugger.log");
  
@@ -2271,37 +2252,6 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
  /**
   * The WebConsoleActor implements capabilities needed for the Web Console
   * feature.
-diff --git a/toolkit/devtools/server/transport.js b/toolkit/devtools/server/transport.js
---- a/toolkit/devtools/server/transport.js
-+++ b/toolkit/devtools/server/transport.js
-@@ -213,23 +213,24 @@ LocalDebuggerTransport.prototype = {
-     if (wantLogging) {
-       if (aPacket.to) {
-         dumpn("Packet " + serial + " sent to " + uneval(aPacket.to));
-       } else if (aPacket.from) {
-         dumpn("Packet " + serial + " sent from " + uneval(aPacket.from));
-       }
-     }
-     this._deepFreeze(aPacket);
--    let other = this.other;
--    Services.tm.currentThread.dispatch(makeInfallible(function() {
-+    Services.tm.currentThread.dispatch(makeInfallible(() => {
-       // Avoid the cost of JSON.stringify() when logging is disabled.
-       if (wantLogging) {
-         dumpn("Received packet " + serial + ": " + JSON.stringify(aPacket, null, 2));
-       }
--      other.hooks.onPacket(aPacket);
-+      if (this.other && this.other.hooks.onPacket) {
-+        this.other.hooks.onPacket(aPacket);
-+      }
-     }, "LocalDebuggerTransport instance's this.other.hooks.onPacket"), 0);
-   },
- 
-   /**
-    * Close the transport.
-    */
-   close: function LDT_close() {
-     if (this.other) {
 diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
 --- a/toolkit/devtools/webconsole/Makefile.in
 +++ b/toolkit/devtools/webconsole/Makefile.in
@@ -2579,7 +2529,7 @@ rename to toolkit/devtools/webconsole/utils.js
     */
    unwrap: function WCU_unwrap(aObject)
    {
-@@ -482,16 +461,17 @@ this.WebConsoleUtils = {
+@@ -506,16 +485,17 @@ this.WebConsoleUtils = {
     * @return boolean
     *         True if the given value is a grip with an actor.
     */
@@ -2597,7 +2547,7 @@ rename to toolkit/devtools/webconsole/utils.js
  WebConsoleUtils.l10n = function WCU_l10n(aBundleURI)
  {
    this._bundleUri = aBundleURI;
-@@ -572,17 +552,17 @@ WebConsoleUtils.l10n.prototype = {
+@@ -596,17 +576,17 @@ WebConsoleUtils.l10n.prototype = {
    },
  };
  
@@ -2616,7 +2566,7 @@ rename to toolkit/devtools/webconsole/utils.js
  const CLOSE_BODY = "}])".split("");
  const OPEN_CLOSE_BODY = {
    "{": "}",
-@@ -863,41 +843,42 @@ function getMatchedProps(aObj, aOptions 
+@@ -901,41 +881,42 @@ function getMatchedProps(aObj, aOptions 
      }
      aObj = Object.getPrototypeOf(aObj);
    }
@@ -2663,7 +2613,7 @@ rename to toolkit/devtools/webconsole/utils.js
    /**
     * The content window for which we listen to page errors.
     * @type nsIDOMWindow
-@@ -1039,21 +1020,22 @@ ConsoleServiceListener.prototype =
+@@ -1091,21 +1072,22 @@ ConsoleServiceListener.prototype =
   *        Optional - the window object for which we are created. This is used
   *        for filtering out messages that belong to other windows.
   * @param object aOwner
@@ -2687,7 +2637,7 @@ rename to toolkit/devtools/webconsole/utils.js
    /**
     * The content window for which we listen to window.console API calls.
     * @type nsIDOMWindow
-@@ -1147,17 +1129,17 @@ ConsoleAPIListener.prototype =
+@@ -1209,17 +1191,17 @@ ConsoleAPIListener.prototype =
   * Web Console but not from the web page.
   *
   * A list of helper functions used by Firebug can be found here:
@@ -2706,7 +2656,7 @@ rename to toolkit/devtools/webconsole/utils.js
     *        The ID of the element you want.
     * @return nsIDOMNode or null
     *         The result of calling document.querySelector(aSelector).
-@@ -1366,20 +1348,20 @@ this.JSTermHelpers = function JSTermHelp
+@@ -1428,20 +1410,20 @@ this.JSTermHelpers = function JSTermHelp
     *        A string you want to output.
     * @return void
     */
@@ -2730,7 +2680,7 @@ rename to toolkit/devtools/webconsole/utils.js
  const PR_UINT32_MAX = 4294967295;
  
  // HTTP status codes.
-@@ -2275,40 +2257,40 @@ NetworkMonitor.prototype = {
+@@ -2337,40 +2319,40 @@ NetworkMonitor.prototype = {
  
      this.openRequests = {};
      this.openResponses = {};
