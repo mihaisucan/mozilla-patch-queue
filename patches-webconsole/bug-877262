@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent e487625f28d037126a5501f0b716df339bec069d
+# Parent 9785318cddc4d25d40fec06f670562b47ac5ab04
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1372444855 -10800
+# Date 1372518996 -10800
 
-Bug 877262 - Start using the new jetpack loader in the web console; r=dcamp
+Bug 877262 - Start using the new jetpack loader in the web console; r=dcamp; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
 
 diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browser-sets.inc
 --- a/browser/base/content/browser-sets.inc
@@ -52,6 +52,191 @@ diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
    // prompt the user to confirm
    let promptTitle = gNavigatorBundle.getString("safeModeRestartPromptTitle");
    let promptMessage =
+diff --git a/browser/devtools/commandline/BuiltinCommands.jsm b/browser/devtools/commandline/BuiltinCommands.jsm
+--- a/browser/devtools/commandline/BuiltinCommands.jsm
++++ b/browser/devtools/commandline/BuiltinCommands.jsm
+@@ -749,18 +749,17 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+       CmdCommands.refreshAutoCommands(chromeWindow);
+     }
+   });
+ }(this));
+ 
+ /* CmdConsole -------------------------------------------------------------- */
+ 
+ (function(module) {
+-  XPCOMUtils.defineLazyModuleGetter(this, "HUDService",
+-                                    "resource:///modules/HUDService.jsm");
++  let HUDService = require("devtools/webconsole/hudservice");
+ 
+   /**
+    * 'console' command
+    */
+   gcli.addCommand({
+     name: "console",
+     description: gcli.lookup("consoleDesc"),
+     manual: gcli.lookup("consoleManual")
+diff --git a/browser/devtools/commandline/test/browser_cmd_calllog.js b/browser/devtools/commandline/test/browser_cmd_calllog.js
+--- a/browser/devtools/commandline/test/browser_cmd_calllog.js
++++ b/browser/devtools/commandline/test/browser_cmd_calllog.js
+@@ -1,15 +1,13 @@
+ /* Any copyright is dedicated to the Public Domain.
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ // Tests that the calllog commands works as they should
+ 
+-let HUDService = (Cu.import("resource:///modules/HUDService.jsm", {})).HUDService;
+-
+ const TEST_URI = "data:text/html;charset=utf-8,gcli-calllog";
+ 
+ let tests = {};
+ 
+ function test() {
+   helpers.addTabWithToolbar(TEST_URI, function(options) {
+     return helpers.runTests(options, tests);
+   }).then(finish);
+@@ -50,17 +48,17 @@ tests.testCallLogStatus = function(optio
+ tests.testCallLogExec = function(options) {
+   var deferred = Promise.defer();
+ 
+   var onWebConsoleOpen = function(subject) {
+     Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
+ 
+     subject.QueryInterface(Ci.nsISupportsString);
+     let hud = HUDService.getHudReferenceById(subject.data);
+-    ok(hud.hudId in HUDService.hudReferences, "console open");
++    ok(hud, "console open");
+ 
+     helpers.audit(options, [
+       {
+         setup: "calllog stop",
+         exec: {
+           output: /Stopped call logging/,
+         }
+       },
+diff --git a/browser/devtools/commandline/test/browser_cmd_calllog_chrome.js b/browser/devtools/commandline/test/browser_cmd_calllog_chrome.js
+--- a/browser/devtools/commandline/test/browser_cmd_calllog_chrome.js
++++ b/browser/devtools/commandline/test/browser_cmd_calllog_chrome.js
+@@ -1,15 +1,13 @@
+ /* Any copyright is dedicated to the Public Domain.
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ // Tests that the calllog commands works as they should
+ 
+-let HUDService = (Cu.import("resource:///modules/HUDService.jsm", {})).HUDService;
+-
+ const TEST_URI = "data:text/html;charset=utf-8,cmd-calllog-chrome";
+ 
+ let tests = {};
+ 
+ function test() {
+   helpers.addTabWithToolbar(TEST_URI, function(options) {
+     return helpers.runTests(options, tests);
+   }).then(finish);
+@@ -51,17 +49,17 @@ tests.testCallLogStatus = function(optio
+ tests.testCallLogExec = function(options) {
+   let deferred = Promise.defer();
+ 
+   function onWebConsoleOpen(subject) {
+     Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
+ 
+     subject.QueryInterface(Ci.nsISupportsString);
+     let hud = HUDService.getHudReferenceById(subject.data);
+-    ok(hud.hudId in HUDService.hudReferences, "console open");
++    ok(hud, "console open");
+ 
+     helpers.audit(options, [
+       {
+         setup: "calllog chromestop",
+         exec: {
+           output: /Stopped call logging/,
+         }
+       },
+diff --git a/browser/devtools/commandline/test/browser_cmd_commands.js b/browser/devtools/commandline/test/browser_cmd_commands.js
+--- a/browser/devtools/commandline/test/browser_cmd_commands.js
++++ b/browser/devtools/commandline/test/browser_cmd_commands.js
+@@ -1,15 +1,13 @@
+ /* Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ // Test various GCLI commands
+ 
+-let HUDService = (Cu.import("resource:///modules/HUDService.jsm", {})).HUDService;
+-
+ const TEST_URI = "data:text/html;charset=utf-8,gcli-commands";
+ 
+ let tests = {};
+ 
+ function test() {
+   helpers.addTabWithToolbar(TEST_URI, function(options) {
+     return helpers.runTests(options, tests);
+   }).then(finish);
+@@ -19,51 +17,56 @@ tests.testConsole = function(options) {
+   let deferred = Promise.defer();
+   let hud = null;
+ 
+   let onWebConsoleOpen = function(subject) {
+     Services.obs.removeObserver(onWebConsoleOpen, "web-console-created");
+ 
+     subject.QueryInterface(Ci.nsISupportsString);
+     hud = HUDService.getHudReferenceById(subject.data);
+-    ok(hud.hudId in HUDService.hudReferences, "console open");
++    ok(hud, "console open");
+ 
+     hud.jsterm.execute("pprint(window)", onExecute);
+   }
+   Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
+ 
+-  let onExecute = function() {
++  function onExecute () {
+     let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
+     ok(labels.length > 0, "output for pprint(window)");
+ 
++    hud.jsterm.once("messages-cleared", onClear);
++
+     helpers.audit(options, [
+       {
+         setup: "console clear",
+         exec: {
+           output: ""
+         },
+-        post: function() {
+-          let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
+-          // Bug 845827 - The GCLI "console clear" command doesn't always work
+-          // is(labels.length, 0, "no output in console");
+-        }
+-      },
++      }
++    ]);
++  }
++
++  function onClear() {
++    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
++    is(labels.length, 0, "no output in console");
++
++    helpers.audit(options, [
+       {
+         setup: "console close",
+         exec: {
+           output: ""
+         },
+         post: function() {
+-          ok(!(hud.hudId in HUDService.hudReferences), "console closed");
++          ok(!HUDService.getHudReferenceById(hud.hudId), "console closed");
+         }
+       }
+     ]).then(function() {
+       deferred.resolve();
+     });
+-  };
++  }
+ 
+   helpers.audit(options, [
+     {
+       setup: "console open",
+       exec: { }
+     }
+   ]);
+ 
 diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools/debugger/debugger-controller.js
 --- a/browser/devtools/debugger/debugger-controller.js
 +++ b/browser/devtools/debugger/debugger-controller.js
@@ -80,6 +265,30 @@ diff --git a/browser/devtools/debugger/debugger-controller.js b/browser/devtools
    /**
     * Initializes the debugger controller.
     */
+diff --git a/browser/devtools/inspector/selector-search.js b/browser/devtools/inspector/selector-search.js
+--- a/browser/devtools/inspector/selector-search.js
++++ b/browser/devtools/inspector/selector-search.js
+@@ -1,19 +1,15 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+-const {Cu} = require("chrome");
+-
+-loader.lazyGetter(this, "AutocompletePopup", () => {
+-  return Cu.import("resource:///modules/devtools/AutocompletePopup.jsm", {}).AutocompletePopup;
+-});
++loader.lazyGetter(this, "AutocompletePopup", () => require("devtools/shared/autocomplete-popup").AutocompletePopup);
+ 
+ // Maximum number of selector suggestions shown in the panel.
+ const MAX_SUGGESTIONS = 15;
+ 
+ /**
+  * Converts any input box on a page to a CSS selector search and suggestion box.
+  *
+  * @constructor
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 --- a/browser/devtools/jar.mn
 +++ b/browser/devtools/jar.mn
@@ -123,6 +332,135 @@ diff --git a/browser/devtools/main.js b/browser/devtools/main.js
  // Strings
  const toolboxProps = "chrome://browser/locale/devtools/toolbox.properties";
  const inspectorProps = "chrome://browser/locale/devtools/inspector.properties";
+diff --git a/browser/devtools/netmonitor/netmonitor-controller.js b/browser/devtools/netmonitor/netmonitor-controller.js
+--- a/browser/devtools/netmonitor/netmonitor-controller.js
++++ b/browser/devtools/netmonitor/netmonitor-controller.js
+@@ -14,18 +14,22 @@ Cu.import("resource:///modules/source-ed
+ Cu.import("resource:///modules/devtools/shared/event-emitter.js");
+ Cu.import("resource:///modules/devtools/SideMenuWidget.jsm");
+ Cu.import("resource:///modules/devtools/VariablesView.jsm");
+ Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
+   "resource://gre/modules/PluralForm.jsm");
+ 
+-XPCOMUtils.defineLazyModuleGetter(this, "NetworkHelper",
+-  "resource://gre/modules/devtools/NetworkHelper.jsm");
++XPCOMUtils.defineLazyModuleGetter(this, "devtools",
++  "resource://gre/modules/devtools/Loader.jsm");
++
++XPCOMUtils.defineLazyGetter(this, "NetworkHelper", function() {
++  return devtools.require("devtools/toolkit/webconsole/network-helper");
++});
+ 
+ const NET_STRINGS_URI = "chrome://browser/locale/devtools/netmonitor.properties";
+ const LISTENERS = [ "NetworkActivity" ];
+ const NET_PREFS = { "NetworkMonitor.saveRequestAndResponseBodies": true };
+ 
+ /**
+  * Object defining the network monitor controller components.
+  */
+diff --git a/browser/devtools/profiler/test/head.js b/browser/devtools/profiler/test/head.js
+--- a/browser/devtools/profiler/test/head.js
++++ b/browser/devtools/profiler/test/head.js
+@@ -13,19 +13,16 @@ Cu.import("resource:///modules/devtools/
+ let gDevTools = temp.gDevTools;
+ 
+ Cu.import("resource://gre/modules/devtools/Loader.jsm", temp);
+ let TargetFactory = temp.devtools.TargetFactory;
+ 
+ Cu.import("resource://gre/modules/devtools/dbg-server.jsm", temp);
+ let DebuggerServer = temp.DebuggerServer;
+ 
+-Cu.import("resource:///modules/HUDService.jsm", temp);
+-let HUDService = temp.HUDService;
+-
+ // Import the GCLI test helper
+ let testDir = gTestPath.substr(0, gTestPath.lastIndexOf("/"));
+ Services.scriptloader.loadSubScript(testDir + "../../../commandline/test/helpers.js", this);
+ 
+ registerCleanupFunction(function () {
+   helpers = null;
+   Services.prefs.clearUserPref(PROFILER_ENABLED);
+   Services.prefs.clearUserPref(REMOTE_ENABLED);
+diff --git a/browser/devtools/scratchpad/test/browser_scratchpad_bug_661762_wrong_window_focus.js b/browser/devtools/scratchpad/test/browser_scratchpad_bug_661762_wrong_window_focus.js
+--- a/browser/devtools/scratchpad/test/browser_scratchpad_bug_661762_wrong_window_focus.js
++++ b/browser/devtools/scratchpad/test/browser_scratchpad_bug_661762_wrong_window_focus.js
+@@ -1,16 +1,12 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+-let tempScope = {};
+-Cu.import("resource:///modules/HUDService.jsm", tempScope);
+-let HUDService = tempScope.HUDService;
+-
+ function test()
+ {
+   waitForExplicitFinish();
+ 
+   // To test for this bug we open a Scratchpad window, save its
+   // reference and then open another one. This way the first window
+   // loses its focus.
+   //
+@@ -38,17 +34,17 @@ function test()
+           let hud = HUDService.getHudReferenceById(subj.data);
+           hud.jsterm.clearOutput(true);
+           executeSoon(testFocus.bind(null, sw, hud));
+         }
+ 
+         Services.obs.
+           addObserver(onWebConsoleOpen, "web-console-created", false);
+ 
+-        HUDService.consoleUI.toggleHUD();
++        HUDService.toggleWebConsole();
+       });
+     });
+   }, true);
+ 
+   content.location = "data:text/html;charset=utf8,<p>test window focus for Scratchpad.";
+ }
+ 
+ function testFocus(sw, hud) {
+diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/shared/DeveloperToolbar.jsm
+--- a/browser/devtools/shared/DeveloperToolbar.jsm
++++ b/browser/devtools/shared/DeveloperToolbar.jsm
+@@ -20,31 +20,32 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+                                   "resource://gre/modules/devtools/Console.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "gcli",
+                                   "resource://gre/modules/devtools/gcli.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "CmdCommands",
+                                   "resource:///modules/devtools/BuiltinCommands.jsm");
+ 
+-XPCOMUtils.defineLazyModuleGetter(this, "ConsoleServiceListener",
+-                                  "resource://gre/modules/devtools/WebConsoleUtils.jsm");
+-
+ XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
+                                   "resource://gre/modules/PluralForm.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "devtools",
+                                   "resource://gre/modules/devtools/Loader.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "require",
+                                   "resource://gre/modules/devtools/Require.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "EventEmitter",
+                                   "resource:///modules/devtools/shared/event-emitter.js");
+ 
++XPCOMUtils.defineLazyGetter(this, "ConsoleServiceListener", function() {
++  return devtools.require("devtools/toolkit/webconsole/utils").ConsoleServiceListener;
++});
++
+ XPCOMUtils.defineLazyGetter(this, "prefBranch", function() {
+   let prefService = Cc["@mozilla.org/preferences-service;1"]
+                     .getService(Ci.nsIPrefService);
+   return prefService.getBranch(null)
+                     .QueryInterface(Ci.nsIPrefBranch2);
+ });
+ 
+ XPCOMUtils.defineLazyGetter(this, "toolboxStrings", function () {
 diff --git a/browser/devtools/shared/AutocompletePopup.jsm b/browser/devtools/shared/autocomplete-popup.js
 rename from browser/devtools/shared/AutocompletePopup.jsm
 rename to browser/devtools/shared/autocomplete-popup.js
@@ -191,6 +529,28 @@ rename to browser/devtools/shared/autocomplete-popup.js
  
    // Event handlers.
    onSelect: null,
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+--- a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+@@ -2,18 +2,16 @@
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ // Tests that the developer toolbar errors count works properly.
+ 
+ function test() {
+   const TEST_URI = "http://example.com/browser/browser/devtools/shared/test/" +
+                    "browser_toolbar_webconsole_errors_count.html";
+ 
+-  let HUDService = Cu.import("resource:///modules/HUDService.jsm",
+-                             {}).HUDService;
+   let gDevTools = Cu.import("resource:///modules/devtools/gDevTools.jsm",
+                              {}).gDevTools;
+ 
+   let webconsole = document.getElementById("developer-toolbar-toolbox-button");
+   let tab1, tab2;
+ 
+   Services.prefs.setBoolPref("javascript.options.strict", true);
+ 
 diff --git a/browser/devtools/shared/widgets/SideMenuWidget.jsm b/browser/devtools/shared/widgets/SideMenuWidget.jsm
 --- a/browser/devtools/shared/widgets/SideMenuWidget.jsm
 +++ b/browser/devtools/shared/widgets/SideMenuWidget.jsm
@@ -255,6 +615,34 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
   */
  const STR = Services.strings.createBundle(DBG_STRINGS_URI);
  
+diff --git a/browser/devtools/shared/widgets/VariablesViewController.jsm b/browser/devtools/shared/widgets/VariablesViewController.jsm
+--- a/browser/devtools/shared/widgets/VariablesViewController.jsm
++++ b/browser/devtools/shared/widgets/VariablesViewController.jsm
+@@ -7,17 +7,23 @@
+ 
+ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+ 
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js");
+ Cu.import("resource:///modules/devtools/VariablesView.jsm");
+ Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
+-Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "devtools",
++  "resource://gre/modules/devtools/Loader.jsm");
++
++XPCOMUtils.defineLazyGetter(this, "WebConsoleUtils", function() {
++  return devtools.require("devtools/toolkit/webconsole/utils").Utils;
++});
+ 
+ XPCOMUtils.defineLazyGetter(this, "VARIABLES_SORTING_ENABLED", () =>
+   Services.prefs.getBoolPref("devtools.debugger.ui.variables-sorting-enabled")
+ );
+ 
+ const MAX_LONG_STRING_LENGTH = 200000;
+ 
+ this.EXPORTED_SYMBOLS = ["VariablesViewController"];
 diff --git a/browser/devtools/webconsole/Makefile.in b/browser/devtools/webconsole/Makefile.in
 --- a/browser/devtools/webconsole/Makefile.in
 +++ b/browser/devtools/webconsole/Makefile.in
@@ -384,7 +772,7 @@ rename to browser/devtools/webconsole/hudservice.js
     */
    currentContext: function HS_currentContext() {
      return Services.wm.getMostRecentWindow("navigator:browser");
-@@ -95,51 +69,51 @@ HUD_SERVICE.prototype =
+@@ -95,91 +69,199 @@ HUD_SERVICE.prototype =
     *        The window of the web console owner.
     * @return object
     *         A Promise object for the opening of the new WebConsole instance.
@@ -441,15 +829,20 @@ rename to browser/devtools/webconsole/hudservice.js
      return null;
    },
  
-@@ -152,34 +126,155 @@ HUD_SERVICE.prototype =
-    */
-   getHudIdByWindow: function HS_getHudIdByWindow(aContentWindow)
-   {
-     let hud = this.getHudByWindow(aContentWindow);
-     return hud ? hud.hudId : null;
-   },
- 
    /**
+-   * Returns the hudId that is corresponding to the hud activated for the
+-   * passed aContentWindow. If there is no matching hudId null is returned.
+-   *
+-   * @param nsIDOMWindow aContentWindow
+-   * @returns string or null
+-   */
+-  getHudIdByWindow: function HS_getHudIdByWindow(aContentWindow)
+-  {
+-    let hud = this.getHudByWindow(aContentWindow);
+-    return hud ? hud.hudId : null;
+-  },
+-
+-  /**
 -   * Returns the hudReference for a given id.
 +   * Returns the console instance for a given id.
     *
@@ -604,7 +997,7 @@ rename to browser/devtools/webconsole/hudservice.js
   * that displays console log data as well as provides an interactive terminal to
   * manipulate the target's document content.
   *
-@@ -204,36 +299,37 @@ function WebConsole(aTarget, aIframeWind
+@@ -204,36 +286,37 @@ function WebConsole(aTarget, aIframeWind
  
    this.browserWindow = this.chromeWindow.top;
  
@@ -646,7 +1039,7 @@ rename to browser/devtools/webconsole/hudservice.js
    get mainPopupSet()
    {
      return this.browserWindow.document.getElementById("mainPopupSet");
-@@ -466,17 +562,17 @@ WebConsole.prototype = {
+@@ -466,17 +549,17 @@ WebConsole.prototype = {
     *         A Promise object that is resolved once the Web Console is closed.
     */
    destroy: function WC_destroy()
@@ -665,7 +1058,7 @@ rename to browser/devtools/webconsole/hudservice.js
      for (let panel of panels) {
        panel.hidePopup();
      }
-@@ -587,158 +683,29 @@ BrowserConsole.prototype = Heritage.exte
+@@ -587,158 +670,31 @@ BrowserConsole.prototype = Heritage.exte
  
      this._telemetry.toolClosed("browserconsole");
  
@@ -828,10 +1221,12 @@ rename to browser/devtools/webconsole/hudservice.js
 +(() => {
 +  let methods = ["openWebConsole", "openBrowserConsole", "toggleWebConsole",
 +                 "toggleBrowserConsole", "getOpenWebConsole",
-+                 "getBrowserConsole", "getHudByWindow"];
++                 "getBrowserConsole", "getHudByWindow", "getHudReferenceById"];
 +  for (let method of methods) {
 +    exports[method] = HUDService[method].bind(HUDService);
 +  }
++
++  exports.consoles = HUDService.consoles;
 +  exports.lastFinishedRequest = { callback: null };
 +})();
 diff --git a/browser/devtools/webconsole/NetworkPanel.jsm b/browser/devtools/webconsole/network-panel.js
@@ -987,6 +1382,40 @@ diff --git a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab
  
          executeSoon(finishTest);
        }, "web-console-destroyed", false);
+diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devtools/webconsole/test/browser_console.js
+--- a/browser/devtools/webconsole/test/browser_console.js
++++ b/browser/devtools/webconsole/test/browser_console.js
+@@ -4,26 +4,26 @@
+  */
+ 
+ // Test the basic features of the Browser Console, bug 587757.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html?" + Date.now();
+ 
+ function test()
+ {
+-  let oldFunction = HUDConsoleUI.toggleBrowserConsole;
++  let oldHUDService = HUDService;
+   let functionExecuted = false;
+-  HUDConsoleUI.toggleBrowserConsole = () => functionExecuted = true;
++  HUDService = { toggleBrowserConsole: () => functionExecuted = true };
+   EventUtils.synthesizeKey("j", { accelKey: true, shiftKey: true }, content);
+ 
+   ok(functionExecuted,
+      "toggleBrowserConsole() was executed by the Ctrl-Shift-J key shortcut");
+ 
+-  HUDConsoleUI.toggleBrowserConsole = oldFunction;
+-  HUDConsoleUI.toggleBrowserConsole().then(consoleOpened);
++  HUDService = oldHUDService;
++  HUDService.toggleBrowserConsole().then(consoleOpened);
+ }
+ 
+ function consoleOpened(hud)
+ {
+   hud.jsterm.clearOutput(true);
+ 
+   expectUncaughtException();
+   executeSoon(() => {
 diff --git a/browser/devtools/webconsole/test/browser_console_addonsdk_loader_exception.js b/browser/devtools/webconsole/test/browser_console_addonsdk_loader_exception.js
 --- a/browser/devtools/webconsole/test/browser_console_addonsdk_loader_exception.js
 +++ b/browser/devtools/webconsole/test/browser_console_addonsdk_loader_exception.js
@@ -1031,6 +1460,28 @@ diff --git a/browser/devtools/webconsole/test/browser_console_consolejsm_output.
      waitForMessages({
        webconsole: hud,
        messages: [{
+diff --git a/browser/devtools/webconsole/test/browser_console_dead_objects.js b/browser/devtools/webconsole/test/browser_console_dead_objects.js
+--- a/browser/devtools/webconsole/test/browser_console_dead_objects.js
++++ b/browser/devtools/webconsole/test/browser_console_dead_objects.js
+@@ -10,17 +10,17 @@ const TEST_URI = "data:text/html;charset
+ function test()
+ {
+   let hud = null;
+ 
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     info("open the browser console");
+-    HUDConsoleUI.toggleBrowserConsole().then(onBrowserConsoleOpen);
++    HUDService.toggleBrowserConsole().then(onBrowserConsoleOpen);
+   }, true);
+ 
+   function onBrowserConsoleOpen(aHud)
+   {
+     hud = aHud;
+     ok(hud, "browser console opened");
+ 
+     hud.jsterm.clearOutput();
 diff --git a/browser/devtools/webconsole/test/browser_console_error_source_click.js b/browser/devtools/webconsole/test/browser_console_error_source_click.js
 --- a/browser/devtools/webconsole/test/browser_console_error_source_click.js
 +++ b/browser/devtools/webconsole/test/browser_console_error_source_click.js
@@ -1053,6 +1504,50 @@ diff --git a/browser/devtools/webconsole/test/browser_console_error_source_click
      ok(hud, "browser console opened");
  
      let button = content.document.querySelector("button");
+diff --git a/browser/devtools/webconsole/test/browser_console_filters.js b/browser/devtools/webconsole/test/browser_console_filters.js
+--- a/browser/devtools/webconsole/test/browser_console_filters.js
++++ b/browser/devtools/webconsole/test/browser_console_filters.js
+@@ -40,17 +40,17 @@ function consoleOpened(hud)
+   hud.setFilterState("exception", true);
+ 
+   executeSoon(() => closeConsole(null, onWebConsoleClose));
+ }
+ 
+ function onWebConsoleClose()
+ {
+   info("web console closed");
+-  HUDConsoleUI.toggleBrowserConsole().then(onBrowserConsoleOpen);
++  HUDService.toggleBrowserConsole().then(onBrowserConsoleOpen);
+ }
+ 
+ function onBrowserConsoleOpen(hud)
+ {
+   ok(hud, "browser console opened");
+ 
+   is(Services.prefs.getBoolPref(BROWSER_CONSOLE_PREFIX + "exception"), true,
+      "'exception' filter is enabled (browser console)");
+diff --git a/browser/devtools/webconsole/test/browser_console_iframe_messages.js b/browser/devtools/webconsole/test/browser_console_iframe_messages.js
+--- a/browser/devtools/webconsole/test/browser_console_iframe_messages.js
++++ b/browser/devtools/webconsole/test/browser_console_iframe_messages.js
+@@ -55,17 +55,17 @@ function consoleOpened(hud)
+   }).then(() => {
+     closeConsole(null, onWebConsoleClose);
+   });
+ }
+ 
+ function onWebConsoleClose()
+ {
+   info("web console closed");
+-  HUDConsoleUI.toggleBrowserConsole().then(onBrowserConsoleOpen);
++  HUDService.toggleBrowserConsole().then(onBrowserConsoleOpen);
+ }
+ 
+ function onBrowserConsoleOpen(hud)
+ {
+   ok(hud, "browser console opened");
+   Services.console.logStringMessage("test2 for bug859756");
+ 
+   waitForMessages({
 diff --git a/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js b/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
 --- a/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
 +++ b/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
@@ -1120,6 +1615,41 @@ diff --git a/browser/devtools/webconsole/test/browser_console_private_browsing.j
    function onBrowserConsoleReopen(aHud)
    {
      hud = aHud;
+diff --git a/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging_and_inspecting.js b/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging_and_inspecting.js
+--- a/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging_and_inspecting.js
++++ b/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging_and_inspecting.js
+@@ -26,26 +26,29 @@ function consoleOpened(hud)
+   gJSTerm = hud.jsterm;
+ 
+   info("openDebugger");
+   openDebugger().then(debuggerOpened);
+ }
+ 
+ function debuggerOpened(aResult)
+ {
++  info("debuggerOpened");
+   gDebuggerWin = aResult.panelWin;
+   gDebuggerController = gDebuggerWin.DebuggerController;
+   gThread = gDebuggerController.activeThread;
+   gStackframes = gDebuggerController.StackFrames;
+ 
+-  openInspector(inspectorOpened);
++  info("openInspector");
++  executeSoon(() => openInspector(inspectorOpened));
+ }
+ 
+-function inspectorOpened(aPanel)
++function inspectorOpened()
+ {
++  info("inspectorOpened");
+   gThread.addOneTimeListener("framesadded", onFramesAdded);
+ 
+   info("firstCall()");
+   content.wrappedJSObject.firstCall();
+ }
+ 
+ function onFramesAdded()
+ {
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
@@ -1651,6 +2181,178 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_resp
      function (aResponse) {
        lastFinishedRequests["301"].response.headers = aResponse.headers;
  
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+@@ -9,21 +9,18 @@ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+ }
+ 
+ function consoleOpened(HUD) {
+-  let tmp = {};
+-  Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tmp);
+-  let WCU = tmp.WebConsoleUtils;
+-  let JSPropertyProvider = tmp.JSPropertyProvider;
+-  tmp = null;
++  let tools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
++  let JSPropertyProvider = tools.require("devtools/toolkit/webconsole/utils").JSPropertyProvider;
+ 
+   let jsterm = HUD.jsterm;
+   let win = content.wrappedJSObject;
+ 
+   // Make sure autocomplete does not walk through iterators and generators.
+   let result = win.gen1.next();
+   let completion = JSPropertyProvider(win, "gen1.");
+   is(completion, null, "no matches for gen1");
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
+@@ -23,17 +23,17 @@ function test()
+   addTab("data:text/html;charset=utf-8,Web Console network logging tests");
+ 
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+ 
+     openConsole(null, function(aHud) {
+       hud = aHud;
+ 
+-      HUDService.lastFinishedRequestCallback = function(aRequest) {
++      HUDService.lastFinishedRequest.callback = function(aRequest) {
+         lastRequest = aRequest;
+         if (requestCallback) {
+           requestCallback();
+         }
+       };
+ 
+       executeSoon(testPageLoad);
+     });
+@@ -165,17 +165,17 @@ function testLiveFilteringOnSearchString
+   setStringFilter("'foo'");
+   is(countMessageNodes(), 0, "the log nodes are hidden when searching for " +
+     "the string 'foo'");
+ 
+   setStringFilter("foo\"bar'baz\"boo'");
+   is(countMessageNodes(), 0, "the log nodes are hidden when searching for " +
+     "the string \"foo\"bar'baz\"boo'\"");
+ 
+-  HUDService.lastFinishedRequestCallback = null;
++  HUDService.lastFinishedRequest.callback = null;
+   lastRequest = null;
+   requestCallback = null;
+   finishTest();
+ }
+ 
+ function countMessageNodes() {
+   let messageNodes = hud.outputNode.querySelectorAll(".hud-msg-node");
+   let displayedMessageNodes = 0;
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+@@ -17,21 +17,16 @@ function test() {
+ let gHUD;
+ 
+ function consoleOpened(aHud) {
+   gHUD = aHud;
+   let jsterm = gHUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+ 
+-  let tmp = {};
+-  Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tmp);
+-  let WCU = tmp.WebConsoleUtils;
+-  tmp = null;
+-
+   ok(!popup.isOpen, "popup is not open");
+ 
+   popup._panel.addEventListener("popupshown", function onShown() {
+     popup._panel.removeEventListener("popupshown", onShown, false);
+ 
+     ok(popup.isOpen, "popup is open");
+ 
+     // expected properties:
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+@@ -79,56 +79,39 @@ function performTestComparisons()
+ 
+ function performWebConsoleTests(hud)
+ {
+   let target = TargetFactory.forTab(gBrowser.selectedTab);
+   let jsterm = hud.jsterm;
+   outputNode = hud.outputNode;
+ 
+   jsterm.clearOutput();
+-  jsterm.execute("$0");
++  jsterm.execute("$0", onNodeOutput);
+ 
+-  waitForSuccess({
+-    name: "$0 output",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelector(".webconsole-msg-output");
+-    },
+-    successFn: function()
+-    {
+-      let node = outputNode.querySelector(".webconsole-msg-output");
+-      isnot(node.textContent.indexOf("[object HTMLHeadingElement"), -1,
+-            "correct output for $0");
++  function onNodeOutput()
++  {
++    let node = outputNode.querySelector(".webconsole-msg-output");
++    isnot(node.textContent.indexOf("[object HTMLHeadingElement"), -1,
++          "correct output for $0");
+ 
+-      jsterm.clearOutput();
+-      jsterm.execute("$0.textContent = 'bug653531'");
+-      waitForSuccess(waitForNodeUpdate);
+-    },
+-    failureFn: finishUp,
+-  });
++    jsterm.clearOutput();
++    jsterm.execute("$0.textContent = 'bug653531'", onNodeUpdate);
++  }
+ 
+-  let waitForNodeUpdate = {
+-    name: "$0.textContent update",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelector(".webconsole-msg-output");
+-    },
+-    successFn: function()
+-    {
+-      let node = outputNode.querySelector(".webconsole-msg-output");
+-      isnot(node.textContent.indexOf("bug653531"), -1,
+-            "correct output for $0.textContent");
+-      let inspector = gDevTools.getToolbox(target).getPanel("inspector");
+-      is(inspector.selection.node.textContent, "bug653531",
+-         "node successfully updated");
++  function onNodeUpdate()
++  {
++    let node = outputNode.querySelector(".webconsole-msg-output");
++    isnot(node.textContent.indexOf("bug653531"), -1,
++          "correct output for $0.textContent");
++    let inspector = gDevTools.getToolbox(target).getPanel("inspector");
++    is(inspector.selection.node.textContent, "bug653531",
++       "node successfully updated");
+ 
+-      executeSoon(finishUp);
+-    },
+-    failureFn: finishUp,
+-  };
++    executeSoon(finishUp);
++  }
+ }
+ 
+ function finishUp() {
+   finishTest();
+ }
+ 
+ function test()
+ {
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js b/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js
@@ -1694,10 +2396,137 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time
  
      closeConsole(gBrowser.selectedTab, function() {
        gBrowser.removeCurrentTab();
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js b/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_netlogging.js
+@@ -27,17 +27,17 @@ function test()
+   addTab("data:text/html;charset=utf-8,Web Console network logging tests");
+ 
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+ 
+     openConsole(null, function(aHud) {
+       hud = aHud;
+ 
+-      HUDService.lastFinishedRequestCallback = requestCallbackWrapper;
++      HUDService.lastFinishedRequest.callback = requestCallbackWrapper;
+ 
+       executeSoon(testPageLoad);
+     });
+   }, true);
+ }
+ 
+ function requestCallbackWrapper(aRequest)
+ {
+@@ -199,13 +199,13 @@ function testNetworkPanel()
+ 
+     is(hud.ui.filterBox._netPanel, networkPanel,
+        "Network panel stored on anchor node");
+     ok(true, "NetworkPanel was opened");
+ 
+     // All tests are done. Shutdown.
+     networkPanel.panel.hidePopup();
+     lastRequest = null;
+-    HUDService.lastFinishedRequestCallback = null;
++    HUDService.lastFinishedRequest.callback = null;
+     executeSoon(finishTest);
+   }, true);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_notifications.js b/browser/devtools/webconsole/test/browser_webconsole_notifications.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_notifications.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_notifications.js
+@@ -9,24 +9,24 @@ function test() {
+   observer.init();
+   addTab(TEST_URI);
+   browser.addEventListener("load", onLoad, true);
+ }
+ 
+ function webConsoleCreated(aID)
+ {
+   Services.obs.removeObserver(observer, "web-console-created");
+-  ok(HUDService.hudReferences[aID], "We have a hud reference");
++  ok(HUDService.getHudReferenceById(aID), "We have a hud reference");
+   content.wrappedJSObject.console.log("adding a log message");
+ }
+ 
+ function webConsoleDestroyed(aID)
+ {
+   Services.obs.removeObserver(observer, "web-console-destroyed");
+-  ok(!HUDService.hudReferences[aID], "We do not have a hud reference");
++  ok(!HUDService.getHudReferenceById(aID), "We do not have a hud reference");
+   executeSoon(finishTest);
+ }
+ 
+ function webConsoleMessage(aID, aNodeID)
+ {
+   Services.obs.removeObserver(observer, "web-console-message-created");
+   ok(aID, "we have a console ID");
+   is(typeof aNodeID, "string", "message node id is a string");
+@@ -38,20 +38,20 @@ let observer = {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+ 
+   observe: function observe(aSubject, aTopic, aData)
+   {
+     aSubject = aSubject.QueryInterface(Ci.nsISupportsString);
+ 
+     switch(aTopic) {
+       case "web-console-created":
+-        webConsoleCreated(aSubject);
++        webConsoleCreated(aSubject.data);
+         break;
+       case "web-console-destroyed":
+-        webConsoleDestroyed(aSubject);
++        webConsoleDestroyed(aSubject.data);
+         break;
+       case "web-console-message-created":
+         webConsoleMessage(aSubject, aData);
+         break;
+       default:
+         break;
+     }
+   },
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_property_provider.js
+@@ -10,21 +10,18 @@ const TEST_URI = "data:text/html;charset
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", testPropertyProvider, true);
+ }
+ 
+ function testPropertyProvider() {
+   browser.removeEventListener("load", testPropertyProvider, true);
+-
+-  let tmp = {};
+-  Cu.import("resource://gre/modules/devtools/WebConsoleUtils.jsm", tmp);
+-  let JSPropertyProvider = tmp.JSPropertyProvider;
+-  tmp = null;
++  let tools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
++  let JSPropertyProvider = tools.require("devtools/toolkit/webconsole/utils").JSPropertyProvider;
+ 
+   let completion = JSPropertyProvider(content, "thisIsNotDefined");
+   is (completion.matches.length, 0, "no match for 'thisIsNotDefined");
+ 
+   // This is a case the PropertyProvider can't handle. Should return null.
+   completion = JSPropertyProvider(content, "window[1].acb");
+   is (completion, null, "no match for 'window[1].acb");
+ 
+@@ -34,9 +31,8 @@ function testPropertyProvider() {
+   completion = JSPropertyProvider(content, strComplete);
+   ok(completion.matches.length == 2, "two matches found");
+   ok(completion.matchProp == "locatio", "matching part is 'test'");
+   ok(completion.matches[0] == "location", "the first match is 'location'");
+   ok(completion.matches[1] == "locationbar", "the second match is 'locationbar'");
+ 
+   finishTest();
+ }
+-
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
-@@ -1,25 +1,26 @@
+@@ -1,25 +1,25 @@
  /* vim:set ts=2 sw=2 sts=2 et: */
  /* This Source Code Form is subject to the terms of the Mozilla Public
   * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -1715,7 +2544,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 -Components.utils.import("resource://gre/modules/devtools/Console.jsm", tempScope);
 -let console = tempScope.console;
 -let Promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
-+let HUDService, WebConsoleUtils, gDevTools, TargetFactory, console, Promise;
++let WebConsoleUtils, gDevTools, TargetFactory, console, Promise;
 +
 +(() => {
 +  gDevTools = Cu.import("resource:///modules/devtools/gDevTools.jsm", {}).gDevTools;
@@ -1724,7 +2553,6 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
 +
 +  let tools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
 +  let utils = tools.require("devtools/toolkit/webconsole/utils");
-+  HUDService = tools.require("devtools/webconsole/hudservice");
 +  TargetFactory = tools.TargetFactory;
 +  WebConsoleUtils = utils.Utils;
 +})();
@@ -1736,7 +2564,26 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  const CATEGORY_NETWORK = 0;
  const CATEGORY_CSS = 1;
  const CATEGORY_JS = 2;
-@@ -284,24 +285,22 @@ function dumpMessageElement(aMessage)
+@@ -238,17 +238,17 @@ function waitForContextMenu(aPopup, aBut
+ 
+ /**
+  * Dump the output of all open Web Consoles - used only for debugging purposes.
+  */
+ function dumpConsoles()
+ {
+   if (gPendingOutputTest) {
+     console.log("dumpConsoles start");
+-    for each (let hud in HUDService.hudReferences) {
++    for (let hud of HUDService.consoles) {
+       if (!hud.outputNode) {
+         console.debug("no output content for", hud.hudId);
+         continue;
+       }
+ 
+       console.debug("output content for", hud.hudId);
+       for (let elem of hud.outputNode.childNodes) {
+         dumpMessageElement(elem);
+@@ -284,24 +284,22 @@ function dumpMessageElement(aMessage)
  }
  
  function finishTest()
@@ -1766,7 +2613,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      finish();
      return;
    }
-@@ -314,18 +313,18 @@ function finishTest()
+@@ -314,18 +312,18 @@ function finishTest()
  
    hud = null;
  }
@@ -2107,41 +2954,33 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
        <menuitem id="menu_copyURL" label="&copyURLCmd.label;"
                  accesskey="&copyURLCmd.accesskey;" command="consoleCmd_copyURL"
                  selection="network" selectionType="single"/>
-diff --git a/js/xpconnect/loader/XPCOMUtils.jsm b/js/xpconnect/loader/XPCOMUtils.jsm
---- a/js/xpconnect/loader/XPCOMUtils.jsm
-+++ b/js/xpconnect/loader/XPCOMUtils.jsm
-@@ -218,16 +218,17 @@ this.XPCOMUtils = {
-    *        This parameter is optional and defaults to aName.
-    */
-   defineLazyModuleGetter: function XPCU_defineLazyModuleGetter(aObject, aName,
-                                                                aResource,
-                                                                aSymbol)
-   {
-     this.defineLazyGetter(aObject, aName, function XPCU_moduleLambda() {
-       var temp = {};
-+      dump("lazy get " + aResource + "\n");
-       Cu.import(aResource, temp);
-       return temp[aSymbol || aName];
-     });
-   },
+diff --git a/toolkit/content/license.html b/toolkit/content/license.html
+--- a/toolkit/content/license.html
++++ b/toolkit/content/license.html
+@@ -1338,17 +1338,17 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN
  
-   /**
-    * Convenience access to category manager
-    */
+ 
+     <hr>
+ 
+ 
+     <h1><a id="firebug"></a>Firebug License</h1>
+ 
+     <p>This license applies to the code
+-    <span class="path">browser/devtools/webconsole/NetworkHelper.jsm</span>.</p>
++    <span class="path">toolkit/devtools/webconsole/network-helper.js</span>.</p>
+ 
+ <pre>
+ Copyright (c) 2007, Parakey Inc.
+ All rights reserved.
+ 
+ Redistribution and use of this software in source and binary forms, with or
+ without modification, are permitted provided that the following conditions are
+ met:
 diff --git a/toolkit/devtools/Loader.jsm b/toolkit/devtools/Loader.jsm
 --- a/toolkit/devtools/Loader.jsm
 +++ b/toolkit/devtools/Loader.jsm
-@@ -16,43 +16,48 @@ Cu.import("resource://gre/modules/Servic
- XPCOMUtils.defineLazyModuleGetter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm");
- XPCOMUtils.defineLazyModuleGetter(this, "FileUtils", "resource://gre/modules/FileUtils.jsm");
- XPCOMUtils.defineLazyModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
- XPCOMUtils.defineLazyModuleGetter(this, "console", "resource://gre/modules/devtools/Console.jsm");
+@@ -23,36 +23,39 @@ let Promise = Cu.import("resource://gre/
  
- let loader = Cu.import("resource://gre/modules/commonjs/toolkit/loader.js", {}).Loader;
- let Promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
- 
-+Promise._reportErrors = true; // FIXME !!!
-+
  this.EXPORTED_SYMBOLS = ["devtools"];
  
  /**
@@ -2252,6 +3091,25 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
  /**
   * The WebConsoleActor implements capabilities needed for the Web Console
   * feature.
+@@ -1006,17 +991,17 @@ WebConsoleActor.prototype =
+     this.conn.send(packet);
+   },
+ 
+   /**
+    * Handler for network events. This method is invoked when a new network event
+    * is about to be recorded.
+    *
+    * @see NetworkEventActor
+-   * @see NetworkMonitor from WebConsoleUtils.jsm
++   * @see NetworkMonitor from webconsole/utils.js
+    *
+    * @param object aEvent
+    *        The initial network request event information.
+    * @return object
+    *         A new NetworkEventActor is returned. This is used for tracking the
+    *         network request and response.
+    */
+   onNetworkEvent: function WCA_onNetworkEvent(aEvent, aChannel)
 diff --git a/toolkit/devtools/webconsole/Makefile.in b/toolkit/devtools/webconsole/Makefile.in
 --- a/toolkit/devtools/webconsole/Makefile.in
 +++ b/toolkit/devtools/webconsole/Makefile.in
@@ -2529,6 +3387,25 @@ rename to toolkit/devtools/webconsole/utils.js
     */
    unwrap: function WCU_unwrap(aObject)
    {
+@@ -258,17 +237,17 @@ this.WebConsoleUtils = {
+    * @return object
+    *         Property descriptor.
+    */
+   getPropertyDescriptor: function WCU_getPropertyDescriptor(aObject, aProp)
+   {
+     let desc = null;
+     while (aObject) {
+       try {
+-        if (desc = Object.getOwnPropertyDescriptor(aObject, aProp)) {
++        if ((desc = Object.getOwnPropertyDescriptor(aObject, aProp))) {
+           break;
+         }
+       }
+       catch (ex if (ex.name == "NS_ERROR_XPC_BAD_CONVERT_JS" ||
+                     ex.name == "NS_ERROR_XPC_BAD_OP_ON_WN_PROTO" ||
+                     ex.name == "TypeError")) {
+         // Native getters throw here. See bug 520882.
+         // null throws TypeError.
 @@ -506,16 +485,17 @@ this.WebConsoleUtils = {
     * @return boolean
     *         True if the given value is a grip with an actor.
@@ -2656,6 +3533,50 @@ rename to toolkit/devtools/webconsole/utils.js
     *        The ID of the element you want.
     * @return nsIDOMNode or null
     *         The result of calling document.querySelector(aSelector).
+@@ -1250,22 +1232,22 @@ this.JSTermHelpers = function JSTermHelp
+    * @param [optional] nsIDOMNode aContext
+    *        Context to run the xPath query on. Uses window.document if not set.
+    * @return array of nsIDOMNode
+    */
+   aOwner.sandbox.$x = function JSTH_$x(aXPath, aContext)
+   {
+     let nodes = new aOwner.window.wrappedJSObject.Array();
+     let doc = aOwner.window.document;
+-    let aContext = aContext || doc;
++    aContext = aContext || doc;
+ 
+     let results = doc.evaluate(aXPath, aContext, null,
+                                Ci.nsIDOMXPathResult.ANY_TYPE, null);
+     let node;
+-    while (node = results.iterateNext()) {
++    while ((node = results.iterateNext())) {
+       nodes.push(node);
+     }
+ 
+     return nodes;
+   };
+ 
+   /**
+    * Returns the currently selected object in the highlighter.
+@@ -1384,17 +1366,17 @@ this.JSTermHelpers = function JSTermHelp
+   aOwner.sandbox.pprint = function JSTH_pprint(aObject)
+   {
+     if (aObject === null || aObject === undefined || aObject === true ||
+         aObject === false) {
+       aOwner.helperResult = {
+         type: "error",
+         message: "helperFuncUnsupportedTypeError",
+       };
+-      return;
++      return null;
+     }
+ 
+     aOwner.helperResult = { rawOutput: true };
+ 
+     if (typeof aObject == "function") {
+       return aObject + "\n";
+     }
+ 
 @@ -1428,20 +1410,20 @@ this.JSTermHelpers = function JSTermHelp
     *        A string you want to output.
     * @return void
