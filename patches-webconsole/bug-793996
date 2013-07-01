@@ -1,14 +1,287 @@
 # HG changeset patch
-# Parent 2d519ec6fb951ce064d5bf8f6bf90c20eb34f13e
+# Parent c1a80f7106a21041ca937ac5c39de9ccb78fe5bb
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1369845547 -10800
+# Date 1372712037 -10800
 
 Bug 793996 - Create reload marker in the Web Console; r=robcee
 
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/console-output.js
+@@ -0,0 +1,209 @@
++/* vim: set ts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++"use strict";
++
++const Heritage = require("sdk/core/heritage");
++const XHTML_NS = "http://www.w3.org/1999/xhtml";
++const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
++
++// Constants for compatibility with the Web Console output implementation before
++// bug 778766.
++// TODO: remove these once bug 778766 is fixed.
++const COMPAT = {
++  // The various categories of messages.
++  CATEGORIES: {
++    NETWORK: 0,
++    CSS: 1,
++    JS: 2,
++    WEBDEV: 3,
++    INPUT: 4,
++    OUTPUT: 5,
++    SECURITY: 6,
++  },
++
++  // The possible message severities.
++  SEVERITIES: {
++    ERROR: 0,
++    WARNING: 1,
++    INFO: 2,
++    LOG: 3,
++  },
++};
++
++function ConsoleOutput(owner)
++{
++  this.owner = owner;
++  this.messages = [];
++  this._onFlushOutputMessage = this._onFlushOutputMessage.bind(this);
++}
++
++ConsoleOutput.prototype = {
++  messages: null,
++
++  get document() this.owner.document,
++  get window() this.owner.window,
++
++  addMessage: function()
++  {
++    for (let msg of arguments)
++    {
++      this.owner.outputMessage(msg._categoryCompat, this._onFlushOutputMessage,
++                               [msg]);
++    }
++  },
++
++  _onFlushOutputMessage: function(message)
++  {
++    message.init(this);
++    message.render();
++    return message._elementCompat;
++  },
++
++  removeMessage: function()
++  {
++  },
++}; // ConsoleOutput.prototype
++
++let Messages = {};
++
++Messages.BaseMessage = function()
++{
++  this.widgets = new Set();
++};
++
++Messages.BaseMessage.prototype = {
++  output: null,
++  parent: null,
++  element: null,
++  rendered: false,
++  visible: false,
++  widgets: null,
++
++  _elementCompat: null,
++  _elementClassCompat: null,
++  _categoryCompat: null,
++  _severityCompat: null,
++
++  init: function(output, parent)
++  {
++    this.output = output;
++    this.parent = parent;
++  },
++
++  render: function()
++  {
++    this._elementCompat = this._renderCompat();
++  }
++  _renderCompat: function()
++  {
++    let container = this.document.createElementNS(XUL_NS, "richlistitem");
++    container.setAttribute("class", "hud-msg-node" + message._elementClassCompat);
++    container.classList.add("hud-msg-node");
++    container.setAttribute("id", "console-msg-" + gSequenceId());
++    container.category = message._categoryCompat;
++    container.severity = message._severityCompat;
++
++    let body = this.document.createElementNS(XUL_NS, "description");
++    body.flex = 1;
++    body.classList.add("webconsole-msg-body");
++    body.appendChild(message.element);
++    container.appendChild(body);
++  },
++
++  onRemove: function()
++  {
++  },
++}; // Messages.BaseMessage.prototype
++
++Messages.ReloadMarker = function()
++{
++  Messages.BaseMessage.apply(this, arguments);
++};
++
++Messages.ReloadMarker.prototype = extend(Messages.BaseMessage.prototype,
++{
++  _elementClassCompat: "webconsole-msg-network webconsole-msg-info",
++  _categoryCompat: COMPAT.CATEGORIES.NETWORK,
++  _severityCompat: COMPAT.SEVERITIES.LOG,
++
++  render: function()
++  {
++    if (this.element) {
++      return this.element;
++    }
++
++    let separator = new Widgets.Separator(this);
++    this.widgets.add(separator);
++    this.element = separator.render();
++
++    return this.element;
++  },
++}); // Messages.ReloadMarker.prototype
++
++let Widgets = {};
++
++Widgets.BaseWidget = function(message)
++{
++  this.message = message;
++};
++
++Widgets.BaseWidget.prototype = {
++  message: null,
++
++  render: function()
++  {
++  },
++
++  destroy: function()
++  {
++  },
++};
++
++Widgets.Separator = function()
++{
++  Widgets.BaseWidget.apply(this, arguments);
++};
++
++Widgets.Separator.prototype = extend(Widgets.BaseWidget.prototype, {
++  render: function()
++  {
++    let separator = this.message.output.document.createElementNS(XHTML_NS, "hr");
++    return separator;
++  },
++});
++
++let Utils = {};
++
++function extend(proto, props)
++{
++  let result = Heritage.extend(proto, props);
++  for (let key of Object.getOwnPropertyNames(props))
++  {
++    if (!(key in proto))
++    {
++      continue;
++    }
++    let fn = proto[key];
++    if (typeof fn != "function")
++    {
++      continue;
++    }
++
++    result["$" + key] = fn;
++  }
++  return result;
++}
++
++function gSequenceId()
++{
++  return gSequenceId.n++;
++}
++gSequenceId.n = 0;
++
++exports.ConsoleOutput = ConsoleOutput;
++exports.Messages = Messages;
++exports.Widgets = Widgets;
++exports.Utils = Utils;
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -1683,16 +1683,34 @@ WebConsoleFrame.prototype = {
+@@ -17,16 +17,20 @@ loader.lazyImporter(this, "Services", "r
+ loader.lazyGetter(this, "Promise", () => require("sdk/core/promise"));
+ loader.lazyGetter(this, "EventEmitter", () => require("devtools/shared/event-emitter"));
+ loader.lazyGetter(this, "AutocompletePopup",
+                   () => require("devtools/shared/autocomplete-popup").AutocompletePopup);
+ loader.lazyGetter(this, "ToolSidebar",
+                   () => require("devtools/framework/sidebar").ToolSidebar);
+ loader.lazyGetter(this, "NetworkPanel",
+                   () => require("devtools/webconsole/network-panel").NetworkPanel);
++loader.lazyGetter(this, "ConsoleOutput",
++                  () => require("devtools/webconsole/console-output").ConsoleOutput);
++loader.lazyGetter(this, "Messages",
++                  () => require("devtools/webconsole/console-output").Messages);
+ loader.lazyImporter(this, "GripClient", "resource://gre/modules/devtools/dbg-client.jsm");
+ loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
+ loader.lazyImporter(this, "VariablesViewController", "resource:///modules/devtools/VariablesViewController.jsm");
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ 
+@@ -181,16 +185,18 @@ function WebConsoleFrame(aWebConsoleOwne
+   this.window = this.owner.iframeWindow;
+ 
+   this._repeatNodes = {};
+   this._outputQueue = [];
+   this._pruneCategoriesQueue = {};
+   this._networkRequests = {};
+   this.filterPrefs = {};
+ 
++  this.output = new ConsoleOutput(this);
++
+   this._toggleFilter = this._toggleFilter.bind(this);
+   this._flushMessageQueue = this._flushMessageQueue.bind(this);
+ 
+   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+   this._outputTimerInitialized = false;
+ 
+   EventEmitter.decorate(this);
+ }
+@@ -318,16 +324,18 @@ WebConsoleFrame.prototype = {
+   jsterm: null,
+ 
+   /**
+    * The element that holds all of the messages we display.
+    * @type nsIDOMElement
+    */
+   outputNode: null,
+ 
++  output: null,
++
+   /**
+    * The input element that allows the user to filter messages by string.
+    * @type nsIDOMElement
+    */
+   filterBox: null,
+ 
+   /**
+    * Getter for the debugger WebConsoleClient.
+@@ -1747,16 +1755,40 @@ WebConsoleFrame.prototype = {
    {
      this.contentLocation = aURI;
      if (this.owner.onLocationChange) {
@@ -21,8 +294,14 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +   */
 +  handleTabNavigated: function WCF_handleTabNavigated(aEvent, aPacket)
 +  {
-+    if (aEvent == "will-navigate" && !this.persistLog) {
-+      this.jsterm.clearOutput();
++    if (aEvent == "will-navigate") {
++      if (this.persistLog) {
++        let marker = new Messages.ReloadMarker();
++        this.output.addMessage(marker);
++      }
++      else {
++        this.jsterm.clearOutput();
++      }
 +    }
 +
 +    if (aPacket.url) {
@@ -43,7 +322,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param integer aCategory
     *        The category of the message you want to output. See the CATEGORY_*
-@@ -4905,27 +4923,17 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4917,27 +4949,17 @@ WebConsoleConnectionProxy.prototype = {
     *        The message received from the server.
     */
    _onTabNavigated: function WCCP__onTabNavigated(aEvent, aPacket)
