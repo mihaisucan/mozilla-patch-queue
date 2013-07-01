@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 9785318cddc4d25d40fec06f670562b47ac5ab04
+# Parent 4a19c734b3bd11740afaaf9440c6ee25e169c510
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1372518996 -10800
+# Date 1372699514 -10800
 
-Bug 877262 - Start using the new jetpack loader in the web console; r=dcamp; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
+Bug 877262 - Start using the new jetpack loader in the web console; r=dcamp; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-bc,mochitest-o -t none
 
 diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browser-sets.inc
 --- a/browser/base/content/browser-sets.inc
@@ -30,7 +30,7 @@ diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browse
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 --- a/browser/base/content/browser.js
 +++ b/browser/base/content/browser.js
-@@ -7016,18 +7016,19 @@ var TabContextMenu = {
+@@ -7028,18 +7028,23 @@ var TabContextMenu = {
  };
  
  XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
@@ -41,9 +41,13 @@ diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
  
 -XPCOMUtils.defineLazyGetter(this, "HUDConsoleUI", function () {
 -  return Cu.import("resource:///modules/HUDService.jsm", {}).HUDService.consoleUI;
-+XPCOMUtils.defineLazyGetter(this, "HUDService", function () {
-+  let devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
-+  return devtools.require("devtools/webconsole/hudservice");
++Object.defineProperty(this, "HUDService", {
++  get: function HUDService_getter() {
++    let devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
++    return devtools.require("devtools/webconsole/hudservice");
++  },
++  configurable: true,
++  enumerable: true
  });
  
  // Prompt user to restart the browser in safe mode
@@ -292,7 +296,7 @@ diff --git a/browser/devtools/inspector/selector-search.js b/browser/devtools/in
 diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 --- a/browser/devtools/jar.mn
 +++ b/browser/devtools/jar.mn
-@@ -7,17 +7,16 @@ browser.jar:
+@@ -7,18 +7,17 @@ browser.jar:
      content/browser/devtools/widgets/VariablesView.xul                 (shared/widgets/VariablesView.xul)
      content/browser/devtools/markup-view.xhtml                         (markupview/markup-view.xhtml)
      content/browser/devtools/markup-view.css                           (markupview/markup-view.css)
@@ -302,7 +306,8 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
      content/browser/devtools/netmonitor-view.js                        (netmonitor/netmonitor-view.js)
      content/browser/devtools/NetworkPanel.xhtml                        (webconsole/NetworkPanel.xhtml)
 -    content/browser/devtools/webconsole.js                             (webconsole/webconsole.js)
- *   content/browser/devtools/webconsole.xul                            (webconsole/webconsole.xul)
+-*   content/browser/devtools/webconsole.xul                            (webconsole/webconsole.xul)
++    content/browser/devtools/webconsole.xul                            (webconsole/webconsole.xul)
  *   content/browser/devtools/scratchpad.xul                            (scratchpad/scratchpad.xul)
      content/browser/devtools/scratchpad.js                             (scratchpad/scratchpad.js)
      content/browser/devtools/splitview.css                             (shared/splitview.css)
@@ -310,6 +315,7 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
      content/browser/devtools/styleeditor.xul                           (styleeditor/styleeditor.xul)
      content/browser/devtools/styleeditor.css                           (styleeditor/styleeditor.css)
      content/browser/devtools/computedview.xhtml                        (styleinspector/computedview.xhtml)
+     content/browser/devtools/cssruleview.xhtml                         (styleinspector/cssruleview.xhtml)
 diff --git a/browser/devtools/main.js b/browser/devtools/main.js
 --- a/browser/devtools/main.js
 +++ b/browser/devtools/main.js
@@ -1385,7 +1391,7 @@ diff --git a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab
 diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devtools/webconsole/test/browser_console.js
 --- a/browser/devtools/webconsole/test/browser_console.js
 +++ b/browser/devtools/webconsole/test/browser_console.js
-@@ -4,26 +4,26 @@
+@@ -4,26 +4,31 @@
   */
  
  // Test the basic features of the Browser Console, bug 587757.
@@ -1395,19 +1401,29 @@ diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devto
  function test()
  {
 -  let oldFunction = HUDConsoleUI.toggleBrowserConsole;
-+  let oldHUDService = HUDService;
-   let functionExecuted = false;
+-  let functionExecuted = false;
 -  HUDConsoleUI.toggleBrowserConsole = () => functionExecuted = true;
-+  HUDService = { toggleBrowserConsole: () => functionExecuted = true };
++  Services.obs.addObserver(function observer(aSubject) {
++    Services.obs.removeObserver(observer, "web-console-created");
++    aSubject.QueryInterface(Ci.nsISupportsString);
++
++    let hud = HUDService.getBrowserConsole();
++    ok(hud, "browser console is open");
++    is(aSubject.data, hud.hudId, "notification hudId is correct");
++
++    executeSoon(() => consoleOpened(hud));
++  }, "web-console-created", false);
++
++  let hud = HUDService.getBrowserConsole();
++  ok(!hud, "browser console is not open");
++  info("wait for the browser console to open with ctrl-shift-j");
    EventUtils.synthesizeKey("j", { accelKey: true, shiftKey: true }, content);
- 
-   ok(functionExecuted,
-      "toggleBrowserConsole() was executed by the Ctrl-Shift-J key shortcut");
- 
+-
+-  ok(functionExecuted,
+-     "toggleBrowserConsole() was executed by the Ctrl-Shift-J key shortcut");
+-
 -  HUDConsoleUI.toggleBrowserConsole = oldFunction;
 -  HUDConsoleUI.toggleBrowserConsole().then(consoleOpened);
-+  HUDService = oldHUDService;
-+  HUDService.toggleBrowserConsole().then(consoleOpened);
  }
  
  function consoleOpened(hud)
@@ -2781,7 +2797,30 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.inputNode = doc.querySelector(".jsterm-input-node");
  
      this._setFilterTextBoxEvents();
-@@ -2748,16 +2731,20 @@ WebConsoleFrame.prototype = {
+@@ -621,16 +604,22 @@ WebConsoleFrame.prototype = {
+ 
+     if (!this.owner._browserConsole) {
+       // The Browser Console displays nsIConsoleMessages which are messages that
+       // end up in the JS category, but they are not errors or warnings, they
+       // are just log messages. The Web Console does not show such messages.
+       let jslog = this.document.querySelector("menuitem[prefKey=jslog]");
+       jslog.hidden = true;
+     }
++
++    if (Services.appinfo.OS == "Darwin") {
++      let net = this.document.querySelector("toolbarbutton[category=net]");
++      let accesskey = net.getAttribute("accesskeyMacOSX");
++      net.setAttribute("accesskey", accesskey);
++    }
+   },
+ 
+   /**
+    * Increase, decrease or reset the font size.
+    *
+    * @param string size
+    *        The size of the font change. Accepted values are "+" and "-".
+    *        An unmatched size assumes a font reset.
+@@ -2748,16 +2737,20 @@ WebConsoleFrame.prototype = {
        this._outputTimer.cancel();
      }
      this._outputTimer = null;
@@ -2802,7 +2841,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }.bind(this);
  
      if (this.proxy) {
-@@ -3268,17 +3255,16 @@ JSTerm.prototype = {
+@@ -3268,17 +3261,16 @@ JSTerm.prototype = {
     * Create the Web Console sidebar.
     *
     * @see devtools/framework/sidebar.js
@@ -2820,7 +2859,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Add the variables view tab to the sidebar.
     *
     * @private
-@@ -4998,50 +4984,44 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4998,50 +4990,44 @@ WebConsoleConnectionProxy.prototype = {
  
  function gSequenceId()
  {
@@ -2886,7 +2925,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Get selection information from the view.
     *
     * @param nsIDOMElement aView
-@@ -5108,9 +5088,20 @@ let ConsoleContextMenu = {
+@@ -5108,9 +5094,20 @@ let ConsoleContextMenu = {
        if (itemData.indexOf(type) !== -1) {
          shouldHide = false;
          break;
@@ -2954,6 +2993,29 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
        <menuitem id="menu_copyURL" label="&copyURLCmd.label;"
                  accesskey="&copyURLCmd.accesskey;" command="consoleCmd_copyURL"
                  selection="network" selectionType="single"/>
+@@ -73,21 +77,18 @@
+   </popupset>
+ 
+   <box class="hud-outer-wrapper devtools-responsive-container" flex="1">
+     <vbox class="hud-console-wrapper" flex="1">
+       <toolbar class="hud-console-filter-toolbar devtools-toolbar" mode="full">
+         <toolbarbutton label="&btnPageNet.label;" type="menu-button"
+                        category="net" class="devtools-toolbarbutton webconsole-filter-button"
+                        tooltiptext="&btnPageNet.tooltip;"
+-#ifdef XP_MACOSX
+-                       accesskey="&btnPageNet.accesskeyMacOSX;"
+-#else
++                       accesskeyMacOSX="&btnPageNet.accesskeyMacOSX;"
+                        accesskey="&btnPageNet.accesskey;"
+-#endif
+                        tabindex="3">
+           <menupopup>
+             <menuitem label="&btnConsoleErrors;" type="checkbox" autocheck="false"
+                       prefKey="network"/>
+             <menuitem label="&btnConsoleWarnings;" type="checkbox" autocheck="false"
+                       prefKey="netwarn"/>
+             <menuitem label="&btnConsoleLog;" type="checkbox" autocheck="false"
+                       prefKey="networkinfo"/>
 diff --git a/toolkit/content/license.html b/toolkit/content/license.html
 --- a/toolkit/content/license.html
 +++ b/toolkit/content/license.html
@@ -3020,6 +3082,24 @@ diff --git a/toolkit/devtools/Loader.jsm b/toolkit/devtools/Loader.jsm
      });
  
      return Promise.resolve(undefined);
+@@ -84,16 +87,17 @@ var SrcdirProvider = {
+     let mainURI = this.fileURI(OS.Path.join(srcdir, "browser", "devtools", "main.js"));
+     this.loader = new loader.Loader({
+       modules: {
+         "toolkit/loader": loader
+       },
+       paths: {
+         "": "resource://gre/modules/commonjs/",
+         "devtools/server": serverURI,
++        "devtools/toolkit": toolkitURI,
+         "devtools": devtoolsURI,
+         "main": mainURI
+       },
+       globals: loaderGlobals
+     });
+ 
+     return this._writeManifest(devtoolsDir).then(null, Cu.reportError);
+   },
 diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/dbg-client.jsm
 --- a/toolkit/devtools/client/dbg-client.jsm
 +++ b/toolkit/devtools/client/dbg-client.jsm
