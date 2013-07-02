@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent c1a80f7106a21041ca937ac5c39de9ccb78fe5bb
+# Parent 36b85fff6979e75bb6a016cb938b84f875919943
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1372712037 -10800
+# Date 1372799223 -10800
 
 Bug 793996 - Create reload marker in the Web Console; r=robcee
 
@@ -9,7 +9,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,206 @@
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -60,18 +60,18 @@ new file mode 100644
 +
 +  addMessage: function()
 +  {
-+    for (let msg of arguments)
++    for (let i = 0; i < arguments.length; i++)
 +    {
++      let msg = arguments[i];
 +      this.owner.outputMessage(msg._categoryCompat, this._onFlushOutputMessage,
 +                               [msg]);
 +    }
++    return this;
 +  },
 +
 +  _onFlushOutputMessage: function(message)
 +  {
-+    message.init(this);
-+    message.render();
-+    return message._elementCompat;
++    return message.init(this).render().element;
 +  },
 +
 +  removeMessage: function()
@@ -93,9 +93,9 @@ new file mode 100644
 +  rendered: false,
 +  visible: false,
 +  widgets: null,
++  textContent: "",
 +
-+  _elementCompat: null,
-+  _elementClassCompat: null,
++  _elementClassCompat: "",
 +  _categoryCompat: null,
 +  _severityCompat: null,
 +
@@ -103,26 +103,35 @@ new file mode 100644
 +  {
 +    this.output = output;
 +    this.parent = parent;
++    return this;
 +  },
 +
 +  render: function()
 +  {
-+    this._elementCompat = this._renderCompat();
-+  }
++    if (!this.element) {
++      this.element = this._renderCompat();
++    }
++    return this;
++  },
++
 +  _renderCompat: function()
 +  {
-+    let container = this.document.createElementNS(XUL_NS, "richlistitem");
-+    container.setAttribute("class", "hud-msg-node" + message._elementClassCompat);
++    let doc = this.output.document;
++    let container = doc.createElementNS(XUL_NS, "richlistitem");
++    container.setAttribute("class", "hud-msg-node" + this._elementClassCompat);
 +    container.classList.add("hud-msg-node");
 +    container.setAttribute("id", "console-msg-" + gSequenceId());
-+    container.category = message._categoryCompat;
-+    container.severity = message._severityCompat;
++    container.category = this._categoryCompat;
++    container.severity = this._severityCompat;
++    container.clipboardText = this.textContent;
++    container.timestamp = this.timestamp;
 +
-+    let body = this.document.createElementNS(XUL_NS, "description");
++    let body = doc.createElementNS(XUL_NS, "description");
 +    body.flex = 1;
 +    body.classList.add("webconsole-msg-body");
-+    body.appendChild(message.element);
 +    container.appendChild(body);
++
++    return container;
 +  },
 +
 +  onRemove: function()
@@ -130,62 +139,51 @@ new file mode 100644
 +  },
 +}; // Messages.BaseMessage.prototype
 +
-+Messages.ReloadMarker = function()
++Messages.NavigationMarker = function(url, timestamp)
 +{
 +  Messages.BaseMessage.apply(this, arguments);
++  this._url = url;
++  this.textContent = "------ " + url;
++  this.timestamp = timestamp;
 +};
 +
-+Messages.ReloadMarker.prototype = extend(Messages.BaseMessage.prototype,
++Messages.NavigationMarker.prototype = extend(Messages.BaseMessage.prototype,
 +{
-+  _elementClassCompat: "webconsole-msg-network webconsole-msg-info",
++  // Class names in order: category, severity then the class for the filter.
++  // TODO: check that these class names do not break existing code. Other code
++  // might rely on network request-kind of messages with these class names and
++  // category.
++  _elementClassCompat: " webconsole-msg-network webconsole-msg-info hud-networkinfo",
 +  _categoryCompat: COMPAT.CATEGORIES.NETWORK,
 +  _severityCompat: COMPAT.SEVERITIES.LOG,
 +
 +  render: function()
 +  {
-+    if (this.element) {
-+      return this.element;
++    if (this.element)
++    {
++      return this;
 +    }
 +
-+    let separator = new Widgets.Separator(this);
-+    this.widgets.add(separator);
-+    this.element = separator.render();
++    let url = this._url;
++    let pos = url.indexOf("?");
++    if (pos > -1) {
++      url = url.substr(0, pos);
++    }
 +
-+    return this.element;
++    let doc = this.output.document;
++    let urlnode = doc.createElementNS(XHTML_NS, "span");
++    urlnode.className = "url";
++    urlnode.textContent = url;
++
++    // Add the text in the xul:description.webconsole-msg-body element.
++    this.$render().element.firstChild.appendChild(urlnode);
++    this.element.classList.add("navigation-marker");
++    this.element.url = this._url;
++
++    return this;
 +  },
-+}); // Messages.ReloadMarker.prototype
++}); // Messages.NavigationMarker.prototype
 +
-+let Widgets = {};
-+
-+Widgets.BaseWidget = function(message)
-+{
-+  this.message = message;
-+};
-+
-+Widgets.BaseWidget.prototype = {
-+  message: null,
-+
-+  render: function()
-+  {
-+  },
-+
-+  destroy: function()
-+  {
-+  },
-+};
-+
-+Widgets.Separator = function()
-+{
-+  Widgets.BaseWidget.apply(this, arguments);
-+};
-+
-+Widgets.Separator.prototype = extend(Widgets.BaseWidget.prototype, {
-+  render: function()
-+  {
-+    let separator = this.message.output.document.createElementNS(XHTML_NS, "hr");
-+    return separator;
-+  },
-+});
 +
 +let Utils = {};
 +
@@ -217,7 +215,6 @@ new file mode 100644
 +
 +exports.ConsoleOutput = ConsoleOutput;
 +exports.Messages = Messages;
-+exports.Widgets = Widgets;
 +exports.Utils = Utils;
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
@@ -296,7 +293,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +  {
 +    if (aEvent == "will-navigate") {
 +      if (this.persistLog) {
-+        let marker = new Messages.ReloadMarker();
++        let marker = new Messages.NavigationMarker(aPacket.url, Date.now());
 +        this.output.addMessage(marker);
 +      }
 +      else {
@@ -322,7 +319,39 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param integer aCategory
     *        The category of the message you want to output. See the CATEGORY_*
-@@ -4917,27 +4949,17 @@ WebConsoleConnectionProxy.prototype = {
+@@ -2628,31 +2660,20 @@ WebConsoleFrame.prototype = {
+     let children = this.outputNode.children;
+ 
+     for (let i = 0; i < children.length; i++) {
+       let item = children[i];
+       if (!item.selected) {
+         continue;
+       }
+ 
+-      // Add dashes between groups so that group boundaries show up in the
+-      // copied output.
+-      if (i > 0 && item.classList.contains("webconsole-new-group")) {
+-        newGroup = true;
+-      }
+-
+       // Ensure the selected item hasn't been filtered by type or string.
+       if (!item.classList.contains("hud-filtered-by-type") &&
+           !item.classList.contains("hud-filtered-by-string")) {
+         let timestampString = l10n.timestampString(item.timestamp);
+-        if (newGroup) {
+-          strings.push("--");
+-          newGroup = false;
+-        }
+-
+         if (aOptions.linkOnly) {
+           strings.push(item.url);
+         }
+         else {
+           strings.push("[" + timestampString + "] " + item.clipboardText);
+         }
+       }
+     }
+@@ -4917,27 +4938,17 @@ WebConsoleConnectionProxy.prototype = {
     *        The message received from the server.
     */
    _onTabNavigated: function WCCP__onTabNavigated(aEvent, aPacket)
@@ -351,3 +380,29 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param string aActor
     *        The actor ID to send the request to.
     */
+diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
+--- a/browser/themes/shared/devtools/webconsole.inc.css
++++ b/browser/themes/shared/devtools/webconsole.inc.css
+@@ -266,8 +266,22 @@
+ 
+ .webconsole-msg-security.webconsole-msg-error {
+   -moz-image-region: rect(32px, 16px, 40px, 8px);
+ }
+ 
+ .webconsole-msg-security.webconsole-msg-warn {
+   -moz-image-region: rect(32px, 24px, 40px, 16px);
+ }
++
++.navigation-marker {
++  color: #aaa;
++  background: linear-gradient(#fff, #bbb, #fff) no-repeat left 50%;
++  background-size: 100% 2px;
++  -moz-margin-start: 3px;
++  -moz-margin-end: 6px;
++  font-size: 0.9em;
++}
++
++.navigation-marker .url {
++  background: #fff;
++  -moz-padding-end: 6px;
++}
