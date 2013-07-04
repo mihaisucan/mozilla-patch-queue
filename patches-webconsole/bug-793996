@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 36b85fff6979e75bb6a016cb938b84f875919943
+# Parent 4e0fcd17a466c65171554abdbc84bfe57eed43b7
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1372799223 -10800
+# Date 1372957128 -10800
 
 Bug 793996 - Create reload marker in the Web Console; r=robcee
 
@@ -9,7 +9,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,344 @@
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -45,67 +45,173 @@ new file mode 100644
 +  },
 +};
 +
++/**
++ * The ConsoleOutput object is used to manage output of messages in the Web
++ * Console.
++ *
++ * @constructor
++ * @param object owner
++ *        The console output owner. This usually the WebConsoleFrame instance.
++ *        Any other object can be used, as long as it has the following
++ *        properties and methods:
++ *          - window
++ *          - document
++ *          - outputMessage(category, methodOrNode[, methodArguments])
++ *            TODO: this is needed temporarily, until bug 778766 is fixed.
++ */
 +function ConsoleOutput(owner)
 +{
 +  this.owner = owner;
-+  this.messages = [];
 +  this._onFlushOutputMessage = this._onFlushOutputMessage.bind(this);
 +}
 +
 +ConsoleOutput.prototype = {
-+  messages: null,
-+
++  /**
++   * The document that holds the output.
++   * @type DOMDocument
++   */
 +  get document() this.owner.document,
++
++  /**
++   * The DOM window that holds the output.
++   * @type Window
++   */
 +  get window() this.owner.window,
 +
++  /**
++   * Add a message to output.
++   *
++   * @param object message...
++   *        Any number of Message objects.
++   * @return this
++   */
 +  addMessage: function()
 +  {
-+    for (let i = 0; i < arguments.length; i++)
-+    {
-+      let msg = arguments[i];
++    for (let i = 0; i < arguments.length; i++) {
++      let msg = arguments[i].init(this);
 +      this.owner.outputMessage(msg._categoryCompat, this._onFlushOutputMessage,
 +                               [msg]);
 +    }
 +    return this;
 +  },
 +
++  /**
++   * Message renderer used for compatibility with the current Web Console output
++   * implementation. This method is invoked for every message object that is
++   * flushed to output. The message object is initialized and rendered, then it
++   * is displayed.
++   *
++   * TODO: remove this method once bug 778766 is fixed.
++   *
++   * @private
++   * @param object message
++   *        The message object to render.
++   * @return DOMElement
++   *         The message DOM element that can be added to the console output.
++   */
 +  _onFlushOutputMessage: function(message)
 +  {
-+    return message.init(this).render().element;
++    return message.render().element;
 +  },
 +
-+  removeMessage: function()
++  /**
++   * Destroy this ConsoleOutput instance.
++   */
++  destroy: function()
 +  {
++    this.owner = null;
 +  },
 +}; // ConsoleOutput.prototype
 +
++/**
++ * Message objects container.
++ * @type object
++ */
 +let Messages = {};
 +
++/**
++ * The BaseMessage object is used for all types of messages. Every kind of
++ * message should use this object as its base.
++ *
++ * @constructor
++ */
 +Messages.BaseMessage = function()
 +{
 +  this.widgets = new Set();
 +};
 +
 +Messages.BaseMessage.prototype = {
++  /**
++   * Reference to the ConsoleOutput owner.
++   *
++   * @type object|null
++   *       This is |null| if the message is not yet initialized.
++   */
 +  output: null,
++
++  /**
++   * Reference to the parent message object, if this message is in a group or if
++   * it is otherwise owned by another message.
++   *
++   * @type object|null
++   */
 +  parent: null,
++
++  /**
++   * Message DOM element.
++   *
++   * @type DOMElement|null
++   *       This is |null| if the message is not yet rendered.
++   */
 +  element: null,
-+  rendered: false,
-+  visible: false,
-+  widgets: null,
++
++  /**
++   * Tells if this message is visible or not.
++   * @type boolean
++   */
++  get visible() {
++    return this.element && this.element.parentNode;
++  },
++
++  /**
++   * Holds the text-only representation of the message.
++   * @type string
++   */
 +  textContent: "",
 +
++  /**
++   * Set of widgets included in this message.
++   * @type Set
++   */
++  widgets: null,
++
++  // Properties that allow compatibility with the current Web Console output
++  // implementation.
 +  _elementClassCompat: "",
 +  _categoryCompat: null,
 +  _severityCompat: null,
 +
-+  init: function(output, parent)
++  /**
++   * Initialize the message.
++   *
++   * @param object output
++   *        The ConsoleOutput owner.
++   * @param object [parent=null]
++   *        Optional: a different message object that owns this instance.
++   * @return this
++   */
++  init: function(output, parent=null)
 +  {
 +    this.output = output;
 +    this.parent = parent;
 +    return this;
 +  },
 +
++  /**
++   * Render the message. After this method is invoked the |element| property
++   * will point to the DOM element of this message.
++   * @return this
++   */
 +  render: function()
 +  {
 +    if (!this.element) {
@@ -114,6 +220,11 @@ new file mode 100644
 +    return this;
 +  },
 +
++  /**
++   * Prepare the message container for the Web Console, such that it is
++   * compatible with the current implementation.
++   * TODO: remove this once bug 778766.
++   */
 +  _renderCompat: function()
 +  {
 +    let doc = this.output.document;
@@ -125,6 +236,7 @@ new file mode 100644
 +    container.severity = this._severityCompat;
 +    container.clipboardText = this.textContent;
 +    container.timestamp = this.timestamp;
++    container._messageObject = this;
 +
 +    let body = doc.createElementNS(XUL_NS, "description");
 +    body.flex = 1;
@@ -133,12 +245,20 @@ new file mode 100644
 +
 +    return container;
 +  },
-+
-+  onRemove: function()
-+  {
-+  },
 +}; // Messages.BaseMessage.prototype
 +
++
++/**
++ * The NavigationMarker is used to show a page load event.
++ *
++ * @constructor
++ * @extends Messages.BaseMessage
++ * @param string url
++ *        The URL to display.
++ * @param number timestamp
++ *        The message date and time, milliseconds elapsed since 1 January 1970
++ *        00:00:00 UTC.
++ */
 +Messages.NavigationMarker = function(url, timestamp)
 +{
 +  Messages.BaseMessage.apply(this, arguments);
@@ -149,18 +269,26 @@ new file mode 100644
 +
 +Messages.NavigationMarker.prototype = extend(Messages.BaseMessage.prototype,
 +{
++  /**
++   * Message timestamp.
++   *
++   * @type number
++   *       Milliseconds elapsed since 1 January 1970 00:00:00 UTC.
++   */
++  timestamp: 0,
++
 +  // Class names in order: category, severity then the class for the filter.
-+  // TODO: check that these class names do not break existing code. Other code
-+  // might rely on network request-kind of messages with these class names and
-+  // category.
 +  _elementClassCompat: " webconsole-msg-network webconsole-msg-info hud-networkinfo",
 +  _categoryCompat: COMPAT.CATEGORIES.NETWORK,
 +  _severityCompat: COMPAT.SEVERITIES.LOG,
 +
++  /**
++   * Prepare the DOM element for this message.
++   * @return this
++   */
 +  render: function()
 +  {
-+    if (this.element)
-+    {
++    if (this.element) {
 +      return this;
 +    }
 +
@@ -185,25 +313,36 @@ new file mode 100644
 +}); // Messages.NavigationMarker.prototype
 +
 +
-+let Utils = {};
-+
++/**
++ * Extend a given object with additional properties and methods. This function
++ * makes methods from the base object available in the new object, with a "$"
++ * prefix.
++ *
++ * @see Heritage.extend()
++ * @param object proto
++ *        Object to extend.
++ * @param object props
++ *        Properties and methods at add.
++ * @return object
++ *         The new object; proto+props.
++ */
 +function extend(proto, props)
 +{
 +  let result = Heritage.extend(proto, props);
-+  for (let key of Object.getOwnPropertyNames(props))
-+  {
-+    if (!(key in proto))
-+    {
++
++  for (let key of Object.getOwnPropertyNames(props)) {
++    if (!(key in proto)) {
 +      continue;
 +    }
++
 +    let fn = proto[key];
-+    if (typeof fn != "function")
-+    {
++    if (typeof fn != "function") {
 +      continue;
 +    }
 +
 +    result["$" + key] = fn;
 +  }
++
 +  return result;
 +}
 +
@@ -215,7 +354,341 @@ new file mode 100644
 +
 +exports.ConsoleOutput = ConsoleOutput;
 +exports.Messages = Messages;
-+exports.Utils = Utils;
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -12,17 +12,16 @@ include $(DEPTH)/config/autoconf.mk
+ 
+ MOCHITEST_BROWSER_FILES = \
+ 	browser_webconsole_notifications.js \
+ 	browser_webconsole_message_node_id.js \
+ 	browser_webconsole_bug_580030_errors_after_page_reload.js \
+ 	browser_webconsole_basic_net_logging.js \
+ 	browser_webconsole_bug_579412_input_focus.js \
+ 	browser_webconsole_bug_580001_closing_after_completion.js \
+-	browser_webconsole_bug_580400_groups.js \
+ 	browser_webconsole_bug_588730_text_node_insertion.js \
+ 	browser_webconsole_bug_601667_filter_buttons.js \
+ 	browser_webconsole_bug_597136_external_script_errors.js \
+ 	browser_webconsole_bug_597136_network_requests_from_chrome.js \
+ 	browser_webconsole_completion.js \
+ 	browser_webconsole_console_logging_api.js \
+ 	browser_webconsole_change_font_size.js \
+ 	browser_webconsole_chrome.js \
+@@ -137,16 +136,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_console_addonsdk_loader_exception.js \
+ 	browser_console_error_source_click.js \
+ 	browser_console_clear_on_reload.js \
+ 	browser_console_keyboard_accessibility.js \
+ 	browser_console_filters.js \
+ 	browser_console_dead_objects.js \
+ 	browser_console_iframe_messages.js \
+ 	browser_console_variables_view_while_debugging_and_inspecting.js \
++	browser_console_navigation_marker.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+ 	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_console_navigation_marker.js b/browser/devtools/webconsole/test/browser_console_navigation_marker.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_console_navigation_marker.js
+@@ -0,0 +1,81 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Check that the navigation marker shows on page reload - bug 793996.
++
++function test()
++{
++  const PREF = "devtools.webconsole.persistlog";
++  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
++  let hud = null;
++  let Messages = require("devtools/webconsole/console-output").Messages;
++
++  Services.prefs.setBoolPref(PREF, true);
++  registerCleanupFunction(() => Services.prefs.clearUserPref(PREF));
++
++  addTab(TEST_URI);
++
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++
++  function consoleOpened(aHud)
++  {
++    hud = aHud;
++    ok(hud, "Web Console opened");
++
++    hud.jsterm.clearOutput();
++    content.console.log("foobarz1");
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "foobarz1",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++      }],
++    }).then(onConsoleMessage);
++  }
++
++  function onConsoleMessage()
++  {
++    browser.addEventListener("load", onReload, true);
++    content.location.reload();
++  }
++
++  function onReload()
++  {
++    browser.removeEventListener("load", onReload, true);
++
++    content.console.log("foobarz2");
++
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        name: "page reload",
++        text: "test-console.html",
++        category: CATEGORY_NETWORK,
++        severity: SEVERITY_LOG,
++      },
++      {
++        text: "foobarz2",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++      },
++      {
++        name: "navigation marker",
++        text: "test-console.html",
++        type: Messages.NavigationMarker,
++      }],
++    }).then(onConsoleMessageAfterReload);
++  }
++
++  function onConsoleMessageAfterReload()
++  {
++    isnot(hud.outputNode.textContent.indexOf("foobarz1"), -1,
++          "foobarz1 is still in the output");
++    finishTest();
++  }
++}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_580400_groups.js b/browser/devtools/webconsole/test/browser_webconsole_bug_580400_groups.js
+deleted file mode 100644
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_580400_groups.js
++++ /dev/null
+@@ -1,78 +0,0 @@
+-/* vim:set ts=2 sw=2 sts=2 et: */
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-// Tests that console groups behave properly.
+-
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+-
+-function test() {
+-  addTab(TEST_URI);
+-  browser.addEventListener("load", function onLoad() {
+-    browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, testGroups);
+-  }, true);
+-}
+-
+-function testGroups(HUD) {
+-  let jsterm = HUD.jsterm;
+-  let outputNode = HUD.outputNode;
+-  jsterm.clearOutput();
+-
+-  // We test for one group by testing for zero "new" groups. The
+-  // "webconsole-new-group" class creates a divider. Thus one group is
+-  // indicated by zero new groups, two groups are indicated by one new group,
+-  // and so on.
+-
+-  let waitForSecondMessage = {
+-    name: "second console message",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".webconsole-msg-output").length == 2;
+-    },
+-    successFn: function()
+-    {
+-      let timestamp1 = Date.now();
+-      if (timestamp1 - timestamp0 < 5000) {
+-        is(outputNode.querySelectorAll(".webconsole-new-group").length, 0,
+-           "no group dividers exist after the second console message");
+-      }
+-
+-      for (let i = 0; i < outputNode.itemCount; i++) {
+-        outputNode.getItemAtIndex(i).timestamp = 0;   // a "far past" value
+-      }
+-
+-      jsterm.execute("2");
+-      waitForSuccess(waitForThirdMessage);
+-    },
+-    failureFn: finishTest,
+-  };
+-
+-  let waitForThirdMessage = {
+-    name: "one group divider exists after the third console message",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".webconsole-new-group").length == 1;
+-    },
+-    successFn: finishTest,
+-    failureFn: finishTest,
+-  };
+-
+-  let timestamp0 = Date.now();
+-  jsterm.execute("0");
+-
+-  waitForSuccess({
+-    name: "no group dividers exist after the first console message",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".webconsole-new-group").length == 0;
+-    },
+-    successFn: function()
+-    {
+-      jsterm.execute("1");
+-      waitForSuccess(waitForSecondMessage);
+-    },
+-    failureFn: finishTest,
+-  });
+-}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js
+@@ -119,22 +119,30 @@ function testFormSubmission()
+   // loaded again. Bind to the load event to catch when this is done.
+   requestCallback = function() {
+     ok(lastRequest, "testFormSubmission() was logged");
+     is(lastRequest.request.method, "POST", "Method is correct");
+ 
+     // There should be 3 network requests pointing to the HTML file.
+     waitForMessages({
+       webconsole: hud,
+-      messages: [{
+-        text: "test-network-request.html",
+-        category: CATEGORY_NETWORK,
+-        severity: SEVERITY_LOG,
+-        count: 3,
+-      }],
++      messages: [
++        {
++          text: "test-network-request.html",
++          category: CATEGORY_NETWORK,
++          severity: SEVERITY_LOG,
++          count: 3,
++        },
++        {
++          text: "test-data.json",
++          category: CATEGORY_NETWORK,
++          severity: SEVERITY_LOG,
++          count: 2,
++        },
++      ],
+     }).then(testLiveFilteringOnSearchStrings);
+   };
+ 
+   let form = content.document.querySelector("form");
+   ok(form, "we have the HTML form");
+   form.submit();
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -1,24 +1,25 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+-let WebConsoleUtils, gDevTools, TargetFactory, console, Promise;
++let WebConsoleUtils, gDevTools, TargetFactory, console, Promise, require;
+ 
+ (() => {
+   gDevTools = Cu.import("resource:///modules/devtools/gDevTools.jsm", {}).gDevTools;
+   console = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).console;
+   Promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
+ 
+   let tools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
+   let utils = tools.require("devtools/toolkit/webconsole/utils");
+   TargetFactory = tools.TargetFactory;
+   WebConsoleUtils = utils.Utils;
++  require = tools.require;
+ })();
+ // Promise._reportErrors = true; // please never leave me.
+ 
+ let gPendingOutputTest = 0;
+ 
+ // The various categories of messages.
+ const CATEGORY_NETWORK = 0;
+ const CATEGORY_CSS = 1;
+@@ -873,16 +874,19 @@ function getMessageElementText(aElement)
+  *            and/or line number in the trace message.
+  *            - consoleTime: string that matches a console.time() timer name.
+  *            Provide this if you want to match a console.time() message.
+  *            - consoleTimeEnd: same as above, but for console.timeEnd().
+  *            - consoleDir: boolean, set to |true| to match a console.dir()
+  *            message.
+  *            - longString: boolean, set to |true} to match long strings in the
+  *            message.
++ *            - type: match messages that are instances of the given object. For
++ *            example, you can point to Messages.NavigationMarker to match any
++ *            such message.
+  *            - objects: boolean, set to |true| if you expect inspectable
+  *            objects in the message.
+  *            - source: object that can hold one property: url. This is used to
+  *            match the source URL of the message.
+  * @return object
+  *         A Promise object is returned once the messages you want are found.
+  *         The promise is resolved with the array of rule objects you give in
+  *         the |messages| property. Each objects is the same as provided, with
+@@ -1051,18 +1055,35 @@ function waitForMessages(aOptions)
+     if (aRule.consoleDir && !checkConsoleDir(aRule, aElement)) {
+       return false;
+     }
+ 
+     if (aRule.source && !checkSource(aRule, aElement)) {
+       return false;
+     }
+ 
++    if (aRule.type) {
++      // The rule tries to match the newer types of messages, based on their
++      // object constructor.
++      if (!aElement._messageObject ||
++          !(aElement._messageObject instanceof aRule.type)) {
++        return false;
++      }
++    }
++    else if (aElement._messageObject) {
++      // If the message element holds a reference to its object, it means this
++      // is a newer message type. All of the older waitForMessages() rules do
++      // not expect this kind of messages. We return false here.
++      // TODO: we keep this behavior until bug 778766 is fixed. After that we
++      // will not require |type| to match newer types of messages.
++      return false;
++    }
++
+     let partialMatch = !!(aRule.consoleTrace || aRule.consoleTime ||
+-                          aRule.consoleTimeEnd);
++                          aRule.consoleTimeEnd || aRule.type);
+ 
+     if (aRule.category && aElement.category != aRule.category) {
+       if (partialMatch) {
+         is(aElement.category, aRule.category,
+            "message category for rule: " + displayRule(aRule));
+         displayErrorContext(aRule, aElement);
+       }
+       return false;
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -259,8 +732,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    EventEmitter.decorate(this);
  }
-@@ -318,16 +324,18 @@ WebConsoleFrame.prototype = {
-   jsterm: null,
+@@ -319,16 +325,22 @@ WebConsoleFrame.prototype = {
  
    /**
     * The element that holds all of the messages we display.
@@ -268,9 +740,13 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    outputNode: null,
  
+   /**
++   * The ConsoleOutput instance that manages all output.
++   * @type object
++   */
 +  output: null,
 +
-   /**
++  /**
     * The input element that allows the user to filter messages by string.
     * @type nsIDOMElement
     */
@@ -278,7 +754,46 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Getter for the debugger WebConsoleClient.
-@@ -1747,16 +1755,40 @@ WebConsoleFrame.prototype = {
+    * @type object
+@@ -826,18 +838,16 @@ WebConsoleFrame.prototype = {
+       let node = result.snapshotItem(i);
+       if (aState) {
+         node.classList.remove("hud-filtered-by-type");
+       }
+       else {
+         node.classList.add("hud-filtered-by-type");
+       }
+     }
+-
+-    this.regroupOutput();
+   },
+ 
+   /**
+    * Turns the display of log nodes on and off appropriately to reflect the
+    * adjustment of the search string.
+    */
+   adjustVisibilityOnSearchStringChange:
+   function WCF_adjustVisibilityOnSearchStringChange()
+@@ -854,18 +864,16 @@ WebConsoleFrame.prototype = {
+       // if the text matches the words in aSearchString...
+       if (this.stringMatchesFilters(text, searchString)) {
+         node.classList.remove("hud-filtered-by-string");
+       }
+       else {
+         node.classList.add("hud-filtered-by-string");
+       }
+     }
+-
+-    this.regroupOutput();
+   },
+ 
+   /**
+    * Applies the user's filters to a newly-created message node via CSS
+    * classes.
+    *
+    * @param nsIDOMNode aNode
+    *        The newly-created message node.
+@@ -1747,16 +1755,45 @@ WebConsoleFrame.prototype = {
    {
      this.contentLocation = aURI;
      if (this.owner.onLocationChange) {
@@ -288,6 +803,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
 +   * Handler for the tabNavigated notification.
++   *
++   * @param string aEvent
++   *        Event name.
++   * @param object aPacket
++   *        Notification packet received from the server.
 +   */
 +  handleTabNavigated: function WCF_handleTabNavigated(aEvent, aPacket)
 +  {
@@ -319,7 +839,79 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param integer aCategory
     *        The category of the message you want to output. See the CATEGORY_*
-@@ -2628,31 +2660,20 @@ WebConsoleFrame.prototype = {
+@@ -1859,21 +1896,16 @@ WebConsoleFrame.prototype = {
+ 
+       let categories = Object.keys(this._pruneCategoriesQueue);
+       categories.forEach(function _pruneOutput(aCategory) {
+         removedNodes += this.pruneOutputIfNecessary(aCategory);
+       }, this);
+       this._pruneCategoriesQueue = {};
+     }
+ 
+-    // Regroup messages at the end of the queue.
+-    if (!this._outputQueue.length) {
+-      this.regroupOutput();
+-    }
+-
+     let isInputOutput = lastVisibleNode &&
+       (lastVisibleNode.classList.contains("webconsole-msg-input") ||
+        lastVisibleNode.classList.contains("webconsole-msg-output"));
+ 
+     // Scroll to the new node if it is not filtered, and if the output node is
+     // scrolled at the bottom or if the new node is a jsterm input/output
+     // message.
+     if (lastVisibleNode && (scrolledToBottom || isInputOutput)) {
+@@ -2133,39 +2165,16 @@ WebConsoleFrame.prototype = {
+     }
+ 
+     if (aNode.parentNode) {
+       aNode.parentNode.removeChild(aNode);
+     }
+   },
+ 
+   /**
+-   * Splits the given console messages into groups based on their timestamps.
+-   */
+-  regroupOutput: function WCF_regroupOutput()
+-  {
+-    // Go through the nodes and adjust the placement of "webconsole-new-group"
+-    // classes.
+-    let nodes = this.outputNode.querySelectorAll(".hud-msg-node" +
+-      ":not(.hud-filtered-by-string):not(.hud-filtered-by-type)");
+-    let lastTimestamp;
+-    for (let i = 0, n = nodes.length; i < n; i++) {
+-      let thisTimestamp = nodes[i].timestamp;
+-      if (lastTimestamp != null &&
+-          thisTimestamp >= lastTimestamp + NEW_GROUP_DELAY) {
+-        nodes[i].classList.add("webconsole-new-group");
+-      }
+-      else {
+-        nodes[i].classList.remove("webconsole-new-group");
+-      }
+-      lastTimestamp = thisTimestamp;
+-    }
+-  },
+-
+-  /**
+    * Given a category and message body, creates a DOM node to represent an
+    * incoming message. The timestamp is automatically added.
+    *
+    * @param number aCategory
+    *        The category of the message: one of the CATEGORY_* constants.
+    * @param number aSeverity
+    *        The severity of the message: one of the SEVERITY_* constants;
+    * @param string|nsIDOMNode aBody
+@@ -2618,41 +2627,29 @@ WebConsoleFrame.prototype = {
+    *        other meta-information. Default is false.
+    */
+   copySelectedItems: function WCF_copySelectedItems(aOptions)
+   {
+     aOptions = aOptions || { linkOnly: false };
+ 
+     // Gather up the selected items and concatenate their clipboard text.
+     let strings = [];
+-    let newGroup = false;
+ 
      let children = this.outputNode.children;
  
      for (let i = 0; i < children.length; i++) {
@@ -351,7 +943,27 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          }
        }
      }
-@@ -4917,27 +4938,17 @@ WebConsoleConnectionProxy.prototype = {
+@@ -2737,16 +2734,19 @@ WebConsoleFrame.prototype = {
+       this._outputTimer.cancel();
+     }
+     this._outputTimer = null;
+ 
+     if (this.jsterm) {
+       this.jsterm.destroy();
+       this.jsterm = null;
+     }
++    this.output.destroy();
++    this.output = null;
++
+     if (this._contextMenuHandler) {
+       this._contextMenuHandler.destroy();
+       this._contextMenuHandler = null;
+     }
+ 
+     this._commandController = null;
+ 
+     let onDestroy = function() {
+@@ -4917,27 +4917,17 @@ WebConsoleConnectionProxy.prototype = {
     *        The message received from the server.
     */
    _onTabNavigated: function WCCP__onTabNavigated(aEvent, aPacket)
