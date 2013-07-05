@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 696ffceb3b0ba12ba6c401c84610e038baca23fa
+# Parent fa5e88eafb07c69815c7652c21274dfaacf7c368
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1372972312 -10800
+# Date 1373043404 -10800
 
 Bug 760876 - Can't drag-select multiple messages in the Web Console; r=robcee
 
@@ -102,7 +102,54 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      let fontSize = Services.prefs.getIntPref("devtools.webconsole.fontSize");
  
-@@ -1315,53 +1315,48 @@ WebConsoleFrame.prototype = {
+@@ -916,25 +916,24 @@ WebConsoleFrame.prototype = {
+    * @param nsIDOMNode aOriginal
+    *        The Original Node. The one being merged into.
+    * @param nsIDOMNode aFiltered
+    *        The node being filtered out because it is repeated.
+    */
+   mergeFilteredMessageNode:
+   function WCF_mergeFilteredMessageNode(aOriginal, aFiltered)
+   {
+-    // childNodes[3].firstChild is the node containing the number of repetitions
+-    // of a node.
+-    let repeatNode = aOriginal.childNodes[3].firstChild;
++    let repeatNode = aOriginal.getElementsByClassName("webconsole-msg-repeat")[0];
+     if (!repeatNode) {
+       return; // no repeat node, return early.
+     }
+ 
+     let occurrences = parseInt(repeatNode.getAttribute("value")) + 1;
+     repeatNode.setAttribute("value", occurrences);
++    repeatNode.textContent = occurrences;
+   },
+ 
+   /**
+    * Filter the message node from the output if it is a repeat.
+    *
+    * @private
+    * @param nsIDOMNode aNode
+    *        The message node to be filtered or not.
+@@ -1149,17 +1148,17 @@ WebConsoleFrame.prototype = {
+                                       level, aMessage.timeStamp);
+     if (aMessage.private) {
+       node.setAttribute("private", true);
+     }
+ 
+     if (objectActors.size > 0) {
+       node._objectActors = objectActors;
+ 
+-      let repeatNode = node.querySelector(".webconsole-msg-repeat");
++      let repeatNode = node.getElementsByClassName("webconsole-msg-repeat")[0];
+       repeatNode._uid += [...objectActors].join("-");
+     }
+ 
+     // Make the node bring up the variables view, to allow the user to inspect
+     // the stack trace.
+     if (level == "trace") {
+       node._stacktrace = aMessage.stacktrace;
+ 
+@@ -1315,68 +1314,58 @@ WebConsoleFrame.prototype = {
    {
      let networkInfo = this._networkRequests[aActorId];
      if (!networkInfo) {
@@ -115,56 +162,95 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -
 -    let methodNode = this.document.createElementNS(XUL_NS, "label");
 -    methodNode.setAttribute("value", request.method);
-+    let msgNode = this.document.createElementNS(XHTML_NS, "div");
-+
 +    let methodNode = this.document.createElementNS(XHTML_NS, "span");
 +    methodNode.textContent = request.method;
      methodNode.classList.add("webconsole-msg-body-piece");
-     msgNode.appendChild(methodNode);
- 
+-    msgNode.appendChild(methodNode);
+-
 -    let linkNode = this.document.createElementNS(XUL_NS, "hbox");
 -    linkNode.flex = 1;
-+    let linkNode = this.document.createElementNS(XHTML_NS, "span");
-     linkNode.classList.add("webconsole-msg-body-piece");
-     linkNode.classList.add("webconsole-msg-link");
-     msgNode.appendChild(linkNode);
- 
+-    linkNode.classList.add("webconsole-msg-body-piece");
+-    linkNode.classList.add("webconsole-msg-link");
+-    msgNode.appendChild(linkNode);
+-
 -    let urlNode = this.document.createElementNS(XUL_NS, "label");
 -    urlNode.flex = 1;
 -    urlNode.setAttribute("crop", "center");
-+    let urlNode = this.document.createElementNS(XHTML_NS, "span");
-     urlNode.setAttribute("title", request.url);
+-    urlNode.setAttribute("title", request.url);
 -    urlNode.setAttribute("tooltiptext", request.url);
 -    urlNode.setAttribute("value", request.url);
-     urlNode.classList.add("hud-clickable");
-     urlNode.classList.add("webconsole-msg-body-piece");
-     urlNode.classList.add("webconsole-msg-url");
-+    urlNode.textContent = request.url;
-     linkNode.appendChild(urlNode);
+-    urlNode.classList.add("hud-clickable");
+-    urlNode.classList.add("webconsole-msg-body-piece");
+-    urlNode.classList.add("webconsole-msg-url");
+-    linkNode.appendChild(urlNode);
  
      let severity = SEVERITY_LOG;
      let mixedRequest =
        WebConsoleUtils.isMixedHTTPSRequest(request.url, this.contentLocation);
      if (mixedRequest) {
++      severity = SEVERITY_WARNING;
++    }
++
++    let clipboardText = request.method + " " + request.url;
++    let messageNode = this.createMessageNode(CATEGORY_NETWORK, severity,
++                                             methodNode, null, null,
++                                             clipboardText);
++    if (networkInfo.private) {
++      messageNode.setAttribute("private", true);
++    }
++    messageNode._connectionId = aActorId;
++    messageNode.url = request.url;
++
++    let body = methodNode.parentNode;
++
++    // FIXME: crop=center
++    let urlNode = this.document.createElementNS(XHTML_NS, "span");
++    urlNode.classList.add("hud-clickable");
++    urlNode.classList.add("webconsole-msg-body-piece");
++    urlNode.classList.add("webconsole-msg-url");
++    urlNode.title = request.url;
++    urlNode.textContent = request.url;
++    body.appendChild(urlNode);
++
++    if (mixedRequest) {
        urlNode.classList.add("webconsole-mixed-content");
-       this.makeMixedContentNode(linkNode);
-       // If we define a SEVERITY_SECURITY in the future, switch this to
-       // SEVERITY_SECURITY.
-       severity = SEVERITY_WARNING;
-     }
- 
+-      this.makeMixedContentNode(linkNode);
+-      // If we define a SEVERITY_SECURITY in the future, switch this to
+-      // SEVERITY_SECURITY.
+-      severity = SEVERITY_WARNING;
+-    }
+-
 -    let statusNode = this.document.createElementNS(XUL_NS, "label");
 -    statusNode.setAttribute("value", "");
++      this.makeMixedContentNode(body);
++    }
++
 +    let statusNode = this.document.createElementNS(XUL_NS, "span");
      statusNode.classList.add("hud-clickable");
      statusNode.classList.add("webconsole-msg-body-piece");
      statusNode.classList.add("webconsole-msg-status");
-     linkNode.appendChild(statusNode);
+-    linkNode.appendChild(statusNode);
+-
+-    let clipboardText = request.method + " " + request.url;
+-
+-    let messageNode = this.createMessageNode(CATEGORY_NETWORK, severity,
+-                                             msgNode, null, null, clipboardText);
+-    if (networkInfo.private) {
+-      messageNode.setAttribute("private", true);
+-    }
+-
+-    messageNode._connectionId = aActorId;
+-    messageNode.url = request.url;
++    body.appendChild(statusNode);
  
-     let clipboardText = request.method + " " + request.url;
+     this.makeOutputMessageLink(messageNode, function WCF_net_message_link() {
+       if (!messageNode._panelOpen) {
+         this.openNetworkPanel(messageNode, networkInfo);
+       }
+     }.bind(this));
  
-     let messageNode = this.createMessageNode(CATEGORY_NETWORK, severity,
-@@ -1392,21 +1387,20 @@ WebConsoleFrame.prototype = {
+     networkInfo.node = messageNode;
+@@ -1392,21 +1381,20 @@ WebConsoleFrame.prototype = {
     * @param aLinkNode
     *        Parent to the requested urlNode.
     */
@@ -188,7 +274,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        aEvent.preventDefault();
        aEvent.stopPropagation();
      }.bind(this));
-@@ -1417,24 +1411,21 @@ WebConsoleFrame.prototype = {
+@@ -1417,24 +1405,21 @@ WebConsoleFrame.prototype = {
     *
     * @param string aFileURI
     *        The file URI that was loaded.
@@ -200,13 +286,14 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    let urlNode = this.document.createElementNS(XUL_NS, "label");
 -    urlNode.flex = 1;
 -    urlNode.setAttribute("crop", "center");
-+    let urlNode = this.document.createElementNS(XHTML_NS, "div");
-     urlNode.setAttribute("title", aFileURI);
+-    urlNode.setAttribute("title", aFileURI);
 -    urlNode.setAttribute("tooltiptext", aFileURI);
 -    urlNode.setAttribute("value", aFileURI);
++    let urlNode = this.document.createElementNS(XHTML_NS, "span");
      urlNode.classList.add("hud-clickable");
      urlNode.classList.add("webconsole-msg-url");
 +    urlNode.textContent = aFileURI;
++    urlNode.title = aFileURI;
  
      let outputNode = this.createMessageNode(CATEGORY_NETWORK, SEVERITY_LOG,
                                              urlNode, null, null, aFileURI);
@@ -215,7 +302,29 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.owner.viewSource(aFileURI);
      }.bind(this));
  
-@@ -1859,17 +1850,17 @@ WebConsoleFrame.prototype = {
+@@ -1589,19 +1574,18 @@ WebConsoleFrame.prototype = {
+         status = [response.httpVersion, response.status, response.statusText];
+       }
+       if (hasEventTimings) {
+         status.push(l10n.getFormatStr("NetworkPanel.durationMS",
+                                       [networkInfo.totalTime]));
+       }
+       let statusText = "[" + status.join(" ") + "]";
+ 
+-      let linkNode = messageNode.querySelector(".webconsole-msg-link");
+-      let statusNode = linkNode.querySelector(".webconsole-msg-status");
+-      statusNode.setAttribute("value", statusText);
++      let statusNode = messageNode.getElementsByClassName("webconsole-msg-status")[0];
++      statusNode.textContent = statusText;
+ 
+       messageNode.clipboardText = [request.method, request.url, statusText]
+                                   .join(" ");
+ 
+       if (hasResponseStart && response.status >= MIN_HTTP_ERROR_CODE &&
+           response.status <= MAX_HTTP_ERROR_CODE) {
+         this.setMessageType(messageNode, CATEGORY_NETWORK, SEVERITY_ERROR);
+       }
+@@ -1859,17 +1843,17 @@ WebConsoleFrame.prototype = {
      if (!batch.length) {
        this._outputTimerInitialized = false;
        return;
@@ -234,7 +343,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      let updatedMessages = new Set();
      for (let item of batch) {
        let result = this._outputMessageFromQueue(hudIdSupportsString, item);
-@@ -2203,47 +2194,35 @@ WebConsoleFrame.prototype = {
+@@ -2203,47 +2187,36 @@ WebConsoleFrame.prototype = {
    {
      if (typeof aBody != "string" && aClipboardText == null && aBody.innerText) {
        aClipboardText = aBody.innerText;
@@ -248,8 +357,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    let iconContainer = this.document.createElementNS(XHTML_NS, "span");
 +    iconContainer.classList.add("webconsole-msg-icon");
      // Apply the curent group by indenting appropriately.
-     iconContainer.style.marginLeft = this.groupDepth * GROUP_INDENT + "px";
- 
+-    iconContainer.style.marginLeft = this.groupDepth * GROUP_INDENT + "px";
+-
 -    // Make the icon node. It's sprited and the actual region of the image is
 -    // determined by CSS rules.
 -    let iconNode = this.document.createElementNS(XUL_NS, "image");
@@ -260,7 +369,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    let spacer = this.document.createElementNS(XUL_NS, "spacer");
 -    spacer.flex = 1;
 -    iconContainer.appendChild(spacer);
--
++    //FIXME
++    //iconContainer.style.marginLeft = this.groupDepth * GROUP_INDENT + "px";
+ 
      // Create the message body, which contains the actual text of the message.
 -    let bodyNode = this.document.createElementNS(XUL_NS, "description");
 -    bodyNode.flex = 1;
@@ -286,7 +397,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        let str = undefined;
        if (aLevel == "dir") {
          str = VariablesView.getString(aBody.arguments[0]);
-@@ -2257,31 +2236,30 @@ WebConsoleFrame.prototype = {
+@@ -2257,31 +2230,34 @@ WebConsoleFrame.prototype = {
        }
  
        if (str !== undefined) {
@@ -298,13 +409,22 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    let repeatContainer = this.document.createElementNS(XUL_NS, "hbox");
 -    repeatContainer.setAttribute("align", "start");
 -    let repeatNode = this.document.createElementNS(XUL_NS, "label");
-+    let repeatContainer = this.document.createElementNS(XHTML_NS, "span");
-+    let repeatNode = this.document.createElementNS(XHTML_NS, "span");
-     repeatNode.setAttribute("value", "1");
-     repeatNode.classList.add("webconsole-msg-repeat");
-     repeatNode._uid = [bodyNode.textContent, aCategory, aSeverity, aLevel,
-                        aSourceURL, aSourceLine].join(":");
-     repeatContainer.appendChild(repeatNode);
+-    repeatNode.setAttribute("value", "1");
+-    repeatNode.classList.add("webconsole-msg-repeat");
+-    repeatNode._uid = [bodyNode.textContent, aCategory, aSeverity, aLevel,
+-                       aSourceURL, aSourceLine].join(":");
+-    repeatContainer.appendChild(repeatNode);
++    // Add the message repeats node only when needed.
++    let repeatNode = null;
++    if (aCategory != CATEGORY_INPUT && aCategory != CATEGORY_OUTPUT &&
++        aCategory != CATEGORY_NETWORK) {
++      repeatNode = this.document.createElementNS(XHTML_NS, "span");
++      repeatNode.textContent = 1;
++      repeatNode.setAttribute("value", "1");
++      repeatNode.classList.add("webconsole-msg-repeat");
++      repeatNode._uid = [bodyNode.textContent, aCategory, aSeverity, aLevel,
++                         aSourceURL, aSourceLine].join(":");
++    }
  
      // Create the timestamp.
 -    let timestampNode = this.document.createElementNS(XUL_NS, "label");
@@ -322,7 +442,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        locationNode = this.createLocationNode(aSourceURL, aSourceLine);
      }
  
-@@ -2291,35 +2269,33 @@ WebConsoleFrame.prototype = {
+@@ -2291,44 +2267,39 @@ WebConsoleFrame.prototype = {
      node.timestamp = timestamp;
      this.setMessageType(node, aCategory, aSeverity);
  
@@ -333,13 +453,16 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (aLevel == "dir") {
 -      let viewContainer = this.document.createElement("hbox");
 -      viewContainer.flex = 1;
-+      let viewContainer = this.document.createElementNS(XHTML_NS, "div");
-       viewContainer.height = this.outputNode.clientHeight *
-                              CONSOLE_DIR_VIEW_HEIGHT;
+-      viewContainer.height = this.outputNode.clientHeight *
+-                             CONSOLE_DIR_VIEW_HEIGHT;
++      bodyNode.style.height = (this.window.innerHeight *
++                               CONSOLE_DIR_VIEW_HEIGHT) + "px";
++      console.log("height", this.window.innerHeight);
  
        let options = {
          objectActor: body.arguments[0],
-         targetElement: viewContainer,
+-        targetElement: viewContainer,
++        targetElement: bodyNode,
          hideFilterInput: true,
        };
        this.jsterm.openVariablesView(options).then((aView) => {
@@ -351,16 +474,29 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
 -      let bodyContainer = this.document.createElement("vbox");
 -      bodyContainer.flex = 1;
-+      let bodyContainer = this.document.createElementNS(XHTML_NS, "div");
-       bodyContainer.appendChild(bodyNode);
-       bodyContainer.appendChild(viewContainer);
-       node.appendChild(bodyContainer);
+-      bodyContainer.appendChild(bodyNode);
+-      bodyContainer.appendChild(viewContainer);
+-      node.appendChild(bodyContainer);
        node.classList.add("webconsole-msg-inspector");
      }
-     else {
-       node.appendChild(bodyNode);
+-    else {
+-      node.appendChild(bodyNode);
+-    }
+-    node.appendChild(repeatContainer);
++
++    node.appendChild(bodyNode);
++    if (repeatNode) {
++      node.appendChild(repeatNode);
++    }
+     if (locationNode) {
+       node.appendChild(locationNode);
      }
-@@ -2368,33 +2344,34 @@ WebConsoleFrame.prototype = {
+ 
+     node.setAttribute("id", "console-msg-" + gSequenceId());
+ 
+     return node;
+   },
+@@ -2368,36 +2339,36 @@ WebConsoleFrame.prototype = {
  
        let text = VariablesView.getString(aItem);
        let inspectable = !VariablesView.isPrimitive({ value: aItem });
@@ -387,17 +523,20 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
        // For inspectable objects.
 -      let elem = this.document.createElement("description");
-+      // FIXME: use anchors for links.
 +      let elem = this.document.createElementNS(XHTML_NS, "a");
        elem.classList.add("hud-clickable");
        elem.setAttribute("aria-haspopup", "true");
-       elem.appendChild(this.document.createTextNode(text));
+-      elem.appendChild(this.document.createTextNode(text));
++      elem.textContent = text;
  
        this._addMessageLinkCallback(elem,
          this._consoleLogClick.bind(this, elem, aItem));
  
        aContainer.appendChild(elem);
-@@ -2464,17 +2441,17 @@ WebConsoleFrame.prototype = {
+     }, this);
+   },
+ 
+@@ -2464,17 +2435,17 @@ WebConsoleFrame.prototype = {
     * @param number aSourceLine [optional]
     *        The line number on which the error occurred. If zero or omitted,
     *        there is no line number associated with this message.
@@ -416,7 +555,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
        displayLocation = aSourceURL;
-@@ -2485,22 +2462,20 @@ WebConsoleFrame.prototype = {
+@@ -2485,27 +2456,26 @@ WebConsoleFrame.prototype = {
        displayLocation = WebConsoleUtils.abbreviateSourceURL(fullURL);
      }
  
@@ -438,10 +577,16 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      // Make the location clickable.
      locationNode.addEventListener("click", () => {
++      // FIXME: fix link clicks
        if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
          let wins = Services.wm.getEnumerator("devtools:scratchpad");
  
-@@ -3055,17 +3030,17 @@ JSTerm.prototype = {
+         while (wins.hasMoreElements()) {
+           let win = wins.getNext();
+ 
+           if (win.Scratchpad.uniqueName === aSourceURL) {
+             win.focus();
+@@ -3055,17 +3025,17 @@ JSTerm.prototype = {
      if (WebConsoleUtils.isActorGrip(result)) {
        node._objectActors.add(result.actor);
  
@@ -460,7 +605,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let onclick = this.hud._longStringClick.bind(this.hud, node, result,
                                                      formatter);
          this.hud._addMessageLinkCallback(ellipsis, onclick);
-@@ -3231,17 +3206,17 @@ JSTerm.prototype = {
+@@ -3231,17 +3201,17 @@ JSTerm.prototype = {
        return view;
      };
  
@@ -479,7 +624,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
        iframe.flex = 1;
        iframe.setAttribute("src", VARIABLES_VIEW_URL);
-@@ -3656,17 +3631,17 @@ JSTerm.prototype = {
+@@ -3656,17 +3626,17 @@ JSTerm.prototype = {
  
    /**
     * Remove all of the private messages from the Web Console output.
@@ -498,7 +643,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Updates the size of the input field (command line) to fit its contents.
-@@ -4356,48 +4331,35 @@ var Utils = {
+@@ -4356,48 +4326,36 @@ var Utils = {
     * element.
     *
     * @param nsIDOMNode aNode
@@ -536,6 +681,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     */
    isOutputScrolledToBottom: function Utils_isOutputScrolledToBottom(aOutputNode)
    {
++    // FIXME: this fails
      let lastNodeHeight = aOutputNode.lastChild ?
                           aOutputNode.lastChild.clientHeight : 0;
 -    let scrollBox = aOutputNode.scrollBoxObject.element;
@@ -582,16 +728,25 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
 diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
 --- a/browser/themes/shared/devtools/webconsole.inc.css
 +++ b/browser/themes/shared/devtools/webconsole.inc.css
-@@ -1,24 +1,29 @@
+@@ -1,38 +1,55 @@
  /* This Source Code Form is subject to the terms of the Mozilla Public
   * License, v. 2.0. If a copy of the MPL was not distributed with this
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  /* General output styles */
  
-+@import url(resource://gre-resources/html.css);
++a {
++  -moz-user-focus: normal;
++  -moz-user-input: enabled;
++  cursor: pointer;
++}
++
++a:focus {
++  outline: 1px dashed gray;
++}
 +
  .webconsole-timestamp {
++  flex: 0 0 auto;
    color: GrayText;
    margin-top: 0;
    margin-bottom: 0;
@@ -606,15 +761,93 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 +
 +.hud-msg-node > .webconsole-msg-icon {
 +  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 0, 1, 0, 0) no-repeat;
++  background-position: center 8px;
  }
  
  .webconsole-msg-icon {
-   margin: 3px 4px;
+-  margin: 3px 4px;
++  flex: 0 0 auto;
++  -moz-margin-start: 4px;
++  padding: 0 4px;
    width: 8px;
-   height: 8px;
+-  height: 8px;
  }
  
-@@ -88,20 +93,29 @@
+ .hud-clickable {
+   cursor: pointer;
+   text-decoration: underline;
+ }
+ 
+ .webconsole-msg-body {
++  flex: 1 1 100%;
+   margin-top: 0;
+   margin-bottom: 3px;
+   -moz-margin-start: 3px;
+   -moz-margin-end: 6px;
+   white-space: pre-wrap;
+   font-family: monospace;
+ }
+ 
+@@ -41,67 +58,75 @@
+ }
+ 
+ .webconsole-msg-url {
+   margin: 0 6px;
+ }
+ 
+ /* Repeated messages */
+ .webconsole-msg-repeat {
+-  margin: 2px 0;
+-  padding-left: 4px;
+-  padding-right: 4px;
++  flex: 0 0 auto;
++  margin: 2px 6px;
++  padding: 0 6px;
++  height: 1.25em;
+   color: white;
+   background-color: red;
+   border-radius: 40px;
+   font: message-box;
+   font-size: 0.9em;
+   font-weight: 600;
+ }
+ 
+ .webconsole-msg-repeat[value="1"] {
+   display: none;
+ }
+ 
++/* FIXME: see .text-link */
+ .webconsole-location {
+-  margin-top: 0;
+-  margin-bottom: 0;
+-  -moz-margin-start: 0;
++  flex: 0 0 auto;
+   -moz-margin-end: 6px;
+   width: 10em;
+   text-align: end;
++  color: -moz-nativehyperlinktext;
++}
++
++.webconsole-location:hover,
++.webconsole-location:focus {
++  text-decoration: underline;
+ }
+ 
+ .webconsole-mixed-content {
+   color: #FF0000;
+ }
+ 
+ .webconsole-mixed-content-link {
+   color: #0000EE;
+   margin: 0;
+ }
+ 
+-.hud-msg-node[selected="true"] > .webconsole-timestamp,
+-.hud-msg-node[selected="true"] > .webconsole-location {
+-  color: inherit;
+-}
+-
+ .jsterm-input-container {
    background: white;
  }
  
@@ -636,9 +869,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 +
 +#output-container {
 +  -moz-user-select: text;
-+  display: flex;
-+  flex: 0;
-+  flex-direction: column;
++  -moz-box-flex: 1;
  }
  
  .hud-filtered-by-type,
@@ -647,7 +878,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
  }
  
  .hidden-message {
-@@ -133,107 +147,107 @@
+@@ -133,95 +158,95 @@
  }
  
  /* Network styles */
@@ -664,7 +895,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 -.webconsole-msg-network.webconsole-msg-error {
 -  -moz-image-region: rect(0, 16px, 8px, 8px);
 +.webconsole-msg-network.webconsole-msg-error > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 0, 16, 8, 8) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 0, 16, 8, 8);
  }
  
  /* CSS styles */
@@ -673,20 +904,21 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    border-color: #1BA2CC;
  }
  
- .webconsole-msg-cssparser > .webconsole-msg-icon-container {
+-.webconsole-msg-cssparser > .webconsole-msg-icon-container {
++.webconsole-msg-cssparser > .webconsole-msg-icon {
    -moz-border-start: solid #00b6f0 6px;
  }
  
 -.webconsole-msg-cssparser.webconsole-msg-error {
 -  -moz-image-region: rect(8px, 16px, 16px, 8px);
 +.webconsole-msg-cssparser.webconsole-msg-error > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 8, 16, 16, 8) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 8, 16, 16, 8);
  }
  
 -.webconsole-msg-cssparser.webconsole-msg-warn {
 -  -moz-image-region: rect(8px, 24px, 16px, 16px);
 +.webconsole-msg-cssparser.webconsole-msg-warn > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 8, 24, 16, 16) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 8, 24, 16, 16);
  }
  
  /* JS styles */
@@ -695,20 +927,21 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    border-color: #E98A00;
  }
  
- .webconsole-msg-exception > .webconsole-msg-icon-container {
+-.webconsole-msg-exception > .webconsole-msg-icon-container {
++.webconsole-msg-exception > .webconsole-msg-icon {
    -moz-border-start: solid #fb9500 6px;
  }
  
 -.webconsole-msg-exception.webconsole-msg-error {
 -  -moz-image-region: rect(16px, 16px, 24px, 8px);
 +.webconsole-msg-exception.webconsole-msg-error > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 16, 16, 24, 8) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 16, 16, 24, 8);
  }
  
 -.webconsole-msg-exception.webconsole-msg-warn {
 -  -moz-image-region: rect(16px, 24px, 24px, 16px);
 +.webconsole-msg-exception.webconsole-msg-warn > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 16, 24, 24, 16) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 16, 24, 24, 16);
  }
  
  /* Web Developer styles */
@@ -717,7 +950,8 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    border-color: #929292;
  }
  
- .webconsole-msg-console > .webconsole-msg-icon-container {
+-.webconsole-msg-console > .webconsole-msg-icon-container {
++.webconsole-msg-console > .webconsole-msg-icon {
    -moz-border-start: solid #cbcbcb 6px;
  }
  
@@ -726,37 +960,40 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 -  -moz-image-region: rect(24px, 16px, 32px, 8px);
 +.webconsole-msg-console.webconsole-msg-error > .webconsole-msg-icon,
 +.webconsole-msg-output.webconsole-msg-error > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 16, 32, 8) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 16, 32, 8);
  }
  
 -.webconsole-msg-console.webconsole-msg-warn {
 -  -moz-image-region: rect(24px, 24px, 32px, 16px);
 +.webconsole-msg-console.webconsole-msg-warn > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 24, 32, 16) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 24, 32, 16);
  }
  
 -.webconsole-msg-console.webconsole-msg-info {
 -  -moz-image-region: rect(24px, 32px, 32px, 24px);
 +.webconsole-msg-console.webconsole-msg-info > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 32, 32, 24) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 32, 32, 24);
  }
  
  /* Input and output styles */
- .webconsole-msg-input > .webconsole-msg-icon-container,
- .webconsole-msg-output > .webconsole-msg-icon-container {
-   border-left: solid #808080 6px;
+-.webconsole-msg-input > .webconsole-msg-icon-container,
+-.webconsole-msg-output > .webconsole-msg-icon-container {
+-  border-left: solid #808080 6px;
++.webconsole-msg-input > .webconsole-msg-icon,
++.webconsole-msg-output > .webconsole-msg-icon {
++  -moz-border-start: solid #808080 6px;
  }
  
 -.webconsole-msg-input {
 -  -moz-image-region: rect(24px, 40px, 32px, 32px);
 +.webconsole-msg-input > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 40, 32, 32) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 40, 32, 32);
  }
  
 -.webconsole-msg-output {
 -  -moz-image-region: rect(24px, 48px, 32px, 40px);
 +.webconsole-msg-output > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 48, 32, 40) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 48, 32, 40);
  }
  
  /* JSTerm Styles */
@@ -765,20 +1002,39 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    border: none;
    padding: 0 0 0 16px;
    -moz-appearance: none;
- }
- 
- .jsterm-input-node {
--  background: -moz-image-rect(url("chrome://browser/skin/devtools/commandline-icon.png"), 0, 32, 16, 16) no-repeat;
-+  background: -moz-image-rect(url("chrome://browser/skin/devtools/commandline-icon.png"), 0, 32, 16, 16) no-repeat no-repeat;
- }
- 
- :-moz-any(.jsterm-input-node,
+@@ -235,46 +260,52 @@
            .jsterm-complete-node) > .textbox-input-box > .textbox-textarea {
    overflow-x: hidden;
  }
  
  .jsterm-complete-node > .textbox-input-box > .textbox-textarea {
-@@ -259,22 +273,22 @@
+   color: GrayText;
+ }
+ 
++.webconsole-msg-inspector .webconsole-msg-body {
++  display: flex;
++  flex-direction: column;
++}
+ .webconsole-msg-inspector iframe {
+-  height: 7em;
++  display: block;
++  flex: 1;
+   margin-bottom: 15px;
+   -moz-margin-end: 15px;
++  border: 1px solid #ccc;
+   border-radius: 4px;
+   box-shadow: 0 0 12px #dfdfdf;
+ }
+ 
+ #webconsole-sidebar > tabs {
+   height: 0;
+   border: none;
+ }
+ 
+ /* Security styles */
+ 
+-.webconsole-msg-security > .webconsole-msg-icon-container {
++.webconsole-msg-security > .webconsole-msg-icon {
    -moz-border-start: solid red 6px;
  }
  
@@ -790,13 +1046,13 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 -.webconsole-msg-security.webconsole-msg-error {
 -  -moz-image-region: rect(32px, 16px, 40px, 8px);
 +.webconsole-msg-security.webconsole-msg-error > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 32, 16, 40, 8) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 32, 16, 40, 8);
  }
  
 -.webconsole-msg-security.webconsole-msg-warn {
 -  -moz-image-region: rect(32px, 24px, 40px, 16px);
 +.webconsole-msg-security.webconsole-msg-warn > .webconsole-msg-icon {
-+  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 32, 24, 40, 16) no-repeat;
++  background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 32, 24, 40, 16);
  }
  
  .navigation-marker {
