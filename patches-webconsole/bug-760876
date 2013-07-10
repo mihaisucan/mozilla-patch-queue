@@ -1,15 +1,14 @@
 # HG changeset patch
-# Parent 74df34f434b2c23dd514f1adfcc7c1ea93960e45
+# Parent 5f3d41565548bdf48b2bbe1206edbeda752512a1
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1373402467 -10800
+# Date 1373490543 -10800
 
 Bug 760876 - Can't drag-select multiple messages in the Web Console; r=robcee
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -49,16 +49,18 @@ const COMPAT = {
-  */
+@@ -50,16 +50,22 @@ const COMPAT = {
  function ConsoleOutput(owner)
  {
    this.owner = owner;
@@ -17,9 +16,13 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  }
  
  ConsoleOutput.prototype = {
+   /**
++   * The output container.
++   * @type DOMElement
++   */
 +  get element() this.owner.outputNode,
 +
-   /**
++  /**
     * The document that holds the output.
     * @type DOMDocument
     */
@@ -27,8 +30,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
    /**
     * The DOM window that holds the output.
-@@ -97,16 +99,66 @@ ConsoleOutput.prototype = {
-    * @return DOMElement
+    * @type Window
+@@ -98,16 +104,87 @@ ConsoleOutput.prototype = {
     *         The message DOM element that can be added to the console output.
     */
    _onFlushOutputMessage: function(message)
@@ -36,6 +39,16 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      return message.render().element;
    },
  
+   /**
++   * Get an array of selected messages. This list is based on the text selection
++   * start and end points.
++   *
++   * @param number [limit]
++   *        Optional limit of selected messages you want. If no value is given,
++   *        all of the selected messages are returned.
++   * @return array
++   *         Array of DOM elements for each message that is currently selected.
++   */
 +  getSelectedMessages: function(limit)
 +  {
 +    let selection = this.window.getSelection();
@@ -66,6 +79,14 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return result;
 +  },
 +
++  /**
++   * Find the DOM element of a message for any given descendant.
++   *
++   * @param DOMElement elem
++   *        The element to start the search from.
++   * @return DOMElement|null
++   *         The DOM element of the message, if any.
++   */
 +  getMessageForElement: function(elem)
 +  {
 +    while (elem.parentNode) {
@@ -77,6 +98,9 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return null;
 +  },
 +
++  /**
++   * Select all messages.
++   */
 +  selectAllMessages: function()
 +  {
 +    let selection = this.window.getSelection();
@@ -86,7 +110,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    selection.addRange(range);
 +  },
 +
-   /**
++  /**
     * Destroy this ConsoleOutput instance.
     */
    destroy: function()
@@ -94,7 +118,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      this.owner = null;
    },
  }; // ConsoleOutput.prototype
-@@ -211,31 +263,26 @@ Messages.BaseMessage.prototype = {
+ 
+@@ -211,30 +288,25 @@ Messages.BaseMessage.prototype = {
    /**
     * Prepare the message container for the Web Console, such that it is
     * compatible with the current implementation.
@@ -104,10 +129,11 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    {
      let doc = this.output.document;
 -    let container = doc.createElementNS(XUL_NS, "richlistitem");
+-    container.setAttribute("id", "console-msg-" + gSequenceId());
+-    container.setAttribute("class", "hud-msg-node " + this._elementClassCompat);
 +    let container = doc.createElementNS(XHTML_NS, "div");
-     container.setAttribute("class", "hud-msg-node" + this._elementClassCompat);
-     container.classList.add("hud-msg-node");
-     container.setAttribute("id", "console-msg-" + gSequenceId());
++    container.id = "console-msg-" + gSequenceId();
++    container.className = "hud-msg-node " + this._elementClassCompat;
      container.category = this._categoryCompat;
      container.severity = this._severityCompat;
      container.clipboardText = this.textContent;
@@ -127,11 +153,17 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  /**
   * The NavigationMarker is used to show a page load event.
   *
-@@ -287,17 +334,17 @@ Messages.NavigationMarker.prototype = ex
+@@ -281,22 +353,22 @@ Messages.NavigationMarker.prototype = ex
+ 
+     let url = this._url;
+     let pos = url.indexOf("?");
+     if (pos > -1) {
+       url = url.substr(0, pos);
      }
  
      let doc = this.output.document;
-     let urlnode = doc.createElementNS(XHTML_NS, "span");
+-    let urlnode = doc.createElementNS(XHTML_NS, "span");
++    let urlnode = doc.createElementNS(XHTML_NS, "a");
      urlnode.className = "url";
      urlnode.textContent = url;
  
@@ -170,7 +202,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/widgets/VariablesView.xul";
  
  const CONSOLE_DIR_VIEW_HEIGHT = 0.6;
-@@ -916,25 +914,24 @@ WebConsoleFrame.prototype = {
+@@ -916,25 +914,25 @@ WebConsoleFrame.prototype = {
     * @param nsIDOMNode aOriginal
     *        The Original Node. The one being merged into.
     * @param nsIDOMNode aFiltered
@@ -190,6 +222,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      let occurrences = parseInt(repeatNode.getAttribute("value")) + 1;
      repeatNode.setAttribute("value", occurrences);
 +    repeatNode.textContent = occurrences;
++    repeatNode.title = l10n.getFormatStr("messageRepeats.tooltip", [occurrences]);
    },
  
    /**
@@ -198,7 +231,39 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @private
     * @param nsIDOMNode aNode
     *        The message node to be filtered or not.
-@@ -1149,17 +1146,17 @@ WebConsoleFrame.prototype = {
+@@ -1063,18 +1061,29 @@ WebConsoleFrame.prototype = {
+         break;
+       }
+ 
+       case "trace": {
+         let filename = WebConsoleUtils.abbreviateSourceURL(aMessage.filename);
+         let functionName = aMessage.functionName ||
+                            l10n.getStr("stacktrace.anonymousFunction");
+ 
+-        body = l10n.getFormatStr("stacktrace.outputMessage",
+-                                 [filename, functionName, sourceLine]);
++        body = this.document.createElementNS(XHTML_NS, "a");
++        body.attributes["aria-haspopup"] = true;
++        body.textContent = l10n.getFormatStr("stacktrace.outputMessage",
++                                             [filename, functionName,
++                                              sourceLine]);
++
++        this._addMessageLinkCallback(body, (aNode, aEvent) => {
++          aEvent.preventDefault();
++          this.jsterm.openVariablesView({
++            rawObject: aMessage.stacktrace,
++            autofocus: true,
++          });
++        });
+ 
+         clipboardText = "";
+ 
+         aMessage.stacktrace.forEach(function(aFrame) {
+           clipboardText += aFrame.filename + " :: " +
+                            aFrame.functionName + " :: " +
+                            aFrame.lineNumber + "\n";
+         });
+@@ -1149,30 +1158,22 @@ WebConsoleFrame.prototype = {
                                        level, aMessage.timeStamp);
      if (aMessage.private) {
        node.setAttribute("private", true);
@@ -212,12 +277,26 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        repeatNode._uid += [...objectActors].join("-");
      }
  
-     // Make the node bring up the variables view, to allow the user to inspect
-     // the stack trace.
+-    // Make the node bring up the variables view, to allow the user to inspect
+-    // the stack trace.
      if (level == "trace") {
        node._stacktrace = aMessage.stacktrace;
+-
+-      this.makeOutputMessageLink(node, () =>
+-        this.jsterm.openVariablesView({
+-          rawObject: node._stacktrace,
+-          autofocus: true,
+-        }));
+     }
  
-@@ -1315,74 +1312,65 @@ WebConsoleFrame.prototype = {
+     return node;
+   },
+ 
+   /**
+    * Handle ConsoleAPICall objects received from the server. This method outputs
+    * the window.console API call.
+@@ -1314,75 +1315,66 @@ WebConsoleFrame.prototype = {
+   logNetEvent: function WCF_logNetEvent(aActorId)
    {
      let networkInfo = this._networkRequests[aActorId];
      if (!networkInfo) {
@@ -225,7 +304,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
  
      let request = networkInfo.request;
- 
+-
 -    let msgNode = this.document.createElementNS(XUL_NS, "hbox");
 -
 -    let methodNode = this.document.createElementNS(XUL_NS, "label");
@@ -249,9 +328,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    urlNode.classList.add("webconsole-msg-body-piece");
 -    urlNode.classList.add("webconsole-msg-url");
 -    linkNode.appendChild(urlNode);
-+    let methodNode = this.document.createElementNS(XHTML_NS, "span");
-+    methodNode.textContent = request.method + " ";
- 
+-
++    let clipboardText = request.method + " " + request.url;
      let severity = SEVERITY_LOG;
      let mixedRequest =
        WebConsoleUtils.isMixedHTTPSRequest(request.url, this.contentLocation);
@@ -270,8 +348,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    statusNode.classList.add("webconsole-msg-status");
 -    linkNode.appendChild(statusNode);
 -
-     let clipboardText = request.method + " " + request.url;
--
+-    let clipboardText = request.method + " " + request.url;
++    let methodNode = this.document.createElementNS(XHTML_NS, "span");
++    methodNode.className = "webconsole-msg-method";
++    methodNode.textContent = request.method + " ";
+ 
      let messageNode = this.createMessageNode(CATEGORY_NETWORK, severity,
 -                                             msgNode, null, null, clipboardText);
 +                                             methodNode, null, null,
@@ -285,12 +366,12 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
 -    this.makeOutputMessageLink(messageNode, function WCF_net_message_link() {
 +    let body = methodNode.parentNode;
++    body.setAttribute("aria-haspopup", true);
 +
-+    let urlNode = this.document.createElementNS(XHTML_NS, "span");
-+    urlNode.classList.add("hud-clickable");
++    let urlNode = this.document.createElementNS(XHTML_NS, "a");
 +    urlNode.classList.add("webconsole-msg-url");
-+    // FIXME: tooltips
-+    urlNode.title = request.url;
++    urlNode.setAttribute("title", request.url);
++    urlNode.href = request.url;
 +    urlNode.textContent = request.url;
 +    body.appendChild(urlNode);
 +    body.appendChild(this.document.createTextNode(" "));
@@ -300,20 +381,20 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      this.makeMixedContentNode(body);
 +    }
 +
-+    let statusNode = this.document.createElementNS(XHTML_NS, "span");
-+    statusNode.classList.add("hud-clickable");
++    let statusNode = this.document.createElementNS(XHTML_NS, "a");
 +    statusNode.classList.add("webconsole-msg-status");
 +    body.appendChild(statusNode);
 +
-+    body.setAttribute("aria-haspopup", "true");
-+
-+    this._addMessageLinkCallback(body, (aNode, aEvent) => {
++    let onClick = (aNode, aEvent) => {
 +      aEvent.preventDefault();
        if (!messageNode._panelOpen) {
          this.openNetworkPanel(messageNode, networkInfo);
        }
 -    }.bind(this));
-+    });
++    };
++
++    this._addMessageLinkCallback(urlNode, onClick);
++    this._addMessageLinkCallback(statusNode, onClick);
  
      networkInfo.node = messageNode;
  
@@ -322,7 +403,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      return messageNode;
    },
  
-@@ -1392,56 +1380,54 @@ WebConsoleFrame.prototype = {
+@@ -1392,56 +1384,53 @@ WebConsoleFrame.prototype = {
     * @param aLinkNode
     *        Parent to the requested urlNode.
     */
@@ -334,8 +415,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    let mixedContentWarningNode = this.document.createElement("label");
 -    mixedContentWarningNode.setAttribute("value", mixedContentWarning);
 -    mixedContentWarningNode.setAttribute("title", mixedContentWarning);
+-    mixedContentWarningNode.classList.add("hud-clickable");
 +    let mixedContentWarningNode = this.document.createElementNS(XHTML_NS, "a");
-     mixedContentWarningNode.classList.add("hud-clickable");
++    mixedContentWarningNode.title = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.classList.add("webconsole-mixed-content-link");
 +    mixedContentWarningNode.textContent = mixedContentWarning;
  
@@ -365,14 +447,13 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    let urlNode = this.document.createElementNS(XUL_NS, "label");
 -    urlNode.flex = 1;
 -    urlNode.setAttribute("crop", "center");
--    urlNode.setAttribute("title", aFileURI);
++    let urlNode = this.document.createElementNS(XHTML_NS, "a");
+     urlNode.setAttribute("title", aFileURI);
 -    urlNode.setAttribute("tooltiptext", aFileURI);
 -    urlNode.setAttribute("value", aFileURI);
-+    let urlNode = this.document.createElementNS(XHTML_NS, "span");
-     urlNode.classList.add("hud-clickable");
+-    urlNode.classList.add("hud-clickable");
      urlNode.classList.add("webconsole-msg-url");
 +    urlNode.textContent = aFileURI;
-+    urlNode.title = aFileURI;
  
      let outputNode = this.createMessageNode(CATEGORY_NETWORK, SEVERITY_LOG,
                                              urlNode, null, null, aFileURI);
@@ -391,7 +472,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Handle the file activity messages coming from the remote Web Console.
     *
     * @param string aFileURI
-@@ -1589,19 +1575,18 @@ WebConsoleFrame.prototype = {
+@@ -1589,19 +1578,18 @@ WebConsoleFrame.prototype = {
          status = [response.httpVersion, response.status, response.statusText];
        }
        if (hasEventTimings) {
@@ -413,7 +494,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            response.status <= MAX_HTTP_ERROR_CODE) {
          this.setMessageType(messageNode, CATEGORY_NETWORK, SEVERITY_ERROR);
        }
-@@ -1859,17 +1844,17 @@ WebConsoleFrame.prototype = {
+@@ -1859,18 +1847,16 @@ WebConsoleFrame.prototype = {
      if (!batch.length) {
        this._outputTimerInitialized = false;
        return;
@@ -423,8 +504,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      let lastVisibleNode = null;
      let scrolledToBottom = Utils.isOutputScrolledToBottom(outputNode);
 -    let scrollBox = outputNode.scrollBoxObject.element;
-+    let scrollBox = outputNode;
- 
+-
      let hudIdSupportsString = WebConsoleUtils.supportsString(this.hudId);
  
      // Output the current batch of messages.
@@ -432,7 +512,50 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      let updatedMessages = new Set();
      for (let item of batch) {
        let result = this._outputMessageFromQueue(hudIdSupportsString, item);
-@@ -2203,47 +2188,33 @@ WebConsoleFrame.prototype = {
+       if (result) {
+@@ -1887,17 +1873,17 @@ WebConsoleFrame.prototype = {
+     }
+ 
+     let oldScrollHeight = 0;
+ 
+     // Prune messages if needed. We do not do this for every flush call to
+     // improve performance.
+     let removedNodes = 0;
+     if (shouldPrune || !this._outputQueue.length) {
+-      oldScrollHeight = scrollBox.scrollHeight;
++      oldScrollHeight = outputNode.scrollHeight;
+ 
+       let categories = Object.keys(this._pruneCategoriesQueue);
+       categories.forEach(function _pruneOutput(aCategory) {
+         removedNodes += this.pruneOutputIfNecessary(aCategory);
+       }, this);
+       this._pruneCategoriesQueue = {};
+     }
+ 
+@@ -1907,20 +1893,20 @@ WebConsoleFrame.prototype = {
+ 
+     // Scroll to the new node if it is not filtered, and if the output node is
+     // scrolled at the bottom or if the new node is a jsterm input/output
+     // message.
+     if (lastVisibleNode && (scrolledToBottom || isInputOutput)) {
+       Utils.scrollToVisible(lastVisibleNode);
+     }
+     else if (!scrolledToBottom && removedNodes > 0 &&
+-             oldScrollHeight != scrollBox.scrollHeight) {
++             oldScrollHeight != outputNode.scrollHeight) {
+       // If there were pruned messages and if scroll is not at the bottom, then
+       // we need to adjust the scroll location.
+-      scrollBox.scrollTop -= oldScrollHeight - scrollBox.scrollHeight;
++      outputNode.scrollTop -= oldScrollHeight - outputNode.scrollHeight;
+     }
+ 
+     if (newMessages.size) {
+       this.emit("messages-added", newMessages);
+     }
+     if (updatedMessages.size) {
+       this.emit("messages-updated", updatedMessages);
+     }
+@@ -2203,47 +2189,38 @@ WebConsoleFrame.prototype = {
    {
      if (typeof aBody != "string" && aClipboardText == null && aBody.innerText) {
        aClipboardText = aBody.innerText;
@@ -457,7 +580,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -    spacer.flex = 1;
 -    iconContainer.appendChild(spacer);
 +    let iconContainer = this.document.createElementNS(XHTML_NS, "span");
-+    iconContainer.classList.add("webconsole-msg-icon");
++    iconContainer.className = "webconsole-msg-icon";
  
      // Create the message body, which contains the actual text of the message.
 -    let bodyNode = this.document.createElementNS(XUL_NS, "description");
@@ -476,6 +599,11 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      // Create the containing node and append all its elements to it.
 -    let node = this.document.createElementNS(XUL_NS, "richlistitem");
 +    let node = this.document.createElementNS(XHTML_NS, "div");
++    node.id = "console-msg-" + gSequenceId();
++    node.className = "hud-msg-node";
++    node.clipboardText = aClipboardText;
++    node.timestamp = timestamp;
++    this.setMessageType(node, aCategory, aSeverity);
  
      if (aBody instanceof Ci.nsIDOMNode) {
        bodyNode.appendChild(aBody);
@@ -484,7 +612,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        let str = undefined;
        if (aLevel == "dir") {
          str = VariablesView.getString(aBody.arguments[0]);
-@@ -2257,31 +2228,37 @@ WebConsoleFrame.prototype = {
+@@ -2257,84 +2234,76 @@ WebConsoleFrame.prototype = {
        }
  
        if (str !== undefined) {
@@ -506,9 +634,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +    if (aCategory != CATEGORY_INPUT && aCategory != CATEGORY_OUTPUT &&
 +        aCategory != CATEGORY_NETWORK) {
 +      repeatNode = this.document.createElementNS(XHTML_NS, "span");
-+      repeatNode.textContent = 1;
 +      repeatNode.setAttribute("value", "1");
 +      repeatNode.classList.add("webconsole-msg-repeat");
++      repeatNode.textContent = 1;
 +      repeatNode._uid = [bodyNode.textContent, aCategory, aSeverity, aLevel,
 +                         aSourceURL, aSourceLine].join(":");
 +    }
@@ -532,10 +660,12 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        locationNode = this.createLocationNode(aSourceURL, aSourceLine);
      }
  
-@@ -2291,44 +2268,38 @@ WebConsoleFrame.prototype = {
-     node.timestamp = timestamp;
-     this.setMessageType(node, aCategory, aSeverity);
- 
+-    node.clipboardText = aClipboardText;
+-    node.classList.add("hud-msg-node");
+-
+-    node.timestamp = timestamp;
+-    this.setMessageType(node, aCategory, aSeverity);
+-
      node.appendChild(timestampNode);
      node.appendChild(iconContainer);
  
@@ -581,11 +711,36 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        node.appendChild(locationNode);
      }
  
-     node.setAttribute("id", "console-msg-" + gSequenceId());
- 
+-    node.setAttribute("id", "console-msg-" + gSequenceId());
+-
      return node;
    },
-@@ -2368,36 +2339,36 @@ WebConsoleFrame.prototype = {
+ 
+   /**
+    * Make the message body for console.log() calls.
+    *
+    * @private
+    * @param nsIDOMElement aMessage
+@@ -2347,17 +2316,17 @@ WebConsoleFrame.prototype = {
+    *        the call information that we need to display - mainly the arguments
+    *        array of the given API call.
+    */
+   _makeConsoleLogMessageBody:
+   function WCF__makeConsoleLogMessageBody(aMessage, aContainer, aBody)
+   {
+     Object.defineProperty(aMessage, "_panelOpen", {
+       get: function() {
+-        let nodes = aContainer.querySelectorAll(".hud-clickable");
++        let nodes = aContainer.getElementsByTagName("a");
+         return Array.prototype.some.call(nodes, function(aNode) {
+           return aNode._panelOpen;
+         });
+       },
+       enumerable: true,
+       configurable: false
+     });
+ 
+@@ -2368,36 +2337,34 @@ WebConsoleFrame.prototype = {
  
        let text = VariablesView.getString(aItem);
        let inspectable = !VariablesView.isPrimitive({ value: aItem });
@@ -595,8 +750,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
          if (aItem.type && aItem.type == "longString") {
 -          let ellipsis = this.document.createElement("description");
+-          ellipsis.classList.add("hud-clickable");
 +          let ellipsis = this.document.createElementNS(XHTML_NS, "a");
-           ellipsis.classList.add("hud-clickable");
            ellipsis.classList.add("longStringEllipsis");
            ellipsis.textContent = l10n.getStr("longStringEllipsis");
  
@@ -612,8 +767,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
        // For inspectable objects.
 -      let elem = this.document.createElement("description");
+-      elem.classList.add("hud-clickable");
 +      let elem = this.document.createElementNS(XHTML_NS, "a");
-       elem.classList.add("hud-clickable");
        elem.setAttribute("aria-haspopup", "true");
 -      elem.appendChild(this.document.createTextNode(text));
 +      elem.textContent = text;
@@ -625,7 +780,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }, this);
    },
  
-@@ -2464,17 +2435,17 @@ WebConsoleFrame.prototype = {
+@@ -2464,17 +2431,17 @@ WebConsoleFrame.prototype = {
     * @param number aSourceLine [optional]
     *        The line number on which the error occurred. If zero or omitted,
     *        there is no line number associated with this message.
@@ -644,7 +799,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
        displayLocation = aSourceURL;
-@@ -2485,27 +2456,22 @@ WebConsoleFrame.prototype = {
+@@ -2485,27 +2452,22 @@ WebConsoleFrame.prototype = {
        displayLocation = WebConsoleUtils.abbreviateSourceURL(fullURL);
      }
  
@@ -657,10 +812,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -
 -    // Style appropriately.
 -    locationNode.setAttribute("crop", "center");
--    locationNode.setAttribute("title", aSourceURL);
--    locationNode.setAttribute("tooltiptext", aSourceURL);
 +    locationNode.textContent = " " + displayLocation;
-+    locationNode.title = aSourceURL;
+     locationNode.setAttribute("title", aSourceURL);
+-    locationNode.setAttribute("tooltiptext", aSourceURL);
      locationNode.classList.add("webconsole-location");
 -    locationNode.classList.add("text-link");
  
@@ -675,7 +829,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
            if (win.Scratchpad.uniqueName === aSourceURL) {
              win.focus();
-@@ -2518,17 +2484,18 @@ WebConsoleFrame.prototype = {
+@@ -2518,17 +2480,18 @@ WebConsoleFrame.prototype = {
        }
        else if (locationNode.parentNode.category == CATEGORY_JS ||
                 locationNode.parentNode.category == CATEGORY_WEBDEV) {
@@ -695,7 +849,67 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Adjusts the category and severity of the given message, clearing the old
     * category and severity if present.
     *
-@@ -2623,29 +2590,27 @@ WebConsoleFrame.prototype = {
+@@ -2562,57 +2525,34 @@ WebConsoleFrame.prototype = {
+                                CATEGORY_CLASS_FRAGMENTS[aNewCategory]);
+     aMessageNode.classList.add("webconsole-msg-" +
+                                SEVERITY_CLASS_FRAGMENTS[aNewSeverity]);
+     let key = "hud-" + MESSAGE_PREFERENCE_KEYS[aNewCategory][aNewSeverity];
+     aMessageNode.classList.add(key);
+   },
+ 
+   /**
+-   * Make a link given an output element.
+-   *
+-   * @param nsIDOMNode aNode
+-   *        The message element you want to make a link for.
+-   * @param function aCallback
+-   *        The function you want invoked when the user clicks on the message
+-   *        element.
+-   */
+-  makeOutputMessageLink: function WCF_makeOutputMessageLink(aNode, aCallback)
+-  {
+-    let linkNode;
+-    if (aNode.category === CATEGORY_NETWORK) {
+-      linkNode = aNode.querySelector(".webconsole-msg-link, .webconsole-msg-url");
+-    }
+-    else {
+-      linkNode = aNode.querySelector(".webconsole-msg-body");
+-      linkNode.classList.add("hud-clickable");
+-    }
+-
+-    linkNode.setAttribute("aria-haspopup", "true");
+-
+-    this._addMessageLinkCallback(aNode, aCallback);
+-  },
+-
+-  /**
+    * Add the mouse event handlers needed to make a link.
+    *
+    * @private
+    * @param nsIDOMNode aNode
+    *        The node for which you want to add the event handlers.
+    * @param function aCallback
+    *        The function you want to invoke on click.
+    */
+   _addMessageLinkCallback: function WCF__addMessageLinkCallback(aNode, aCallback)
+   {
+     aNode.addEventListener("mousedown", function(aEvent) {
++      console.log("foobar", aEvent.type);
+       this._startX = aEvent.clientX;
+       this._startY = aEvent.clientY;
+     }, false);
+ 
+     aNode.addEventListener("click", function(aEvent) {
++      console.log("foobar", aEvent.type);
+       if (aEvent.detail != 1 || aEvent.button != 0 ||
+           (this._startX != aEvent.clientX &&
+            this._startY != aEvent.clientY)) {
+         return;
+       }
+ 
+       aCallback(this, aEvent);
+     }, false);
+@@ -2623,29 +2563,27 @@ WebConsoleFrame.prototype = {
     *
     * @param object aOptions
     *        - linkOnly:
@@ -732,7 +946,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            strings.push(item.url);
          }
          else {
-@@ -2694,17 +2659,18 @@ WebConsoleFrame.prototype = {
+@@ -2694,17 +2632,18 @@ WebConsoleFrame.prototype = {
      }
    },
  
@@ -752,7 +966,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.owner.openLink(item.url);
    },
  
-@@ -3055,17 +3021,17 @@ JSTerm.prototype = {
+@@ -3055,18 +2994,17 @@ JSTerm.prototype = {
      if (WebConsoleUtils.isActorGrip(result)) {
        node._objectActors.add(result.actor);
  
@@ -762,8 +976,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
          let body = node.querySelector(".webconsole-msg-body");
 -        let ellipsis = this.hud.document.createElement("description");
+-        ellipsis.classList.add("hud-clickable");
 +        let ellipsis = this.hud.document.createElementNS(XHTML_NS, "a");
-         ellipsis.classList.add("hud-clickable");
          ellipsis.classList.add("longStringEllipsis");
          ellipsis.textContent = l10n.getStr("longStringEllipsis");
  
@@ -771,7 +985,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          let onclick = this.hud._longStringClick.bind(this.hud, node, result,
                                                      formatter);
          this.hud._addMessageLinkCallback(ellipsis, onclick);
-@@ -3231,17 +3197,17 @@ JSTerm.prototype = {
+ 
+@@ -3231,17 +3169,17 @@ JSTerm.prototype = {
        return view;
      };
  
@@ -790,7 +1005,66 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
        iframe.flex = 1;
        iframe.setAttribute("src", VARIABLES_VIEW_URL);
-@@ -3656,17 +3622,17 @@ JSTerm.prototype = {
+@@ -3555,18 +3493,16 @@ JSTerm.prototype = {
+       if (WebConsoleUtils.isActorGrip(grip)) {
+         this.hud._releaseObject(grip.actor);
+       }
+     }
+ 
+     aCallback && aCallback(aResponse);
+   },
+ 
+-
+-
+   /**
+    * Writes a JS object to the JSTerm outputNode.
+    *
+    * @param string aOutputMessage
+    *        The message to display.
+    * @param function [aCallback]
+    *        Optional function to invoke when users click the message.
+    * @param nsIDOMNode [aNodeAfter]
+@@ -3578,29 +3514,33 @@ JSTerm.prototype = {
+    *        the UNIX epoch). If no timestamp is provided then Date.now() is
+    *        used.
+    * @return nsIDOMNode
+    *         The new message node.
+    */
+   writeOutputJS:
+   function JST_writeOutputJS(aOutputMessage, aCallback, aNodeAfter, aTimestamp)
+   {
+-    let node = this.writeOutput(aOutputMessage, CATEGORY_OUTPUT, SEVERITY_LOG,
+-                                aNodeAfter, aTimestamp);
++    let link = null;
+     if (aCallback) {
+-      this.hud.makeOutputMessageLink(node, aCallback);
+-    }
+-    return node;
++      link = this.hud.document.createElementNS(XHTML_NS, "a");
++      link.attributes["aria-haspopup"] = true;
++      link.textContent = aOutputMessage;
++      this.hud._addMessageLinkCallback(link, aCallback);
++    }
++
++    return this.writeOutput(link || aOutputMessage, CATEGORY_OUTPUT,
++                            SEVERITY_LOG, aNodeAfter, aTimestamp);
+   },
+ 
+   /**
+    * Writes a message to the HUD that originates from the interactive
+    * JavaScript console.
+    *
+-   * @param string aOutputMessage
++   * @param nsIDOMNode|string aOutputMessage
+    *        The message to display.
+    * @param number aCategory
+    *        The category of message: one of the CATEGORY_ constants.
+    * @param number aSeverity
+    *        The severity of message: one of the SEVERITY_ constants.
+    * @param nsIDOMNode [aNodeAfter]
+    *        Optional DOM node after which you want to insert the new message.
+    *        This is used when execution results need to be inserted immediately
+@@ -3656,17 +3596,17 @@ JSTerm.prototype = {
  
    /**
     * Remove all of the private messages from the Web Console output.
@@ -809,8 +1083,18 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Updates the size of the input field (command line) to fit its contents.
-@@ -4356,48 +4322,35 @@ var Utils = {
-    * element.
+@@ -4347,57 +4287,43 @@ JSTerm.prototype = {
+  */
+ var Utils = {
+   /**
+    * Flag to turn on and off scrolling.
+    */
+   scroll: true,
+ 
+   /**
+-   * Scrolls a node so that it's visible in its containing XUL "scrollbox"
+-   * element.
++   * Scrolls a node so that it's visible in its containing element.
     *
     * @param nsIDOMNode aNode
     *        The node to make visible.
@@ -863,7 +1147,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The script error you want to determine the category for.
     * @return CATEGORY_JS|CATEGORY_CSS|CATEGORY_SECURITY
-@@ -4454,60 +4407,49 @@ var Utils = {
+@@ -4454,60 +4380,49 @@ var Utils = {
   */
  function CommandController(aWebConsole)
  {
@@ -928,7 +1212,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        case "cmd_fontSizeReset":
        case "cmd_selectAll":
        case "cmd_find":
-@@ -4516,19 +4458,16 @@ CommandController.prototype = {
+@@ -4516,19 +4431,16 @@ CommandController.prototype = {
          return this.owner.owner._browserConsole;
      }
      return false;
@@ -948,7 +1232,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          break;
        case "consoleCmd_clearOutput":
          this.owner.jsterm.clearOutput(true);
-@@ -4999,47 +4938,53 @@ function ConsoleContextMenu(aOwner)
+@@ -4999,47 +4911,53 @@ function ConsoleContextMenu(aOwner)
  {
    this.owner = aOwner;
    this.popup = this.owner.document.getElementById("output-contextmenu");
@@ -1003,7 +1287,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      }
 +    }
 +
-+    metadata.selectionType = (selectedItems.length > 1) ? "multiple" : "single";
++    metadata.selectionType = selectedItems.length > 1 ? "multiple" : "single";
  
      let selection = metadata.selection;
      for (let item of selectedItems) {
@@ -1012,10 +1296,76 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            selection.add("network");
            break;
          case CATEGORY_CSS:
+@@ -5093,11 +5011,12 @@ ConsoleContextMenu.prototype = {
+   /**
+    * Destroy the ConsoleContextMenu object instance.
+    */
+   destroy: function CCM_destroy()
+   {
+     this.popup.removeEventListener("popupshowing", this.build);
+     this.popup = null;
+     this.owner = null;
++    this.lastClickedMessage = null;
+   },
+ };
+ 
 diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webconsole/webconsole.xul
 --- a/browser/devtools/webconsole/webconsole.xul
 +++ b/browser/devtools/webconsole/webconsole.xul
-@@ -158,19 +158,22 @@ function goUpdateConsoleCommands() {
+@@ -28,17 +28,17 @@ function goUpdateConsoleCommands() {
+   goUpdateCommand("consoleCmd_copyURL");
+ }
+   // ]]></script>
+ 
+   <commandset id="editMenuCommands"/>
+ 
+   <commandset id="consoleCommands"
+               commandupdater="true"
+-              events="richlistbox-select"
++              events="focus,select"
+               oncommandupdate="goUpdateConsoleCommands();">
+     <command id="consoleCmd_openURL"
+              oncommand="goDoCommand('consoleCmd_openURL');"/>
+     <command id="consoleCmd_copyURL"
+              oncommand="goDoCommand('consoleCmd_copyURL');"/>
+     <command id="consoleCmd_clearOutput"
+              oncommand="goDoCommand('consoleCmd_clearOutput');"/>
+     <command id="cmd_find" oncommand="goDoCommand('cmd_find');"/>
+@@ -57,30 +57,32 @@ function goUpdateConsoleCommands() {
+     <key key="&fullZoomResetCmd.commandkey2;" command="cmd_fullZoomReset" modifiers="accel"/>
+     <key key="&findCmd.key;" command="cmd_find" modifiers="accel"/>
+     <key key="&clearOutputCmd.key;" command="consoleCmd_clearOutput" modifiers="accel"/>
+     <key key="&closeCmd.key;" command="cmd_close" modifiers="accel"/>
+   </keyset>
+   <keyset id="editMenuKeys"/>
+ 
+   <popupset id="mainPopupSet">
+-    <menupopup id="output-contextmenu">
++    <menupopup id="output-contextmenu" onpopupshowing="goUpdateGlobalEditMenuItems()">
+       <menuitem id="saveBodiesContextMenu" type="checkbox" label="&saveBodies.label;"
+                 accesskey="&saveBodies.accesskey;"/>
+       <menuitem id="menu_openURL" label="&openURL.label;"
+                 accesskey="&openURL.accesskey;" command="consoleCmd_openURL"
+                 selection="network" selectionType="single"/>
+       <menuitem id="menu_copyURL" label="&copyURLCmd.label;"
+                 accesskey="&copyURLCmd.accesskey;" command="consoleCmd_copyURL"
+                 selection="network" selectionType="single"/>
+       <menuitem id="cMenu_copy"/>
+       <menuitem id="cMenu_selectAll"/>
+     </menupopup>
+   </popupset>
+ 
++  <tooltip id="aHTMLTooltip" page="true"/>
++
+   <box class="hud-outer-wrapper devtools-responsive-container" flex="1">
+     <vbox class="hud-console-wrapper" flex="1">
+       <toolbar class="hud-console-filter-toolbar devtools-toolbar" mode="full">
+         <toolbarbutton label="&btnPageNet.label;" type="menu-button"
+                        category="net" class="devtools-toolbarbutton webconsole-filter-button"
+                        tooltiptext="&btnPageNet.tooltip;"
+                        accesskeyMacOSX="&btnPageNet.accesskeyMacOSX;"
+                        accesskey="&btnPageNet.accesskey;"
+@@ -158,19 +160,20 @@ function goUpdateConsoleCommands() {
                         tabindex="8"/>
  
          <spacer flex="1"/>
@@ -1027,9 +1377,7 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
 -      <richlistbox class="hud-output-node" orient="vertical" flex="1"
 -                   seltype="multiple" context="output-contextmenu"
 -                   style="direction:ltr;" tabindex="1"/>
-+      <!-- FIXME  check context menu -->
-+      <!-- FIXME  check copy/paste -->
-+      <hbox id="output-wrapper" flex="1" context="output-contextmenu">
++      <hbox id="output-wrapper" flex="1" context="output-contextmenu" tooltip="aHTMLTooltip">
 +        <div xmlns="http://www.w3.org/1999/xhtml"
 +             class="hud-output-node" tabindex="1"/>
 +      </hbox>
@@ -1041,61 +1389,88 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
            <textbox class="jsterm-input-node" multiline="true" rows="1" tabindex="0"/>
          </stack>
        </hbox>
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -178,8 +178,13 @@ connectionTimeout=Connection timeout. Ch
+ 
+ # LOCALIZATION NOTE (propertiesFilterPlaceholder): this is the text that
+ # appears in the filter text box for the properties view container.
+ propertiesFilterPlaceholder=Filter properties
+ 
+ # LOCALIZATION NOTE (emptyPropertiesList): the text that is displayed in the
+ # properties pane when there are no properties to display.
+ emptyPropertiesList=No properties to display
++
++# LOCALIZATION NOTE (messageRepeats.tooltip): the tooltip text that is displayed
++# when you hover the red bubble that shows how many times a message is repeated
++# in the web console output.
++messageRepeats.tooltip=%S repeats
 diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
 --- a/browser/themes/shared/devtools/webconsole.inc.css
 +++ b/browser/themes/shared/devtools/webconsole.inc.css
-@@ -1,107 +1,140 @@
+@@ -1,107 +1,138 @@
  /* This Source Code Form is subject to the terms of the Mozilla Public
   * License, v. 2.0. If a copy of the MPL was not distributed with this
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  /* General output styles */
  
+-.webconsole-timestamp {
+-  color: GrayText;
+-  margin-top: 0;
+-  margin-bottom: 0;
+-  font-family: monospace;
+-}
+-
+-.hud-msg-node {
+-  list-style-image: url(chrome://browser/skin/devtools/webconsole.png);
+-  -moz-image-region: rect(0, 1px, 0, 0);
+-}
+-
+-.webconsole-msg-icon {
+-  margin: 3px 4px;
+-  width: 8px;
+-  height: 8px;
+-}
+-
+-.hud-clickable {
++/* FIXME: links focus, platform-specific styles */
 +a {
 +  -moz-user-focus: normal;
 +  -moz-user-input: enabled;
-+  cursor: pointer;
-+}
-+
+   cursor: pointer;
+   text-decoration: underline;
+ }
+ 
 +a:focus {
 +  outline: 1px dashed gray;
 +}
 +
- .webconsole-timestamp {
++.webconsole-timestamp {
 +  flex: 0 0 auto;
-   color: GrayText;
--  margin-top: 0;
--  margin-bottom: 0;
++  color: GrayText;
 +  margin: 4px 0;
-   font-family: monospace;
++  font-family: monospace;
 +  font-size: 0.9em;
- }
- 
- .hud-msg-node {
--  list-style-image: url(chrome://browser/skin/devtools/webconsole.png);
--  -moz-image-region: rect(0, 1px, 0, 0);
++}
++
++.hud-msg-node {
 +  display: flex;
 +  flex: 0 0 auto;
 +  -moz-margin-start: 6px;
 +  -moz-margin-end: 8px;
- }
- 
- .webconsole-msg-icon {
--  margin: 3px 4px;
++}
++
++.webconsole-msg-icon {
 +  background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 0, 1, 0, 0) no-repeat;
 +  background-position: center 8px;
 +  flex: 0 0 auto;
 +  margin: 0 6px;
 +  padding: 0 4px;
-   width: 8px;
--  height: 8px;
- }
- 
- .hud-clickable {
-   cursor: pointer;
-   text-decoration: underline;
- }
- 
++  width: 8px;
++}
++
  .webconsole-msg-body {
 -  margin-top: 0;
 -  margin-bottom: 3px;
@@ -1111,10 +1486,11 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 -}
 -
  .webconsole-msg-url {
-   margin: 0 6px;
+-  margin: 0 6px;
 +  flex: 1 1 auto;
 +  /* Make sure the URL is very small initially, let flex change width as needed. */
 +  width: 1px;
++  min-width: 5em;
 +  white-space: nowrap;
 +  overflow: hidden;
 +  text-overflow: ellipsis;
@@ -1154,6 +1530,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    text-align: end;
 +  color: -moz-nativehyperlinktext;
 +  text-overflow: ellipsis;
++  text-decoration: none;
 +  overflow: hidden;
 +  white-space: nowrap;
 +}
@@ -1215,7 +1592,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
  }
  
  .hidden-message {
-@@ -133,95 +166,103 @@
+@@ -133,95 +164,108 @@
  }
  
  /* Network styles */
@@ -1239,8 +1616,13 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 +  display: flex;
 +}
 +
++.webconsole-msg-method {
++  flex: 0 0 auto;
++}
++
 +.webconsole-msg-status {
 +  flex: 0 0 auto;
++  -moz-margin-start: 6px;
  }
  
  /* CSS styles */
@@ -1347,7 +1729,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    border: none;
    padding: 0 0 0 16px;
    -moz-appearance: none;
-@@ -235,53 +276,59 @@
+@@ -235,53 +279,61 @@
            .jsterm-complete-node) > .textbox-input-box > .textbox-textarea {
    overflow-x: hidden;
  }
@@ -1406,15 +1788,17 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    background-size: 100% 2px;
 -  -moz-margin-start: 3px;
 -  -moz-margin-end: 6px;
-   font-size: 0.9em;
 +  margin-top: 6px;
 +  margin-bottom: 6px;
+   font-size: 0.9em;
  }
  
  .navigation-marker .url {
    background: #fff;
 -  -moz-padding-end: 6px;
 +  -moz-padding-end: 9px;
++  text-decoration: none;
++  cursor: normal;
  }
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
