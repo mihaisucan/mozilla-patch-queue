@@ -1,0 +1,274 @@
+# HG changeset patch
+# Parent 60e5fd5a379caaf2cb6dd42e701cc98a78797ded
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1373991062 -10800
+
+Bug 888407 - Fix for intermittent browser_console_iframe_messages.js | Test timed out, failed to match rule: iframe 1; r=me
+
+diff --git a/browser/devtools/webconsole/test/browser_console_iframe_messages.js b/browser/devtools/webconsole/test/browser_console_iframe_messages.js
+--- a/browser/devtools/webconsole/test/browser_console_iframe_messages.js
++++ b/browser/devtools/webconsole/test/browser_console_iframe_messages.js
+@@ -3,97 +3,105 @@
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+ // Check that cached messages from nested iframes are displayed in the
+ // Web/Browser Console.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-consoleiframes.html";
+ 
++let expectedMessages = [
++  {
++    text: "main file",
++    category: CATEGORY_WEBDEV,
++    severity: SEVERITY_LOG,
++  },
++  {
++    text: "blah",
++    category: CATEGORY_JS,
++    severity: SEVERITY_ERROR
++  },
++  {
++    text: "iframe 2",
++    category: CATEGORY_WEBDEV,
++    severity: SEVERITY_LOG
++  },
++  {
++    text: "iframe 3",
++    category: CATEGORY_WEBDEV,
++    severity: SEVERITY_LOG
++  }
++];
++
++// "iframe 1" console messages can be coalesced into one if they follow each
++// other in the sequence of messages (depending on timing). If they do not, then
++// they will be displayed in the console output independently, as separate
++// messages. This why we need to match any of the following two rules.
++let expectedMessagesAny = [
++  {
++    name: "iframe 1 (count: 2)",
++    text: "iframe 1",
++    category: CATEGORY_WEBDEV,
++    severity: SEVERITY_LOG,
++    count: 2
++  },
++  {
++    name: "iframe 1 (repeats: 2)",
++    text: "iframe 1",
++    category: CATEGORY_WEBDEV,
++    severity: SEVERITY_LOG,
++    repeats: 2
++  },
++];
++
+ function test()
+ {
+   expectUncaughtException();
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+-
+-    // Test for cached nsIConsoleMessages.
+-    Services.console.logStringMessage("test1 for bug859756");
+-
+     info("open web console");
+     openConsole(null, consoleOpened);
+   }, true);
+ }
+ 
+ function consoleOpened(hud)
+ {
+   ok(hud, "web console opened");
+ 
+   waitForMessages({
+     webconsole: hud,
+-    messages: [
+-      {
+-        text: "main file",
+-        category: CATEGORY_WEBDEV,
+-        severity: SEVERITY_LOG,
+-      },
+-      {
+-        text: "blah",
+-        category: CATEGORY_JS,
+-        severity: SEVERITY_ERROR
+-      },
+-      {
+-        text: "iframe 1",
+-        category: CATEGORY_WEBDEV,
+-        severity: SEVERITY_LOG,
+-        count: 2
+-      },
+-      {
+-        text: "iframe 2",
+-        category: CATEGORY_WEBDEV,
+-        severity: SEVERITY_LOG
+-      }
+-    ],
++    messages: expectedMessages,
+   }).then(() => {
+-    closeConsole(null, onWebConsoleClose);
++    info("first messages matched");
++    waitForMessages({
++      webconsole: hud,
++      messages: expectedMessagesAny,
++      matchCondition: "any",
++    }).then(() => {
++      closeConsole(null, onWebConsoleClose);
++    });
+   });
+ }
+ 
+ function onWebConsoleClose()
+ {
+   info("web console closed");
+   HUDConsoleUI.toggleBrowserConsole().then(onBrowserConsoleOpen);
+ }
+ 
+ function onBrowserConsoleOpen(hud)
+ {
+   ok(hud, "browser console opened");
+-  Services.console.logStringMessage("test2 for bug859756");
+-
+   waitForMessages({
+     webconsole: hud,
+-    messages: [
+-      {
+-        text: "main file",
+-        category: CATEGORY_WEBDEV,
+-        severity: SEVERITY_LOG,
+-      },      
+-      {
+-        text: "blah",
+-        category: CATEGORY_JS,
+-        severity: SEVERITY_ERROR
+-      },
+-      {
+-        text: "iframe 1",
+-        category: CATEGORY_WEBDEV,
+-        severity: SEVERITY_LOG,
+-        count: 2
+-      },
+-      {
+-        text: "iframe 2",
+-        category: CATEGORY_WEBDEV,
+-        severity: SEVERITY_LOG
+-      }
+-    ],
++    messages: expectedMessages,
+   }).then(() => {
+-    closeConsole(null, finishTest);
++    info("first messages matched");
++    waitForMessages({
++      webconsole: hud,
++      messages: expectedMessagesAny,
++      matchCondition: "any",
++    }).then(() => {
++      closeConsole(null, finishTest);
++    });
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -850,16 +850,22 @@ function getMessageElementText(aElement)
+ }
+ 
+ /**
+  * Wait for messages in the Web Console output.
+  *
+  * @param object aOptions
+  *        Options for what you want to wait for:
+  *        - webconsole: the webconsole instance you work with.
++ *        - matchCondition: "any" or "all". Default: "all". The promise
++ *        returned by this function resolves when all of the messages are
++ *        matched, if the |matchCondition| is "all". If you set the condition to
++ *        "any" then the promise is resolved by any message rule that matches,
++ *        irrespective of order - waiting for messages stops whenever any rule
++ *        matches.
+  *        - messages: an array of objects that tells which messages to wait for.
+  *        Properties:
+  *            - text: string or RegExp to match the textContent of each new
+  *            message.
+  *            - noText: string or RegExp that must not match in the message
+  *            textContent.
+  *            - repeats: the number of message repeats, as displayed by the Web
+  *            Console.
+@@ -900,16 +906,17 @@ function getMessageElementText(aElement)
+ function waitForMessages(aOptions)
+ {
+   gPendingOutputTest++;
+   let webconsole = aOptions.webconsole;
+   let rules = WebConsoleUtils.cloneObject(aOptions.messages, true);
+   let rulesMatched = 0;
+   let listenerAdded = false;
+   let deferred = promise.defer();
++  aOptions.matchCondition = aOptions.matchCondition || "all";
+ 
+   function checkText(aRule, aText)
+   {
+     let result;
+     if (typeof aRule == "string") {
+       result = aText.indexOf(aRule) > -1;
+     }
+     else if (aRule instanceof RegExp) {
+@@ -1149,32 +1156,38 @@ function waitForMessages(aOptions)
+           if (maybeDone()) {
+             return;
+           }
+         }
+       }
+     }
+   }
+ 
++  function allRulesMatched()
++  {
++    return aOptions.matchCondition == "all" && rulesMatched == rules.length ||
++           aOptions.matchCondition == "any" && rulesMatched > 0;
++  }
++
+   function maybeDone()
+   {
+-    if (rulesMatched == rules.length) {
++    if (allRulesMatched()) {
+       if (listenerAdded) {
+         webconsole.ui.off("messages-added", onMessagesAdded);
+         webconsole.ui.off("messages-updated", onMessagesAdded);
+       }
+       gPendingOutputTest--;
+       deferred.resolve(rules);
+       return true;
+     }
+     return false;
+   }
+ 
+   function testCleanup() {
+-    if (rulesMatched == rules.length) {
++    if (allRulesMatched()) {
+       return;
+     }
+ 
+     if (webconsole.ui) {
+       webconsole.ui.off("messages-added", onMessagesAdded);
+     }
+ 
+     for (let rule of rules) {
+@@ -1193,17 +1206,17 @@ function waitForMessages(aOptions)
+   {
+     console.log("error occured during rule " + displayRule(aRule));
+     console.log("while checking the following message");
+     dumpMessageElement(aElement);
+   }
+ 
+   executeSoon(() => {
+     onMessagesAdded("messages-added", webconsole.outputNode.childNodes);
+-    if (rulesMatched != rules.length) {
++    if (!allRulesMatched()) {
+       listenerAdded = true;
+       registerCleanupFunction(testCleanup);
+       webconsole.ui.on("messages-added", onMessagesAdded);
+       webconsole.ui.on("messages-updated", onMessagesAdded);
+     }
+   });
+ 
+   return deferred.promise;
