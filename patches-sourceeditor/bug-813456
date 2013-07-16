@@ -1,10 +1,50 @@
 # HG changeset patch
-# Parent 02524d3d9d8acbcc524da38ba21590905424d0dd
+# Parent 60e5fd5a379caaf2cb6dd42e701cc98a78797ded
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1361212979 -7200
+# Date 1374007233 -10800
 
 Bug 813456 - Display visual cues to make setting breakpoints more discoverable; r=robcee
 
+diff --git a/browser/devtools/debugger/debugger.xul b/browser/devtools/debugger/debugger.xul
+--- a/browser/devtools/debugger/debugger.xul
++++ b/browser/devtools/debugger/debugger.xul
+@@ -175,16 +175,17 @@
+                 command="toggleShowVariablesFilterBox"/>
+       <menuitem id="show-original-source"
+                 type="checkbox"
+                 label="&debuggerUI.showOriginalSource;"
+                 accesskey="&debuggerUI.showOriginalSource.key;"
+                 command="toggleShowOriginalSource"/>
+     </menupopup>
+   </popupset>
++  <tooltip id="aHTMLTooltip" page="true"/>
+ 
+   <keyset id="debuggerKeys">
+     <key id="nextSourceKey"
+          keycode="VK_DOWN"
+          modifiers="accel alt"
+          command="nextSourceCommand"/>
+     <key id="prevSourceKey"
+          keycode="VK_UP"
+@@ -288,17 +289,17 @@
+     <vbox flex="1">
+       <scrollbox id="globalsearch" orient="vertical" hidden="true"/>
+       <splitter class="devtools-horizontal-splitter" hidden="true"/>
+       <hbox flex="1">
+         <vbox id="sources-pane">
+           <vbox id="sources" flex="1"/>
+         </vbox>
+         <splitter class="devtools-side-splitter"/>
+-        <vbox id="editor" flex="1"/>
++        <vbox id="editor" flex="1" tooltip="aHTMLTooltip"/>
+         <splitter class="devtools-side-splitter"/>
+         <vbox id="instruments-pane" hidden="true">
+           <vbox id="expressions"/>
+           <splitter class="devtools-horizontal-splitter"/>
+           <vbox id="variables" flex="1"/>
+         </vbox>
+       </hbox>
+     </vbox>
 diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/devtools/sourceeditor/source-editor-orion.jsm
 --- a/browser/devtools/sourceeditor/source-editor-orion.jsm
 +++ b/browser/devtools/sourceeditor/source-editor-orion.jsm
@@ -26,7 +66,7 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
  /**
   * Default key bindings in the Orion editor.
   */
-@@ -161,16 +162,18 @@ this.SourceEditor = function SourceEdito
+@@ -163,16 +164,18 @@ this.SourceEditor = function SourceEdito
  
    this._onOrionSelection = this._onOrionSelection.bind(this);
    this._onTextChanged = this._onTextChanged.bind(this);
@@ -45,7 +85,25 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
    _model: null,
    _undoStack: null,
    _linesRuler: null,
-@@ -324,32 +327,37 @@ SourceEditor.prototype = {
+@@ -233,16 +236,17 @@ SourceEditor.prototype = {
+     let onIframeLoad = (function() {
+       this._iframe.removeEventListener("load", onIframeLoad, true);
+       this._onIframeLoad();
+     }).bind(this);
+ 
+     this._iframe.addEventListener("load", onIframeLoad, true);
+ 
+     this._iframe.setAttribute("src", ORION_IFRAME);
++    this._iframe.setAttribute("tooltip", "aHTMLTooltip");
+ 
+     aElement.appendChild(this._iframe);
+     this.parentElement = aElement;
+ 
+     this._config = {};
+     for (let key in SourceEditor.DEFAULTS) {
+       this._config[key] = key in aConfig ?
+                           aConfig[key] :
+@@ -326,32 +330,37 @@ SourceEditor.prototype = {
      let AnnotationModel = window.require("orion/textview/annotations").AnnotationModel;
  
      this._annotationModel = new AnnotationModel(this._model);
@@ -83,7 +141,25 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
          {styleClass: "ruler overview"});
        this._overviewRuler.onClick = this._overviewRulerClick.bind(this);
  
-@@ -945,16 +953,75 @@ SourceEditor.prototype = {
+@@ -887,16 +896,17 @@ SourceEditor.prototype = {
+ 
+     let styler = new AnnotationStyler(this._view, this._annotationModel);
+     this._annotationStyler = styler;
+ 
+     styler.addAnnotationType(ORION_ANNOTATION_TYPES.matchingBracket);
+     styler.addAnnotationType(ORION_ANNOTATION_TYPES.currentBracket);
+     styler.addAnnotationType(ORION_ANNOTATION_TYPES.task);
+     styler.addAnnotationType(ORION_ANNOTATION_TYPES.debugLocation);
++    styler.addAnnotationType(ORION_ANNOTATION_TYPES.tempBreakpoint);
+ 
+     if (this._config.highlightCurrentLine) {
+       styler.addAnnotationType(ORION_ANNOTATION_TYPES.currentLine);
+     }
+   },
+ 
+   /**
+    * Retrieve the list of Orion Annotations filtered by type for the given text range.
+@@ -947,16 +957,77 @@ SourceEditor.prototype = {
      if (annotations.length > 0) {
        this.removeBreakpoint(aLineIndex);
      } else {
@@ -128,7 +204,9 @@ diff --git a/browser/devtools/sourceeditor/source-editor-orion.jsm b/browser/dev
 +      end: lineEnd,
 +      title: this._strClickToAddBreakpoint,
 +      style: {styleClass: "annotation tempBreakpoint"},
-+      html: "<div class='annotationHTML tempBreakpoint'></div>",
++      lineStyle: {styleClass: "annotationLine lineRulerHover"},
++      html: "<div class='annotationHTML tempBreakpoint' title='" +
++            this._strClickToAddBreakpoint + "'></div>",
 +    };
 +
 +    this._annotationModel.addAnnotation(annotation);
@@ -184,9 +262,9 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/sourceeditor.properti
  # LOCALIZATION NOTE  (annotation.debugLocation.title): This is the text shown in
  # a tooltip displayed in any of the editor gutters when the user hovers the
  # current debugger location. The debugger can pause the JavaScript execution at
-diff --git a/browser/themes/gnomestripe/devtools/orion.css b/browser/themes/gnomestripe/devtools/orion.css
---- a/browser/themes/gnomestripe/devtools/orion.css
-+++ b/browser/themes/gnomestripe/devtools/orion.css
+diff --git a/browser/themes/linux/devtools/orion.css b/browser/themes/linux/devtools/orion.css
+--- a/browser/themes/linux/devtools/orion.css
++++ b/browser/themes/linux/devtools/orion.css
 @@ -56,26 +56,32 @@
    background-repeat: no-repeat;
  }
@@ -241,9 +319,31 @@ diff --git a/browser/themes/gnomestripe/devtools/orion.css b/browser/themes/gnom
    border: 1px solid green;
  }
  .annotationOverview.currentBracket {
-diff --git a/browser/themes/pinstripe/devtools/orion.css b/browser/themes/pinstripe/devtools/orion.css
---- a/browser/themes/pinstripe/devtools/orion.css
-+++ b/browser/themes/pinstripe/devtools/orion.css
+@@ -167,16 +174,21 @@
+   background: hsl(208, 93%, 94%);
+ }
+ 
+ .readonly .line_caret,
+ .readonly .annotationLine.currentLine {
+   background: hsl(208, 80%, 90%);
+ }
+ 
++/* Styling used for lines when you hover the line in the ruler */
++.annotationLine.lineRulerHover {
++  background: hsl(208, 90%, 95%);
++}
++
+ /* Styling for html syntax highlighting */
+ .entity-name-tag {
+   color: hsl(208,48%,40%); /* blue */
+ }
+ 
+ .entity-other-attribute-name {
+   color: hsl(208,48%,40%); /* blue */
+ }
+diff --git a/browser/themes/osx/devtools/orion.css b/browser/themes/osx/devtools/orion.css
+--- a/browser/themes/osx/devtools/orion.css
++++ b/browser/themes/osx/devtools/orion.css
 @@ -56,26 +56,32 @@
    background-repeat: no-repeat;
  }
@@ -298,9 +398,9 @@ diff --git a/browser/themes/pinstripe/devtools/orion.css b/browser/themes/pinstr
    border: 1px solid green;
  }
  .annotationOverview.currentBracket {
-diff --git a/browser/themes/winstripe/devtools/orion.css b/browser/themes/winstripe/devtools/orion.css
---- a/browser/themes/winstripe/devtools/orion.css
-+++ b/browser/themes/winstripe/devtools/orion.css
+diff --git a/browser/themes/windows/devtools/orion.css b/browser/themes/windows/devtools/orion.css
+--- a/browser/themes/windows/devtools/orion.css
++++ b/browser/themes/windows/devtools/orion.css
 @@ -56,26 +56,32 @@
    background-repeat: no-repeat;
  }
