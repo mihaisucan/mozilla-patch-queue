@@ -1,0 +1,131 @@
+# HG changeset patch
+# Parent 78442a887a33e04ce1a146862836fe777d9e51e8
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1374092622 -10800
+
+Bug 760876 - Part 4: fix broken tests; r=robcee
+
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -122,16 +122,20 @@ ConsoleOutput.prototype = {
+   {
+     let selection = this.window.getSelection();
+     if (selection.isCollapsed) {
+       return [];
+     }
+ 
+     let anchor = this.getMessageForElement(selection.anchorNode);
+     let focus = this.getMessageForElement(selection.focusNode);
++    if (!anchor || !focus) {
++      return [];
++    }
++
+     let start, end;
+     if (anchor.timestamp > focus.timestamp) {
+       start = focus;
+       end = anchor;
+     } else {
+       start = anchor;
+       end = focus;
+     }
+@@ -175,16 +179,30 @@ ConsoleOutput.prototype = {
+     let selection = this.window.getSelection();
+     selection.removeAllRanges();
+     let range = this.document.createRange();
+     range.selectNode(this.element);
+     selection.addRange(range);
+   },
+ 
+   /**
++   * Add a message to the selection.
++   *
++   * @param DOMElement elem
++   *        The message element to select.
++   */
++  selectMessage: function(elem)
++  {
++    let selection = this.window.getSelection();
++    let range = this.document.createRange();
++    range.selectNode(elem);
++    selection.addRange(range);
++  },
++
++  /**
+    * Destroy this ConsoleOutput instance.
+    */
+   destroy: function()
+   {
+     this.owner = null;
+   },
+ }; // ConsoleOutput.prototype
+ 
+diff --git a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
+--- a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
++++ b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
+@@ -51,24 +51,24 @@ function testWithoutNetActivity() {
+       category: CATEGORY_WEBDEV,
+       severity: SEVERITY_LOG,
+     }],
+   }).then(onConsoleMessage);
+ }
+ 
+ function onConsoleMessage(aResults) {
+   output.focus();
+-  output.selectedItem = [...aResults[0].matched][0];
++  let message = [...aResults[0].matched][0];
+ 
+   goUpdateCommand(COMMAND_NAME);
+   ok(!isEnabled(), COMMAND_NAME + "is disabled");
+ 
+   // Test that the "Copy Link Location" menu item is hidden for non-network
+   // messages.
+-  waitForContextMenu(menu, output.selectedItem, () => {
++  waitForContextMenu(menu, message, () => {
+     let isHidden = menu.querySelector(CONTEXT_MENU_ID).hidden;
+     ok(isHidden, CONTEXT_MENU_ID + " is hidden");
+   }, testWithNetActivity);
+ }
+ 
+ function testWithNetActivity() {
+   HUD.jsterm.clearOutput();
+   content.location.reload(); // Reloading will produce network logging
+@@ -83,25 +83,28 @@ function testWithNetActivity() {
+       category: CATEGORY_NETWORK,
+       severity: SEVERITY_LOG,
+     }],
+   }).then(onNetworkMessage);
+ }
+ 
+ function onNetworkMessage(aResults) {
+   output.focus();
+-  output.selectedItem = [...aResults[0].matched][0];
++  let message = [...aResults[0].matched][0];
++  HUD.ui.window.getSelection().removeAllRanges();
++  HUD.ui.output.selectMessage(message);
+ 
+   goUpdateCommand(COMMAND_NAME);
+   ok(isEnabled(), COMMAND_NAME + " is enabled");
+ 
+-  waitForClipboard(output.selectedItem.url, () => goDoCommand(COMMAND_NAME),
++  waitForClipboard(message.url, () => goDoCommand(COMMAND_NAME),
+                    testMenuWithNetActivity, testMenuWithNetActivity);
++
++  function testMenuWithNetActivity() {
++    // Test that the "Copy Link Location" menu item is visible for network-related
++    // messages.
++    waitForContextMenu(menu, message, () => {
++      let isVisible = !menu.querySelector(CONTEXT_MENU_ID).hidden;
++      ok(isVisible, CONTEXT_MENU_ID + " is visible");
++    }, finishTest);
++  }
+ }
+ 
+-function testMenuWithNetActivity() {
+-  // Test that the "Copy Link Location" menu item is visible for network-related
+-  // messages.
+-  waitForContextMenu(menu, output.selectedItem, () => {
+-    let isVisible = !menu.querySelector(CONTEXT_MENU_ID).hidden;
+-    ok(isVisible, CONTEXT_MENU_ID + " is visible");
+-  }, finishTest);
+-}
