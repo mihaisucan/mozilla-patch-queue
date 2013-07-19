@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 8ded1189256ad782a89af7d6232d3abc4df6abf6
+# Parent c78d2ceb72e7b71c097aa7dde1742a9321691d8c
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1373660217 -10800
+# Date 1374269169 -10800
 
 Bug 793996 - Create reload marker in the Web Console; r=robcee
 
@@ -9,7 +9,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -0,0 +1,343 @@
+@@ -0,0 +1,310 @@
 +/* vim: set ts=2 et sw=2 tw=80: */
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -81,14 +81,13 @@ new file mode 100644
 +  /**
 +   * Add a message to output.
 +   *
-+   * @param object message...
++   * @param object ...args
 +   *        Any number of Message objects.
 +   * @return this
 +   */
-+  addMessage: function()
++  addMessage: function(...args)
 +  {
-+    for (let i = 0; i < arguments.length; i++) {
-+      let msg = arguments[i].init(this);
++    for (let msg of args) {
 +      this.owner.outputMessage(msg._categoryCompat, this._onFlushOutputMessage,
 +                               [msg]);
 +    }
@@ -266,7 +265,7 @@ new file mode 100644
 +  this.timestamp = timestamp;
 +};
 +
-+Messages.NavigationMarker.prototype = extend(Messages.BaseMessage.prototype,
++Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
 +{
 +  /**
 +   * Message timestamp.
@@ -303,7 +302,8 @@ new file mode 100644
 +    urlnode.textContent = url;
 +
 +    // Add the text in the xul:description.webconsole-msg-body element.
-+    this.$render().element.firstChild.appendChild(urlnode);
++    let render = Messages.BaseMessage.prototype.render.bind(this);
++    render().element.firstChild.appendChild(urlnode);
 +    this.element.classList.add("navigation-marker");
 +    this.element.url = this._url;
 +
@@ -311,39 +311,6 @@ new file mode 100644
 +  },
 +}); // Messages.NavigationMarker.prototype
 +
-+
-+/**
-+ * Extend a given object with additional properties and methods. This function
-+ * makes methods from the base object available in the new object, with a "$"
-+ * prefix.
-+ *
-+ * @see Heritage.extend()
-+ * @param object proto
-+ *        Object to extend.
-+ * @param object props
-+ *        Properties and methods at add.
-+ * @return object
-+ *         The new object; proto+props.
-+ */
-+function extend(proto, props)
-+{
-+  let result = Heritage.extend(proto, props);
-+
-+  for (let key of Object.getOwnPropertyNames(props)) {
-+    if (!(key in proto)) {
-+      continue;
-+    }
-+
-+    let fn = proto[key];
-+    if (typeof fn != "function") {
-+      continue;
-+    }
-+
-+    result["$" + key] = fn;
-+  }
-+
-+  return result;
-+}
 +
 +function gSequenceId()
 +{
@@ -392,6 +359,92 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
  	browser_webconsole_bug_804845_ctrl_key_nav.js \
          $(NULL)
  endif
+diff --git a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js b/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js
+--- a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js
++++ b/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js
+@@ -1,66 +1,76 @@
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+ // Check that Ctrl-W closes the Browser Console and that Ctrl-W closes the
+ // current tab when using the Web Console - bug 871156.
+ 
++// FIXME
+ function test()
+ {
+   const TEST_URI = "data:text/html;charset=utf8,<title>bug871156</title>\n" +
+                    "<p>hello world";
+-  addTab(TEST_URI);
++  addTab("about:blank");
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, consoleOpened);
++
++    addTab(TEST_URI);
++    browser.addEventListener("load", function onLoad2() {
++      browser.removeEventListener("load", onLoad2, true);
++      openConsole(null, consoleOpened);
++    }, true);
+   }, true);
+ 
+   function consoleOpened(hud)
+   {
+     ok(hud, "Web Console opened");
+ 
+     let tabClosed = false, toolboxDestroyed = false;
+ 
+     gBrowser.tabContainer.addEventListener("TabClose", function onTabClose() {
+       gBrowser.tabContainer.removeEventListener("TabClose", onTabClose);
+ 
+       ok(true, "tab closed");
+ 
+       tabClosed = true;
+       if (toolboxDestroyed) {
+-        testBrowserConsole();
++        executeSoon(testBrowserConsole);
+       }
+     });
+ 
+     let toolbox = gDevTools.getToolbox(hud.target);
+     toolbox.once("destroyed", () => {
+       ok(true, "toolbox destroyed");
+ 
+       toolboxDestroyed = true;
+       if (tabClosed) {
+-        testBrowserConsole();
++        executeSoon(testBrowserConsole);
+       }
+     });
+ 
+-    EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
++    executeSoon(() => {
++      EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
++    });
+   }
+ 
+   function testBrowserConsole()
+   {
+     info("test the Browser Console");
+ 
+     HUDService.toggleBrowserConsole().then((hud) => {
+       ok(hud, "Browser Console opened");
+ 
+       Services.obs.addObserver(function onDestroy() {
+         Services.obs.removeObserver(onDestroy, "web-console-destroyed");
+         ok(true, "the Browser Console closed");
+ 
+         executeSoon(finishTest);
+       }, "web-console-destroyed", false);
+ 
+-      EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
++      executeSoon(() => {
++        EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
++      });
+     });
+   }
+ }
 diff --git a/browser/devtools/webconsole/test/browser_console_navigation_marker.js b/browser/devtools/webconsole/test/browser_console_navigation_marker.js
 new file mode 100644
 --- /dev/null
@@ -631,7 +684,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  // The various categories of messages.
  const CATEGORY_NETWORK = 0;
  const CATEGORY_CSS = 1;
-@@ -873,16 +874,19 @@ function getMessageElementText(aElement)
+@@ -879,16 +880,19 @@ function getMessageElementText(aElement)
   *            and/or line number in the trace message.
   *            - consoleTime: string that matches a console.time() timer name.
   *            Provide this if you want to match a console.time() message.
@@ -651,7 +704,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *         A promise object is returned once the messages you want are found.
   *         The promise is resolved with the array of rule objects you give in
   *         the |messages| property. Each objects is the same as provided, with
-@@ -1051,18 +1055,35 @@ function waitForMessages(aOptions)
+@@ -1058,18 +1062,35 @@ function waitForMessages(aOptions)
      if (aRule.consoleDir && !checkConsoleDir(aRule, aElement)) {
        return false;
      }
