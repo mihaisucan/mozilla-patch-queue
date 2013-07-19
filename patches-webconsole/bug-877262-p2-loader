@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 476e67dfc0bdf790c1224a06dd6c60a33784243a
+# Parent 37b11305a621c9decb11052bc00304ba3d9e9fa9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1374181619 -10800
+# Date 1374253657 -10800
 
 Bug 877262 - Part 2: move the Web Console files over to the new jetpack-based loader; r=dcamp; try: -b do -p all -u all -t all
 
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 --- a/browser/base/content/browser.js
 +++ b/browser/base/content/browser.js
-@@ -7096,18 +7096,24 @@ var TabContextMenu = {
+@@ -7122,18 +7122,24 @@ var TabContextMenu = {
  };
  
  XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
@@ -172,12 +172,17 @@ diff --git a/browser/devtools/jar.mn b/browser/devtools/jar.mn
 diff --git a/browser/devtools/main.js b/browser/devtools/main.js
 --- a/browser/devtools/main.js
 +++ b/browser/devtools/main.js
-@@ -17,17 +17,17 @@ Object.defineProperty(exports, "TargetFa
+@@ -14,20 +14,22 @@ Object.defineProperty(exports, "Toolbox"
+   get: () => require("devtools/framework/toolbox").Toolbox
+ });
+ Object.defineProperty(exports, "TargetFactory", {
    get: () => require("devtools/framework/target").TargetFactory
  });
  
  loader.lazyGetter(this, "osString", () => Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).OS);
  
++let events = require("sdk/system/events");
++
  // Panels
  loader.lazyGetter(this, "OptionsPanel", function() require("devtools/framework/toolbox-options").OptionsPanel);
  loader.lazyGetter(this, "InspectorPanel", function() require("devtools/inspector/inspector-panel").InspectorPanel);
@@ -191,6 +196,25 @@ diff --git a/browser/devtools/main.js b/browser/devtools/main.js
  // Strings
  const toolboxProps = "chrome://browser/locale/devtools/toolbox.properties";
  const inspectorProps = "chrome://browser/locale/devtools/inspector.properties";
+@@ -216,16 +218,18 @@ var unloadObserver = {
+       for (let definition of gDevTools.getToolDefinitionArray()) {
+         gDevTools.unregisterTool(definition.id);
+       }
+     }
+   }
+ };
+ Services.obs.addObserver(unloadObserver, "sdk:loader:destroy", false);
+ 
++events.emit("devtools-loaded", {});
++
+ /**
+  * Lookup l10n string from a string bundle.
+  *
+  * @param {string} name
+  *        The key to lookup.
+  * @param {StringBundle} bundle
+  *        The key to lookup.
+  * @returns A localized version of the given key.
 diff --git a/browser/devtools/netmonitor/netmonitor-controller.js b/browser/devtools/netmonitor/netmonitor-controller.js
 --- a/browser/devtools/netmonitor/netmonitor-controller.js
 +++ b/browser/devtools/netmonitor/netmonitor-controller.js
@@ -271,6 +295,83 @@ diff --git a/browser/devtools/shared/DeveloperToolbar.jsm b/browser/devtools/sha
     * Read a toolbarSpec from preferences
     * @param aPref The name of the preference to read
     */
+@@ -395,16 +400,20 @@ DeveloperToolbar.prototype._onload = fun
+ 
+   let tabbrowser = this._chromeWindow.getBrowser();
+   tabbrowser.tabContainer.addEventListener("TabSelect", this, false);
+   tabbrowser.tabContainer.addEventListener("TabClose", this, false);
+   tabbrowser.addEventListener("load", this, true);
+   tabbrowser.addEventListener("beforeunload", this, true);
+ 
+   this._initErrorsCount(tabbrowser.selectedTab);
++  this._devtoolsUnloaded = this._devtoolsUnloaded.bind(this);
++  this._devtoolsLoaded = this._devtoolsLoaded.bind(this);
++  Services.obs.addObserver(this._devtoolsUnloaded, "devtools-unloaded", false);
++  Services.obs.addObserver(this._devtoolsLoaded, "devtools-loaded", false);
+ 
+   this._element.hidden = false;
+ 
+   if (aFocus) {
+     this._input.focus();
+   }
+ 
+   this._notify(NOTIFICATIONS.SHOW);
+@@ -423,16 +432,36 @@ DeveloperToolbar.prototype._onload = fun
+ 
+   if (!DeveloperToolbar.introShownThisSession) {
+     this.display.maybeShowIntro();
+     DeveloperToolbar.introShownThisSession = true;
+   }
+ };
+ 
+ /**
++ * The devtools-unloaded event handler.
++ * @private
++ */
++DeveloperToolbar.prototype._devtoolsUnloaded = function DT__devtoolsUnloaded()
++{
++  let tabbrowser = this._chromeWindow.getBrowser();
++  Array.prototype.forEach.call(tabbrowser.tabs, this._stopErrorsCount, this);
++};
++
++/**
++ * The devtools-loaded event handler.
++ * @private
++ */
++DeveloperToolbar.prototype._devtoolsLoaded = function DT__devtoolsLoaded()
++{
++  let tabbrowser = this._chromeWindow.getBrowser();
++  this._initErrorsCount(tabbrowser.selectedTab);
++};
++
++/**
+  * Initialize the listeners needed for tracking the number of errors for a given
+  * tab.
+  *
+  * @private
+  * @param nsIDOMNode aTab the xul:tab for which you want to track the number of
+  * errors.
+  */
+ DeveloperToolbar.prototype._initErrorsCount = function DT__initErrorsCount(aTab)
+@@ -518,16 +547,18 @@ DeveloperToolbar.prototype.destroy = fun
+   }
+ 
+   let tabbrowser = this._chromeWindow.getBrowser();
+   tabbrowser.tabContainer.removeEventListener("TabSelect", this, false);
+   tabbrowser.tabContainer.removeEventListener("TabClose", this, false);
+   tabbrowser.removeEventListener("load", this, true);
+   tabbrowser.removeEventListener("beforeunload", this, true);
+ 
++  Services.obs.removeObserver(this._devtoolsUnloaded, "devtools-unloaded");
++  Services.obs.removeObserver(this._devtoolsLoaded, "devtools-loaded");
+   Array.prototype.forEach.call(tabbrowser.tabs, this._stopErrorsCount, this);
+ 
+   this.display.focusManager.removeMonitoredElement(this.outputPanel._frame);
+   this.display.focusManager.removeMonitoredElement(this._element);
+ 
+   this.display.onVisibilityChange.remove(this.outputPanel._visibilityChanged, this.outputPanel);
+   this.display.onVisibilityChange.remove(this.tooltipPanel._visibilityChanged, this.tooltipPanel);
+   this.display.onOutput.remove(this.outputPanel._outputChanged, this.outputPanel);
 diff --git a/browser/devtools/shared/AutocompletePopup.jsm b/browser/devtools/shared/autocomplete-popup.js
 rename from browser/devtools/shared/AutocompletePopup.jsm
 rename to browser/devtools/shared/autocomplete-popup.js
@@ -1092,8 +1193,8 @@ diff --git a/toolkit/devtools/Loader.jsm b/toolkit/devtools/Loader.jsm
 diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/dbg-client.jsm
 --- a/toolkit/devtools/client/dbg-client.jsm
 +++ b/toolkit/devtools/client/dbg-client.jsm
-@@ -22,18 +22,26 @@ Cu.import("resource://gre/modules/NetUti
- Cu.import("resource://gre/modules/Services.jsm");
+@@ -23,18 +23,26 @@ Cu.import("resource://gre/modules/Servic
+ Cu.import("resource://gre/modules/Timer.jsm");
  let promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js").Promise;
  const { defer, resolve, reject } = promise;
  
