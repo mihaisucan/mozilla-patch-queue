@@ -1,0 +1,300 @@
+# HG changeset patch
+# Date 1375123636 -10800
+# Parent 1abfc2a948faa9cfa2be3b4a4767335054ec1457
+# User Christos Stathis <chstath@gmail.com>
+Bug 790016 - Web console remote protocol sends more data than needed for completion; r=msucan; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -139,16 +139,17 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_console_error_source_click.js \
+ 	browser_console_clear_on_reload.js \
+ 	browser_console_keyboard_accessibility.js \
+ 	browser_console_filters.js \
+ 	browser_console_dead_objects.js \
+ 	browser_console_iframe_messages.js \
+ 	browser_console_variables_view_while_debugging_and_inspecting.js \
+ 	browser_webconsole_bug_686937_autocomplete_JSTerm_helpers.js \
++	browser_webconsole_bug_790016_cached_autocomplete.js \
+ 	head.js \
+ 	$(NULL)
+ 
+ ifeq ($(OS_ARCH), Darwin)
+ MOCHITEST_BROWSER_FILES += \
+ 	browser_webconsole_bug_804845_ctrl_key_nav.js \
+         $(NULL)
+ endif
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_790016_cached_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_790016_cached_autocomplete.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_790016_cached_autocomplete.js
+@@ -0,0 +1,124 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++// Tests that the cached autocomplete results are used when the new
++// user input is a subset of the existing completion results.
++
++const TEST_URI = "data:text/html;charset=utf8,<p>test cached autocompletion results";
++
++let testDriver;
++
++function test() {
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, function(hud) {
++      testDriver = testCompletion(hud);
++      testDriver.next();
++    });
++  }, true);
++}
++
++function testNext() {
++  executeSoon(function() {
++    testDriver.next();
++  });
++}
++
++function testCompletion(hud) {
++  let jsterm = hud.jsterm;
++  let input = jsterm.inputNode;
++  let popup = jsterm.autocompletePopup;
++
++  // Test if 'doc' gives 'document'
++  input.value = "doc";
++  input.setSelectionRange(3, 3);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield undefined;
++
++  is(input.value, "doc", "'docu' completion (input.value)");
++  is(jsterm.completeNode.value, "   ument", "'docu' completion (completeNode)");
++
++  // Test typing 'window.'.
++  input.value = "window.";
++  input.setSelectionRange(7, 7);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield undefined;
++
++  ok(popup.getItems().length > 0, "'window.' gave a list of suggestions")
++
++  content.wrappedJSObject.docfoobar = true;
++
++  // Test typing 'window.doc'.
++  input.value = "window.doc";
++  input.setSelectionRange(10, 10);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield undefined;
++
++  let newItems = popup.getItems();
++  ok(newItems.every(function(item) {
++       return item.label != "docfoobar";
++     }), "autocomplete cached results do not contain docfoobar. list has not been updated");
++
++  // Test that backspace does not cause a request to the server
++  input.value = "window.do";
++  input.setSelectionRange(9, 9);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield undefined;
++
++  newItems = popup.getItems();
++  ok(newItems.every(function(item) {
++       return item.label != "docfoobar";
++     }), "autocomplete cached results do not contain docfoobar. list has not been updated");
++
++  delete content.wrappedJSObject.docfoobar;
++
++  // Test if 'window.getC' gives 'getComputedStyle'
++  input.value = "window."
++  input.setSelectionRange(7, 7);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield undefined;
++  input.value = "window.getC";
++  input.setSelectionRange(11, 11);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield undefined;
++  newItems = popup.getItems();
++  ok(!newItems.every(function(item) {
++       return item.label != "getComputedStyle";
++     }), "autocomplete results do contain getComputedStyle");
++
++  // Test if 'dump(d' gives non-zero results
++  input.value = "dump(d";
++  input.setSelectionRange(6, 6);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield undefined;
++
++  ok(popup.getItems().length > 0, "'dump(d' gives non-zero results");
++
++  // Test that 'dump(window.)' works.
++  input.value = "dump(window.)";
++  input.setSelectionRange(12, 12);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield undefined;
++
++  content.wrappedJSObject.docfoobar = true;
++
++  // Make sure 'dump(window.doc)' does not contain 'docfoobar'.
++  input.value = "dump(window.doc)";
++  input.setSelectionRange(15, 15);
++  jsterm.complete(jsterm.COMPLETE_HINT_ONLY, testNext);
++  yield undefined;
++
++  newItems = popup.getItems();
++  ok(newItems.every(function(item) {
++       return item.label != "docfoobar";
++     }), "autocomplete cached results do not contain docfoobar. list has not been updated");
++
++  delete content.wrappedJSObject.docfoobar;
++
++  testDriver = null;
++  finishTest();
++  yield undefined;
++}
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -2840,16 +2840,31 @@ JSTerm.prototype = {
+ 
+   /**
+    * Stores the data for the last completion.
+    * @type object
+    */
+   lastCompletion: null,
+ 
+   /**
++   * Array that caches the user input suggestions received from the server.
++   * @private
++   * @type array
++   */
++  _autocompleteCache: null,
++
++  /**
++   * The input that caused the last request to the server, whose response is
++   * cached in the _autocompleteCache array.
++   * @private
++   * @type string
++   */
++  _autocompleteQuery: null,
++
++  /**
+    * The Web Console sidebar.
+    * @see this._createSidebar()
+    * @see Sidebar.jsm
+    */
+   sidebar: null,
+ 
+   /**
+    * The Variables View instance shown in the sidebar.
+@@ -4120,21 +4135,56 @@ JSTerm.prototype = {
+   _updateCompletionResult:
+   function JST__updateCompletionResult(aType, aCallback)
+   {
+     if (this.lastCompletion.value == this.inputNode.value) {
+       return;
+     }
+ 
+     let requestId = gSequenceId();
+-    let input = this.inputNode.value;
+     let cursor = this.inputNode.selectionStart;
+-
+-    // TODO: Bug 787986 - throttle/disable updates, deal with slow/high latency
+-    // network connections.
++    let input = this.inputNode.value.substring(0, cursor);
++    let cache = this._autocompleteCache;
++
++    // If the current input starts with the previous input, then we already
++    // have a list of suggestions and we just need to filter the cached
++    // suggestions. When the current input ends with a non-alphanumeric
++    // character we ask the server again for suggestions.
++
++    // Check if last character is non-alphanumeric
++    if (!/[a-zA-Z0-9]$/.test(input)) {
++      this._autocompleteQuery = null;
++      this._autocompleteCache = null;
++    }
++
++    if (this._autocompleteQuery && input.startsWith(this._autocompleteQuery)) {
++      let filterBy = input;
++      // Find the last non-alphanumeric if exists.
++      let lastNonAlpha = input.match(/[^a-zA-Z0-9][a-zA-Z0-9]*$/);
++      // If input contains non-alphanumerics, use the part after the last one
++      // to filter the cache
++      if (lastNonAlpha) {
++        filterBy = input.substring(input.lastIndexOf(lastNonAlpha) + 1);
++      }
++
++      let newList = cache.sort().filter(function(l) {
++        return l.startsWith(filterBy);
++      });
++
++      this.lastCompletion = {
++        requestId: null,
++        completionType: aType,
++        value: null,
++      };
++
++      let response = { matches: newList, matchProp: filterBy };
++      this._receiveAutocompleteProperties(null, aCallback, response);
++      return;
++    }
++
+     this.lastCompletion = {
+       requestId: requestId,
+       completionType: aType,
+       value: null,
+     };
+ 
+     let callback = this._receiveAutocompleteProperties.bind(this, requestId,
+                                                             aCallback);
+@@ -4159,16 +4209,25 @@ JSTerm.prototype = {
+   {
+     let inputNode = this.inputNode;
+     let inputValue = inputNode.value;
+     if (this.lastCompletion.value == inputValue ||
+         aRequestId != this.lastCompletion.requestId) {
+       return;
+     }
+ 
++    // Cache whatever came from the server if the last char is alphanumeric or '.'
++    let cursor = inputNode.selectionStart;
++    let inputUntilCursor = inputValue.substring(0, cursor);
++
++    if (aRequestId != null && /[a-zA-Z0-9.]$/.test(inputUntilCursor)) {
++      this._autocompleteCache = aMessage.matches;
++      this._autocompleteQuery = inputUntilCursor;
++    }
++
+     let matches = aMessage.matches;
+     let lastPart = aMessage.matchProp;
+     if (!matches.length) {
+       this.clearCompletion();
+       return;
+     }
+ 
+     let items = matches.reverse().map(function(aMatch) {
+diff --git a/toolkit/devtools/webconsole/WebConsoleUtils.jsm b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+--- a/toolkit/devtools/webconsole/WebConsoleUtils.jsm
++++ b/toolkit/devtools/webconsole/WebConsoleUtils.jsm
+@@ -609,17 +609,17 @@ const STATE_DQUOTE = 3;
+ const OPEN_BODY = "{[(".split("");
+ const CLOSE_BODY = "}])".split("");
+ const OPEN_CLOSE_BODY = {
+   "{": "}",
+   "[": "]",
+   "(": ")",
+ };
+ 
+-const MAX_COMPLETIONS = 256;
++const MAX_COMPLETIONS = 1500;
+ 
+ /**
+  * Analyses a given string to find the last statement that is interesting for
+  * later completion.
+  *
+  * @param   string aStr
+  *          A string to analyse.
+  *
