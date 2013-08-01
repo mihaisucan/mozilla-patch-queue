@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent cd93253ac43240f2ea1003e96bb41cadacaf9516
+# Parent c4e12a6bd31784c19f7bac972b69735990a48088
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1374576729 -10800
+# Date 1375385160 -10800
 
 Bug 793996 - Create reload marker in the Web Console; r=robcee
 
@@ -341,15 +341,15 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
  	browser_webconsole_console_logging_api.js \
  	browser_webconsole_change_font_size.js \
  	browser_webconsole_chrome.js \
-@@ -137,16 +136,17 @@ MOCHITEST_BROWSER_FILES = \
- 	browser_console_addonsdk_loader_exception.js \
- 	browser_console_error_source_click.js \
+@@ -140,16 +139,17 @@ MOCHITEST_BROWSER_FILES = \
  	browser_console_clear_on_reload.js \
  	browser_console_keyboard_accessibility.js \
  	browser_console_filters.js \
  	browser_console_dead_objects.js \
  	browser_console_iframe_messages.js \
  	browser_console_variables_view_while_debugging_and_inspecting.js \
+ 	browser_webconsole_bug_686937_autocomplete_JSTerm_helpers.js \
+ 	browser_webconsole_cached_autocomplete.js \
 +	browser_console_navigation_marker.js \
  	head.js \
  	$(NULL)
@@ -362,7 +362,7 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
 diff --git a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js b/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js
 --- a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js
 +++ b/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js
-@@ -1,16 +1,17 @@
+@@ -1,66 +1,79 @@
  /*
   * Any copyright is dedicated to the Public Domain.
   * http://creativecommons.org/publicdomain/zero/1.0/
@@ -376,36 +376,60 @@ diff --git a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab
  {
    const TEST_URI = "data:text/html;charset=utf8,<title>bug871156</title>\n" +
                     "<p>hello world";
++  let firstTab = gBrowser.selectedTab;
++
    addTab(TEST_URI);
    browser.addEventListener("load", function onLoad() {
      browser.removeEventListener("load", onLoad, true);
      openConsole(null, consoleOpened);
-@@ -24,43 +25,47 @@ function test()
+   }, true);
+ 
+   function consoleOpened(hud)
+   {
+     ok(hud, "Web Console opened");
+ 
+-    let tabClosed = false, toolboxDestroyed = false;
++    let tabClosed = promise.defer();
++    let toolboxDestroyed = promise.defer();
++    let tabSelected = promise.defer();
  
      gBrowser.tabContainer.addEventListener("TabClose", function onTabClose() {
        gBrowser.tabContainer.removeEventListener("TabClose", onTabClose);
++      info("tab closed");
++      executeSoon(() => tabClosed.resolve(null));
++    });
  
-       ok(true, "tab closed");
- 
-       tabClosed = true;
-       if (toolboxDestroyed) {
+-      ok(true, "tab closed");
+-
+-      tabClosed = true;
+-      if (toolboxDestroyed) {
 -        testBrowserConsole();
-+        executeSoon(testBrowserConsole);
++    gBrowser.tabContainer.addEventListener("TabSelect", function onTabSelect() {
++      gBrowser.tabContainer.removeEventListener("TabSelect", onTabSelect);
++      if (gBrowser.selectedTab == firstTab) {
++        info("tab selected");
++        executeSoon(() => tabSelected.resolve(null));
        }
      });
  
      let toolbox = gDevTools.getToolbox(hud.target);
      toolbox.once("destroyed", () => {
-       ok(true, "toolbox destroyed");
- 
-       toolboxDestroyed = true;
-       if (tabClosed) {
+-      ok(true, "toolbox destroyed");
+-
+-      toolboxDestroyed = true;
+-      if (tabClosed) {
 -        testBrowserConsole();
-+        executeSoon(testBrowserConsole);
-       }
+-      }
++      info("toolbox destroyed");
++      executeSoon(() => toolboxDestroyed.resolve(null));
      });
  
 -    EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
++    promise.all([tabClosed.promise, toolboxDestroyed.promise, tabSelected.promise]).then(() => {
++      info("promise.all resolved");
++      waitForFocus(testBrowserConsole, firstTab.linkedBrowser.contentWindow, true);
++    });
++
 +    executeSoon(() => {
 +      EventUtils.synthesizeKey("w", { accelKey: true });
 +    });
@@ -423,7 +447,7 @@ diff --git a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab
          ok(true, "the Browser Console closed");
  
 -        executeSoon(finishTest);
-+        waitForFocus(finishTest, content);
++        waitForFocus(finish, content, true);
        }, "web-console-destroyed", false);
  
 -      EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
@@ -645,7 +669,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632817.js b
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
-@@ -1,24 +1,25 @@
+@@ -1,26 +1,27 @@
  /* vim:set ts=2 sw=2 sts=2 et: */
  /* This Source Code Form is subject to the terms of the Mozilla Public
   * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -665,14 +689,73 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
    WebConsoleUtils = utils.Utils;
 +  require = tools.require;
  })();
- // promise._reportErrors = true; // please never leave me.
+-// promise._reportErrors = true; // please never leave me.
++promise._reportErrors = true; // please never leave me.
  
  let gPendingOutputTest = 0;
  
  // The various categories of messages.
  const CATEGORY_NETWORK = 0;
  const CATEGORY_CSS = 1;
-@@ -879,16 +880,19 @@ function getMessageElementText(aElement)
+ const CATEGORY_JS = 2;
+ const CATEGORY_WEBDEV = 3;
+@@ -281,45 +282,55 @@ function dumpMessageElement(aMessage)
+                 "repeats", repeats,
+                 "clipboardText", aMessage.clipboardText,
+                 "text", text);
+ }
+ 
+ function finishTest()
+ {
+   browser = hudId = hud = filterBox = outputNode = cs = null;
++  console.log("finishTest");
+ 
+   dumpConsoles();
++  console.log("finishTest 2");
+ 
+   let browserConsole = HUDService.getBrowserConsole();
++  console.log("finishTest 3");
+   if (browserConsole) {
+     if (browserConsole.jsterm) {
+       browserConsole.jsterm.clearOutput(true);
+     }
+     HUDService.toggleBrowserConsole().then(finishTest);
+     return;
+   }
+ 
++  console.log("finishTest 4");
+   let hud = HUDService.getHudByWindow(content);
+   if (!hud) {
+     finish();
+     return;
+   }
+ 
++  console.log("finishTest 5");
++
+   if (hud.jsterm) {
+     hud.jsterm.clearOutput(true);
+   }
+ 
++  console.log("finishTest 6");
+   closeConsole(hud.target.tab, finish);
++  console.log("finishTest 7");
+ 
+   hud = null;
+ }
+ 
+ function tearDown()
+ {
++  console.log("tearDown");
++  return;
+   dumpConsoles();
+ 
+   if (HUDService.getBrowserConsole()) {
+     HUDService.toggleBrowserConsole();
+   }
+ 
+   let target = TargetFactory.forTab(gBrowser.selectedTab);
+   gDevTools.closeToolbox(target);
+@@ -879,16 +890,19 @@ function getMessageElementText(aElement)
   *            and/or line number in the trace message.
   *            - consoleTime: string that matches a console.time() timer name.
   *            Provide this if you want to match a console.time() message.
@@ -692,7 +775,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *         A promise object is returned once the messages you want are found.
   *         The promise is resolved with the array of rule objects you give in
   *         the |messages| property. Each objects is the same as provided, with
-@@ -1058,18 +1062,35 @@ function waitForMessages(aOptions)
+@@ -1058,18 +1072,35 @@ function waitForMessages(aOptions)
      if (aRule.consoleDir && !checkConsoleDir(aRule, aElement)) {
        return false;
      }
@@ -1003,7 +1086,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this._commandController = null;
  
      let onDestroy = function() {
-@@ -4916,27 +4916,17 @@ WebConsoleConnectionProxy.prototype = {
+@@ -4976,27 +4976,17 @@ WebConsoleConnectionProxy.prototype = {
     *        The message received from the server.
     */
    _onTabNavigated: function WCCP__onTabNavigated(aEvent, aPacket)
@@ -1058,3 +1141,42 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 +  background: #fff;
 +  -moz-padding-end: 6px;
 +}
+diff --git a/testing/mochitest/browser-test.js b/testing/mochitest/browser-test.js
+--- a/testing/mochitest/browser-test.js
++++ b/testing/mochitest/browser-test.js
+@@ -126,16 +126,17 @@ Tester.prototype = {
+ 
+     if (this.tests.length)
+       this.nextTest();
+     else
+       this.finish();
+   },
+ 
+   waitForWindowsState: function Tester_waitForWindowsState(aCallback) {
++    this.dumper.dump("TEST-INFO | checking window state 0\n");
+     let timedOut = this.currentTest && this.currentTest.timedOut;
+     let baseMsg = timedOut ? "Found a {elt} after previous test timed out"
+                            : this.currentTest ? "Found an unexpected {elt} at the end of test run"
+                                               : "Found an unexpected {elt}";
+ 
+     if (this.currentTest && window.gBrowser && gBrowser.tabs.length > 1) {
+       while (gBrowser.tabs.length > 1) {
+         let lastTab = gBrowser.tabContainer.lastChild;
+@@ -165,16 +166,17 @@ Tester.prototype = {
+         if (this.currentTest)
+           this.currentTest.addResult(new testResult(false, msg, "", false));
+         else
+           this.dumper.dump("TEST-UNEXPECTED-FAIL | (browser-test.js) | " + msg + "\n");
+ 
+         win.close();
+       }
+     }
++    this.dumper.dump("TEST-INFO | checking window state end\n");
+ 
+     // Make sure the window is raised before each test.
+     this.SimpleTest.waitForFocus(aCallback);
+   },
+ 
+   finish: function Tester_finish(aSkipSummary) {
+     var passCount = this.tests.reduce(function(a, f) a + f.passCount, 0);
+     var failCount = this.tests.reduce(function(a, f) a + f.failCount, 0);
