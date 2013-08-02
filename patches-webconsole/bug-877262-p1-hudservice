@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 89db54075df6cc582d8230d439eb8fcb33656469
+# Parent 32d180146c1d28cc708db31272865c5a38d0fae5
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1374074814 -10800
+# Date 1375463517 -10800
 Bug 877262 - Part 1: merge HUDConsoleUI into HUDService and prepare for the jetpack loader; r=robcee
 
 diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browser-sets.inc
@@ -29,7 +29,7 @@ diff --git a/browser/base/content/browser-sets.inc b/browser/base/content/browse
 diff --git a/browser/base/content/browser.js b/browser/base/content/browser.js
 --- a/browser/base/content/browser.js
 +++ b/browser/base/content/browser.js
-@@ -7096,19 +7096,18 @@ var TabContextMenu = {
+@@ -7146,19 +7146,18 @@ var TabContextMenu = {
  };
  
  XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
@@ -816,9 +816,77 @@ diff --git a/browser/devtools/webconsole/HUDService.jsm b/browser/devtools/webco
 diff --git a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js b/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js
 --- a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js
 +++ b/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab.js
-@@ -45,17 +45,17 @@ function test()
+@@ -5,62 +5,79 @@
  
-     EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
+ // Check that Ctrl-W closes the Browser Console and that Ctrl-W closes the
+ // current tab when using the Web Console - bug 871156.
+ 
+ function test()
+ {
+   const TEST_URI = "data:text/html;charset=utf8,<title>bug871156</title>\n" +
+                    "<p>hello world";
++  let firstTab = gBrowser.selectedTab;
++  Services.prefs.setBoolPref("browser.tabs.animate", false);
++
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+ 
+   function consoleOpened(hud)
+   {
+     ok(hud, "Web Console opened");
+ 
+-    let tabClosed = false, toolboxDestroyed = false;
++    let tabClosed = promise.defer();
++    let toolboxDestroyed = promise.defer();
++    let tabSelected = promise.defer();
++
++    let pageWindow = firstTab.linkedBrowser.contentWindow;
++    let toolbox = gDevTools.getToolbox(hud.target);
+ 
+     gBrowser.tabContainer.addEventListener("TabClose", function onTabClose() {
+       gBrowser.tabContainer.removeEventListener("TabClose", onTabClose);
++      info("tab closed");
++      tabClosed.resolve(null);
++    });
+ 
+-      ok(true, "tab closed");
+-
+-      tabClosed = true;
+-      if (toolboxDestroyed) {
+-        testBrowserConsole();
++    gBrowser.tabContainer.addEventListener("TabSelect", function onTabSelect() {
++      gBrowser.tabContainer.removeEventListener("TabSelect", onTabSelect);
++      if (gBrowser.selectedTab == firstTab) {
++        info("tab selected");
++        tabSelected.resolve(null);
+       }
+     });
+ 
+-    let toolbox = gDevTools.getToolbox(hud.target);
+     toolbox.once("destroyed", () => {
+-      ok(true, "toolbox destroyed");
+-
+-      toolboxDestroyed = true;
+-      if (tabClosed) {
+-        testBrowserConsole();
+-      }
++      info("toolbox destroyed");
++      toolboxDestroyed.resolve(null);
+     });
+ 
+-    EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
++    promise.all([tabClosed.promise, toolboxDestroyed.promise, tabSelected.promise ]).then(() => {
++      info("promise.all resolved");
++      waitForFocus(testBrowserConsole, pageWindow, true);
++    });
++
++    // Get out of the web console initialization.
++    executeSoon(() => {
++      EventUtils.synthesizeKey("w", { accelKey: true });
++    });
    }
  
    function testBrowserConsole()
@@ -833,8 +901,18 @@ diff --git a/browser/devtools/webconsole/test/browser_bug_871156_ctrlw_close_tab
          Services.obs.removeObserver(onDestroy, "web-console-destroyed");
          ok(true, "the Browser Console closed");
  
-         executeSoon(finishTest);
+-        executeSoon(finishTest);
++        Services.prefs.clearUserPref("browser.tabs.animate");
++        waitForFocus(finish, content, true);
        }, "web-console-destroyed", false);
+ 
+-      EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
++      waitForFocus(() => {
++        EventUtils.synthesizeKey("w", { accelKey: true }, hud.iframeWindow);
++      }, hud.iframeWindow);
+     });
+   }
+ }
 diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devtools/webconsole/test/browser_console.js
 --- a/browser/devtools/webconsole/test/browser_console.js
 +++ b/browser/devtools/webconsole/test/browser_console.js
@@ -1534,6 +1612,93 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_602572_log_
  
        menupopups[0].addEventListener("popupshown", onpopupshown1, false);
        executeSoon(() => menupopups[0].openPopup());
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618078_network_exceptions.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618078_network_exceptions.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618078_network_exceptions.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618078_network_exceptions.js
+@@ -1,70 +1,31 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+-// Tests that network log messages bring up the network panel.
++// Tests that we report JS exceptions in event handlers coming from
++// network requests, like onreadystate for XHR. See bug 618078.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-618078-network-exceptions.html";
+ 
+-let testEnded = false;
+-
+-let TestObserver = {
+-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+-
+-  observe: function test_observe(aSubject)
+-  {
+-    if (testEnded || !(aSubject instanceof Ci.nsIScriptError)) {
+-      return;
+-    }
+-
+-    is(aSubject.category, "content javascript", "error category");
+-
+-    testEnded = true;
+-    if (aSubject.category == "content javascript") {
+-      executeSoon(checkOutput);
+-    }
+-    else {
+-      executeSoon(finishTest);
+-    }
+-  }
+-};
+-
+-function checkOutput()
+-{
+-  waitForSuccess({
+-    name: "exception message",
+-    validatorFn: function()
+-    {
+-      return hud.outputNode.textContent.indexOf("bug618078exception") > -1;
+-    },
+-    successFn: finishTest,
+-    failureFn: finishTest,
+-  });
+-}
+-
+-function testEnd()
+-{
+-  Services.console.unregisterListener(TestObserver);
+-}
+-
+ function test()
+ {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 618078");
+ 
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
++    openConsole(null, function(hud) {
++      expectUncaughtException();
++      content.location = TEST_URI;
+ 
+-    openConsole(null, function(aHud) {
+-      hud = aHud;
+-      Services.console.registerListener(TestObserver);
+-      registerCleanupFunction(testEnd);
+-
+-      executeSoon(function() {
+-        expectUncaughtException();
+-        content.location = TEST_URI;
+-      });
++      waitForMessages({
++        webconsole: hud,
++        messages: [{
++          text: "bug618078exception",
++          category: CATEGORY_JS,
++          severity: SEVERITY_ERROR,
++        }],
++      }).then(finishTest);
+     });
+   }, true);
+ }
+-
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
@@ -2076,7 +2241,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }.bind(this);
  
      if (this.proxy) {
-@@ -4998,50 +5011,45 @@ WebConsoleConnectionProxy.prototype = {
+@@ -5058,50 +5071,45 @@ WebConsoleConnectionProxy.prototype = {
  
  function gSequenceId()
  {
@@ -2143,7 +2308,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Get selection information from the view.
     *
     * @param nsIDOMElement aView
-@@ -5108,9 +5116,20 @@ let ConsoleContextMenu = {
+@@ -5168,9 +5176,20 @@ let ConsoleContextMenu = {
        if (itemData.indexOf(type) !== -1) {
          shouldHide = false;
          break;
