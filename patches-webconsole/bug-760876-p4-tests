@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent f50cb0a79ab416f7c9825e894c569baf8e303e7c
+# Parent f0ae9cd66f5be923cc4b5412fb239f2b3069bf3a
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1374172431 -10800
+# Date 1375725405 -10800
 
 Bug 760876 - Part 4: fix broken tests; r=robcee
 
@@ -131,3 +131,459 @@ diff --git a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_locat
 -    ok(isVisible, CONTEXT_MENU_ID + " is visible");
 -  }, finishTest);
 -}
+diff --git a/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js b/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js
+--- a/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js
++++ b/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js
+@@ -1,14 +1,14 @@
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+-// Tests that makes sure messages are not considered repeated when console.log()
++// Test that makes sure messages are not considered repeated when console.log()
+ // is invoked with different objects, see bug 865288.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-repeated-messages.html";
+ 
+ let hud = null;
+ 
+ function test() {
+   addTab(TEST_URI);
+@@ -36,33 +36,32 @@ function consoleOpened(aHud) {
+       severity: SEVERITY_LOG,
+       count: 3,
+       repeats: 1,
+       objects: true,
+     }],
+   }).then(checkMessages);
+ }
+ 
+-function checkMessages(aResults)
++function checkMessages([result])
+ {
+-  let result = aResults[0];
+   let msgs = [...result.matched];
+   is(msgs.length, 3, "3 message elements");
+   let m = -1;
+ 
+   function nextMessage()
+   {
+     let msg = msgs[++m];
+     if (msg) {
+       ok(msg, "message element #" + m);
+ 
+-      let clickable = msg.querySelector(".hud-clickable");
++      let clickable = msg.querySelector(".body a");
+       ok(clickable, "clickable object #" + m);
+ 
+-      scrollOutputToNode(msg);
++      msg.scrollIntoView(false);
+       clickObject(clickable);
+     }
+     else {
+       finishTest();
+     }
+   }
+ 
+   nextMessage();
+diff --git a/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js b/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
+--- a/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
++++ b/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
+@@ -25,24 +25,26 @@ function test()
+ 
+ function consoleOpened(hud)
+ {
+   gWebConsole = hud;
+   gJSTerm = hud.jsterm;
+   gJSTerm.execute("fooObj", onExecuteFooObj);
+ }
+ 
+-function onExecuteFooObj()
++function onExecuteFooObj(msg)
+ {
+-  let msg = gWebConsole.outputNode.querySelector(".webconsole-msg-output");
+   ok(msg, "output message found");
+-  isnot(msg.textContent.indexOf("[object Object]"), -1, "message text check");
++
++  let anchor = msg.querySelector("a");
++  ok(anchor, "object anchor");
++  isnot(anchor.textContent.indexOf("[object Object]"), -1, "message text check");
+ 
+   gJSTerm.once("variablesview-fetched", onFooObjFetch);
+-  EventUtils.synthesizeMouse(msg, 2, 2, {}, gWebConsole.iframeWindow)
++  EventUtils.synthesizeMouse(anchor, 2, 2, {}, gWebConsole.iframeWindow)
+ }
+ 
+ function onFooObjFetch(aEvent, aVar)
+ {
+   gVariablesView = aVar._variablesView;
+   ok(gVariablesView, "variables view object");
+ 
+   findVariableViewProperties(aVar, [
+@@ -64,24 +66,25 @@ function onTestPropFound(aResults)
+ }
+ 
+ function onSidebarClosed()
+ {
+   gJSTerm.clearOutput();
+   gJSTerm.execute("window", onExecuteWindow);
+ }
+ 
+-function onExecuteWindow()
++function onExecuteWindow(msg)
+ {
+-  let msg = gWebConsole.outputNode.querySelector(".webconsole-msg-output");
+   ok(msg, "output message found");
+-  isnot(msg.textContent.indexOf("[object Window]"), -1, "message text check");
++  let anchor = msg.querySelector("a");
++  ok(anchor, "object anchor");
++  isnot(anchor.textContent.indexOf("[object Window]"), -1, "message text check");
+ 
+   gJSTerm.once("variablesview-fetched", onWindowFetch);
+-  EventUtils.synthesizeMouse(msg, 2, 2, {}, gWebConsole.iframeWindow)
++  EventUtils.synthesizeMouse(anchor, 2, 2, {}, gWebConsole.iframeWindow)
+ }
+ 
+ function onWindowFetch(aEvent, aVar)
+ {
+   gVariablesView = aVar._variablesView;
+   ok(gVariablesView, "variables view object");
+ 
+   findVariableViewProperties(aVar, [
+diff --git a/browser/devtools/webconsole/test/browser_cached_messages.js b/browser/devtools/webconsole/test/browser_cached_messages.js
+--- a/browser/devtools/webconsole/test/browser_cached_messages.js
++++ b/browser/devtools/webconsole/test/browser_cached_messages.js
+@@ -1,13 +1,15 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
++// Test to see if the cached messages are displayed when the console UI is opened.
++
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-webconsole-error-observer.html";
+ 
+ function test()
+ {
+   waitForExplicitFinish();
+ 
+   expectUncaughtException();
+ 
+@@ -15,62 +17,41 @@ function test()
+   gBrowser.selectedBrowser.addEventListener("load", function onLoad() {
+     gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
+     testOpenUI(true);
+   }, true);
+ }
+ 
+ function testOpenUI(aTestReopen)
+ {
+-  // test to see if the messages are
+-  // displayed when the console UI is opened
+-
+-  let messages = {
+-    "log Bazzle" : false,
+-    "error Bazzle" : false,
+-    "bazBug611032" : false,
+-    "cssColorBug611032" : false,
+-  };
+-
+   openConsole(null, function(hud) {
+-    waitForSuccess({
+-      name: "cached messages displayed",
+-      validatorFn: function()
+-      {
+-        let foundAll = true;
+-        for (let msg in messages) {
+-          let found = messages[msg];
+-          if (!found) {
+-            found = hud.outputNode.textContent.indexOf(msg) > -1;
+-            if (found) {
+-              info("found message '" + msg + "'");
+-              messages[msg] = found;
+-            }
+-          }
+-          foundAll = foundAll && found;
+-        }
+-        return foundAll;
+-      },
+-      successFn: function()
+-      {
+-        // Make sure the CSS warning is given the correct category - bug 768019.
+-        let cssNode = hud.outputNode.querySelector(".webconsole-msg-cssparser");
+-        ok(cssNode, "CSS warning message element");
+-        isnot(cssNode.textContent.indexOf("cssColorBug611032"), -1,
+-              "CSS warning message element content is correct");
+-
+-        closeConsole(gBrowser.selectedTab, function() {
+-          aTestReopen && info("will reopen the Web Console");
+-          executeSoon(aTestReopen ? testOpenUI : finishTest);
+-        });
+-      },
+-      failureFn: function()
+-      {
+-        for (let msg in messages) {
+-          if (!messages[msg]) {
+-            ok(false, "failed to find '" + msg + "'");
+-          }
+-        }
+-        finishTest();
+-      },
++    waitForMessages({
++      webconsole: hud,
++      messages: [
++        {
++          text: "log Bazzle",
++          category: CATEGORY_WEBDEV,
++          severity: SEVERITY_LOG,
++        },
++        {
++          text: "error Bazzle",
++          category: CATEGORY_WEBDEV,
++          severity: SEVERITY_ERROR,
++        },
++        {
++          text: "bazBug611032",
++          category: CATEGORY_JS,
++          severity: SEVERITY_ERROR,
++        },
++        {
++          text: "cssColorBug611032",
++          category: CATEGORY_CSS,
++          severity: SEVERITY_WARNING,
++        },
++      ],
++    }).then(() => {
++      closeConsole(gBrowser.selectedTab, function() {
++        aTestReopen && info("will reopen the Web Console");
++        executeSoon(aTestReopen ? testOpenUI : finishTest);
++      });
+     });
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devtools/webconsole/test/browser_console.js
+--- a/browser/devtools/webconsole/test/browser_console.js
++++ b/browser/devtools/webconsole/test/browser_console.js
+@@ -59,45 +59,37 @@ function consoleOpened(hud)
+   let output = hud.outputNode;
+   function performChecks()
+   {
+     let text = output.textContent;
+     chromeConsole = text.indexOf("bug587757a");
+     contentConsole = text.indexOf("bug587757b");
+     execValue = text.indexOf("browser.xul");
+     exception = text.indexOf("foobarExceptionBug587757");
+-
+-    xhrRequest = false;
+-    let urls = output.querySelectorAll(".webconsole-msg-url");
+-    for (let url of urls) {
+-      if (url.value.indexOf(TEST_URI) > -1) {
+-        xhrRequest = true;
+-        break;
+-      }
+-    }
++    xhrRequest = text.indexOf(TEST_URI);
+   }
+ 
+   function showResults()
+   {
+     isnot(chromeConsole, -1, "chrome window console.log() is displayed");
+     isnot(contentConsole, -1, "content window console.log() is displayed");
+     isnot(execValue, -1, "jsterm eval result is displayed");
+     isnot(exception, -1, "exception is displayed");
+-    ok(xhrRequest, "xhr request is displayed");
++    isnot(xhrRequest, -1, "xhr request is displayed");
+   }
+ 
+   waitForSuccess({
+     name: "messages displayed",
+     validatorFn: () => {
+       performChecks();
+       return chromeConsole > -1 &&
+              contentConsole > -1 &&
+              execValue > -1 &&
+              exception > -1 &&
+-             xhrRequest;
++             xhrRequest > -1;
+     },
+     successFn: () => {
+       showResults();
+       executeSoon(finishTest);
+     },
+     failureFn: () => {
+       showResults();
+       info("output: " + output.textContent);
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -1082,36 +1082,36 @@ function waitForMessages(aOptions)
+       // TODO: we keep this behavior until bug 778766 is fixed. After that we
+       // will not require |type| to match newer types of messages.
+       return false;
+     }
+ 
+     let partialMatch = !!(aRule.consoleTrace || aRule.consoleTime ||
+                           aRule.consoleTimeEnd || aRule.type);
+ 
+-    if (aRule.category && aElement.category != aRule.category) {
++    if ("category" in aRule && aElement.category != aRule.category) {
+       if (partialMatch) {
+         is(aElement.category, aRule.category,
+            "message category for rule: " + displayRule(aRule));
+         displayErrorContext(aRule, aElement);
+       }
+       return false;
+     }
+ 
+-    if (aRule.severity && aElement.severity != aRule.severity) {
++    if ("severity" in aRule && aElement.severity != aRule.severity) {
+       if (partialMatch) {
+         is(aElement.severity, aRule.severity,
+            "message severity for rule: " + displayRule(aRule));
+         displayErrorContext(aRule, aElement);
+       }
+       return false;
+     }
+ 
+-    if (aRule.repeats) {
+-      let repeats = aElement.querySelector(".webconsole-msg-repeat");
++    if ("repeats" in aRule) {
++      let repeats = aElement.querySelector(".repeats");
+       if (!repeats || repeats.getAttribute("value") != aRule.repeats) {
+         return false;
+       }
+     }
+ 
+     if ("longString" in aRule) {
+       let longStrings = aElement.querySelectorAll(".longStringEllipsis");
+       if (aRule.longString != !!longStrings[0]) {
+@@ -1122,17 +1122,17 @@ function waitForMessages(aOptions)
+           displayErrorContext(aRule, aElement);
+         }
+         return false;
+       }
+       aRule.longStrings = longStrings;
+     }
+ 
+     if ("objects" in aRule) {
+-      let clickables = aElement.querySelectorAll(".hud-clickable");
++      let clickables = aElement.querySelectorAll(".body a");
+       if (aRule.objects != !!clickables[0]) {
+         if (partialMatch) {
+           is(!!clickables[0], aRule.objects,
+              "objects existence check failed for message rule: " +
+              displayRule(aRule));
+           displayErrorContext(aRule, aElement);
+         }
+         return false;
+@@ -1236,35 +1236,16 @@ function waitForMessages(aOptions)
+       webconsole.ui.on("messages-added", onMessagesAdded);
+       webconsole.ui.on("messages-updated", onMessagesAdded);
+     }
+   });
+ 
+   return deferred.promise;
+ }
+ 
+-
+-/**
+- * Scroll the Web Console output to the given node.
+- *
+- * @param nsIDOMNode aNode
+- *        The node to scroll to.
+- */
+-function scrollOutputToNode(aNode)
+-{
+-  let richListBoxNode = aNode.parentNode;
+-  while (richListBoxNode.tagName != "richlistbox") {
+-    richListBoxNode = richListBoxNode.parentNode;
+-  }
+-
+-  let boxObject = richListBoxNode.scrollBoxObject;
+-  let nsIScrollBoxObject = boxObject.QueryInterface(Ci.nsIScrollBoxObject);
+-  nsIScrollBoxObject.ensureElementIsVisible(aNode);
+-}
+-
+ function whenDelayedStartupFinished(aWindow, aCallback)
+ {
+   Services.obs.addObserver(function observer(aSubject, aTopic) {
+     if (aWindow == aSubject) {
+       Services.obs.removeObserver(observer, aTopic);
+       executeSoon(aCallback);
+     }
+   }, "browser-delayed-startup-finished", false);
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -2962,41 +2962,41 @@ JSTerm.prototype = {
+     // Hide undefined results coming from JSTerm helper functions.
+     if (!errorMessage && result && typeof result == "object" &&
+         result.type == "undefined" &&
+         helperResult && !helperHasRawOutput) {
+       aCallback && aCallback();
+       return;
+     }
+ 
+-    if (aCallback) {
+-      let oldFlushCallback = this.hud._flushCallback;
+-      this.hud._flushCallback = function() {
+-        aCallback();
+-        oldFlushCallback && oldFlushCallback();
+-        this.hud._flushCallback = oldFlushCallback;
+-      }.bind(this);
+-    }
+-
+     let node;
+ 
+     if (errorMessage) {
+       node = this.writeOutput(errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
+                               aAfterNode, aResponse.timestamp);
+     }
+     else if (inspectable) {
+       node = this.writeOutputJS(resultString,
+                                 this._evalOutputClick.bind(this, aResponse),
+                                 aAfterNode, aResponse.timestamp);
+     }
+     else {
+       node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
+                               aAfterNode, aResponse.timestamp);
+     }
+ 
++    if (aCallback) {
++      let oldFlushCallback = this.hud._flushCallback;
++      this.hud._flushCallback = function() {
++        aCallback(node);
++        oldFlushCallback && oldFlushCallback();
++        this.hud._flushCallback = oldFlushCallback;
++      }.bind(this);
++    }
++
+     node._objectActors = new Set();
+ 
+     let error = aResponse.exception;
+     if (WebConsoleUtils.isActorGrip(error)) {
+       node._objectActors.add(error.actor);
+     }
+ 
+     if (WebConsoleUtils.isActorGrip(result)) {
+@@ -4461,16 +4461,19 @@ CommandController.prototype = {
+ 
+   copyURL: function CommandController_copyURL()
+   {
+     this.owner.copySelectedItems({ linkOnly: true, contextmenu: true });
+   },
+ 
+   supportsCommand: function CommandController_supportsCommand(aCommand)
+   {
++    if (!this.owner || !this.owner.output) {
++      return false;
++    }
+     return this.isCommandEnabled(aCommand);
+   },
+ 
+   isCommandEnabled: function CommandController_isCommandEnabled(aCommand)
+   {
+     switch (aCommand) {
+       case "consoleCmd_openURL":
+       case "consoleCmd_copyURL": {
