@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent ad0ae007aa9e03cd74e9005cd6652e544139b3b5
+# Parent 959c593c6bd31343b620e6e37ab5860aff585cc1
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1375719835 -10800
 
@@ -31,7 +31,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
     * The DOM window that holds the output.
     * @type Window
-@@ -98,16 +104,87 @@ ConsoleOutput.prototype = {
+@@ -98,16 +104,106 @@ ConsoleOutput.prototype = {
     *         The message DOM element that can be added to the console output.
     */
    _onFlushOutputMessage: function(message)
@@ -58,6 +58,10 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    let anchor = this.getMessageForElement(selection.anchorNode);
 +    let focus = this.getMessageForElement(selection.focusNode);
++    if (!anchor || !focus) {
++      return [];
++    }
++
 +    let start, end;
 +    if (anchor.timestamp > focus.timestamp) {
 +      start = focus;
@@ -106,7 +110,22 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    let selection = this.window.getSelection();
 +    selection.removeAllRanges();
 +    let range = this.document.createRange();
-+    range.selectNode(this.element);
++    range.selectNodeContents(this.element);
++    selection.addRange(range);
++  },
++
++  /**
++   * Add a message to the selection.
++   *
++   * @param DOMElement elem
++   *        The message element to select.
++   */
++  selectMessage: function(elem)
++  {
++    let selection = this.window.getSelection();
++    selection.removeAllRanges();
++    let range = this.document.createRange();
++    range.selectNodeContents(elem);
 +    selection.addRange(range);
 +  },
 +
@@ -119,7 +138,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    },
  }; // ConsoleOutput.prototype
  
-@@ -211,30 +288,25 @@ Messages.BaseMessage.prototype = {
+@@ -211,30 +307,25 @@ Messages.BaseMessage.prototype = {
    /**
     * Prepare the message container for the Web Console, such that it is
     * compatible with the current implementation.
@@ -153,7 +172,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  /**
   * The NavigationMarker is used to show a page load event.
   *
-@@ -281,23 +353,23 @@ Messages.NavigationMarker.prototype = He
+@@ -281,23 +372,23 @@ Messages.NavigationMarker.prototype = He
  
      let url = this._url;
      let pos = url.indexOf("?");
@@ -860,7 +879,56 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.owner.openLink(item.url);
    },
  
-@@ -3069,18 +3020,17 @@ JSTerm.prototype = {
+@@ -3029,58 +2980,57 @@ JSTerm.prototype = {
+     // Hide undefined results coming from JSTerm helper functions.
+     if (!errorMessage && result && typeof result == "object" &&
+         result.type == "undefined" &&
+         helperResult && !helperHasRawOutput) {
+       aCallback && aCallback();
+       return;
+     }
+ 
+-    if (aCallback) {
+-      let oldFlushCallback = this.hud._flushCallback;
+-      this.hud._flushCallback = function() {
+-        aCallback();
+-        oldFlushCallback && oldFlushCallback();
+-        this.hud._flushCallback = oldFlushCallback;
+-      }.bind(this);
+-    }
+-
+     let node;
+ 
+     if (errorMessage) {
+       node = this.writeOutput(errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
+                               aAfterNode, aResponse.timestamp);
+     }
+     else if (inspectable) {
+       node = this.writeOutputJS(resultString,
+                                 this._evalOutputClick.bind(this, aResponse),
+                                 aAfterNode, aResponse.timestamp);
+     }
+     else {
+       node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
+                               aAfterNode, aResponse.timestamp);
+     }
+ 
++    if (aCallback) {
++      let oldFlushCallback = this.hud._flushCallback;
++      this.hud._flushCallback = function() {
++        aCallback(node);
++        oldFlushCallback && oldFlushCallback();
++        this.hud._flushCallback = oldFlushCallback;
++      }.bind(this);
++    }
++
+     node._objectActors = new Set();
+ 
+     let error = aResponse.exception;
+     if (WebConsoleUtils.isActorGrip(error)) {
+       node._objectActors.add(error.actor);
+     }
+ 
      if (WebConsoleUtils.isActorGrip(result)) {
        node._objectActors.add(result.actor);
  
@@ -982,7 +1050,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The script error you want to determine the category for.
     * @return CATEGORY_JS|CATEGORY_CSS|CATEGORY_SECURITY
-@@ -4513,60 +4449,49 @@ var Utils = {
+@@ -4513,60 +4449,52 @@ var Utils = {
   */
  function CommandController(aWebConsole)
  {
@@ -1024,6 +1092,9 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    supportsCommand: function CommandController_supportsCommand(aCommand)
    {
++    if (!this.owner || !this.owner.output) {
++      return false;
++    }
      return this.isCommandEnabled(aCommand);
    },
  
@@ -1047,7 +1118,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        case "cmd_fontSizeReset":
        case "cmd_selectAll":
        case "cmd_find":
-@@ -4575,19 +4500,16 @@ CommandController.prototype = {
+@@ -4575,19 +4503,16 @@ CommandController.prototype = {
          return this.owner.owner._browserConsole;
      }
      return false;
@@ -1067,7 +1138,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          break;
        case "consoleCmd_clearOutput":
          this.owner.jsterm.clearOutput(true);
-@@ -5059,47 +4981,53 @@ function ConsoleContextMenu(aOwner)
+@@ -5059,47 +4984,53 @@ function ConsoleContextMenu(aOwner)
  {
    this.owner = aOwner;
    this.popup = this.owner.document.getElementById("output-contextmenu");
@@ -1131,7 +1202,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            selection.add("network");
            break;
          case CATEGORY_CSS:
-@@ -5153,11 +5081,12 @@ ConsoleContextMenu.prototype = {
+@@ -5153,11 +5084,12 @@ ConsoleContextMenu.prototype = {
    /**
     * Destroy the ConsoleContextMenu object instance.
     */
