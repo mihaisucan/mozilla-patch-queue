@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 12378da87dfa9a16dfc38f3d8c180cbbf0641cc9
+# Parent 58a1ee907788d4e2fa4d22d01694805bea566b7f
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1375801230 -10800
+# Date 1375906654 -10800
 
 Bug 760876 - Part 4: fix broken tests; r=robcee
 
@@ -749,7 +749,7 @@ diff --git a/browser/devtools/webconsole/test/browser_longstring_hang.js b/brows
      gBrowser.selectedBrowser.removeEventListener("load", onLoad, true);
      openConsole(null, performTest);
    }, true);
-@@ -39,18 +34,20 @@ function test()
+@@ -39,18 +34,17 @@ function test()
        ],
      }).then(onInitialString);
    }
@@ -758,10 +758,8 @@ diff --git a/browser/devtools/webconsole/test/browser_longstring_hang.js b/brows
    {
      let clickable = aResults[0].longStrings[0];
      ok(clickable, "long string ellipsis is shown");
-+    return; // FIXME
- 
+-
 -    scrollOutputToNode(clickable);
-+    let msg = [...aResults[0].matched][0];
 +    clickable.scrollIntoView(false);
  
      executeSoon(() => {
@@ -771,10 +769,208 @@ diff --git a/browser/devtools/webconsole/test/browser_longstring_hang.js b/brows
  
        waitForMessages({
          webconsole: hud,
+diff --git a/browser/devtools/webconsole/test/browser_output_longstring_expand.js b/browser/devtools/webconsole/test/browser_output_longstring_expand.js
+--- a/browser/devtools/webconsole/test/browser_output_longstring_expand.js
++++ b/browser/devtools/webconsole/test/browser_output_longstring_expand.js
+@@ -28,126 +28,66 @@ function test()
+ 
+   function performTest(aHud)
+   {
+     hud = aHud;
+ 
+     hud.jsterm.clearOutput(true);
+     hud.jsterm.execute("console.log('bazbaz', '" + longString +"', 'boom')");
+ 
+-    waitForSuccess(waitForConsoleLog);
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        name: "console.log output",
++        text: ["bazbaz", "boom", initialString],
++        noText: "foobar",
++        longString: true,
++      }],
++    }).then(onConsoleMessage);
+   }
+ 
+-  let waitForConsoleLog = {
+-    name: "console.log output shown",
+-    validatorFn: function()
+-    {
+-      return hud.outputNode.querySelector(".webconsole-msg-console");
+-    },
+-    successFn: function()
+-    {
+-      let msg = hud.outputNode.querySelector(".webconsole-msg-console");
+-      is(msg.textContent.indexOf("foobar"), -1,
+-         "foobar is not shown");
+-      isnot(msg.textContent.indexOf("bazbaz"), -1,
+-            "bazbaz is shown");
+-      isnot(msg.textContent.indexOf("boom"), -1,
+-            "boom is shown");
+-      isnot(msg.textContent.indexOf(initialString), -1,
+-            "initial string is shown");
++  function onConsoleMessage([result])
++  {
++    let clickable = result.longStrings[0];
++    ok(clickable, "long string ellipsis is shown");
+ 
+-      let clickable = msg.querySelector(".longStringEllipsis");
+-      ok(clickable, "long string ellipsis is shown");
++    clickable.scrollIntoView(false);
+ 
+-      scrollToVisible(clickable);
++    EventUtils.synthesizeMouse(clickable, 2, 2, {}, hud.iframeWindow);
+ 
+-      executeSoon(function() {
+-        EventUtils.synthesizeMouse(clickable, 2, 2, {}, hud.iframeWindow);
+-        waitForSuccess(waitForFullString);
+-      });
+-    },
+-    failureFn: finishTest,
+-  };
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        name: "full string",
++        text: ["bazbaz", "boom", longString],
++        category: CATEGORY_WEBDEV,
++        longString: false,
++      }],
++    }).then(() => {
++      hud.jsterm.clearOutput(true);
++      hud.jsterm.execute("'" + longString +"'", onExecute);
++    });
++  }
+ 
+-  let waitForFullString = {
+-    name: "full string shown",
+-    validatorFn: function()
+-    {
+-      let msg = hud.outputNode.querySelector(".webconsole-msg-log");
+-      return msg.textContent.indexOf(longString) > -1;
+-    },
+-    successFn: function()
+-    {
+-      let msg = hud.outputNode.querySelector(".webconsole-msg-log");
+-      isnot(msg.textContent.indexOf("bazbaz"), -1,
+-            "bazbaz is shown");
+-      isnot(msg.textContent.indexOf("boom"), -1,
+-            "boom is shown");
++  function onExecute(msg)
++  {
++    isnot(msg.textContent.indexOf(initialString), -1,
++        "initial string is shown");
++    is(msg.textContent.indexOf(longString), -1,
++        "full string is not shown");
+ 
+-      let clickable = msg.querySelector(".longStringEllipsis");
+-      ok(!clickable, "long string ellipsis is not shown");
++    let clickable = msg.querySelector(".longStringEllipsis");
++    ok(clickable, "long string ellipsis is shown");
+ 
+-      executeSoon(function() {
+-        hud.jsterm.clearOutput(true);
+-        hud.jsterm.execute("'" + longString +"'");
+-        waitForSuccess(waitForExecute);
+-      });
+-    },
+-    failureFn: finishTest,
+-  };
++    clickable.scrollIntoView(false);
+ 
+-  let waitForExecute = {
+-    name: "execute() output shown",
+-    validatorFn: function()
+-    {
+-      return hud.outputNode.querySelector(".webconsole-msg-output");
+-    },
+-    successFn: function()
+-    {
+-      let msg = hud.outputNode.querySelector(".webconsole-msg-output");
+-      isnot(msg.textContent.indexOf(initialString), -1,
+-           "initial string is shown");
+-      is(msg.textContent.indexOf(longString), -1,
+-         "full string is not shown");
++    EventUtils.synthesizeMouse(clickable, 3, 4, {}, hud.iframeWindow);
+ 
+-      let clickable = msg.querySelector(".longStringEllipsis");
+-      ok(clickable, "long string ellipsis is shown");
+-
+-      scrollToVisible(clickable);
+-
+-      executeSoon(function() {
+-        EventUtils.synthesizeMouse(clickable, 3, 4, {}, hud.iframeWindow);
+-        waitForSuccess(waitForFullStringAfterExecute);
+-      });
+-    },
+-    failureFn: finishTest,
+-  };
+-
+-  let waitForFullStringAfterExecute = {
+-    name: "full string shown again",
+-    validatorFn: function()
+-    {
+-      let msg = hud.outputNode.querySelector(".webconsole-msg-output");
+-      return msg.textContent.indexOf(longString) > -1;
+-    },
+-    successFn: function()
+-    {
+-      let msg = hud.outputNode.querySelector(".webconsole-msg-output");
+-      let clickable = msg.querySelector(".longStringEllipsis");
+-      ok(!clickable, "long string ellipsis is not shown");
+-
+-      executeSoon(finishTest);
+-    },
+-    failureFn: finishTest,
+-  };
+-
+-  function scrollToVisible(aNode)
+-  {
+-    let richListBoxNode = aNode.parentNode;
+-    while (richListBoxNode.tagName != "richlistbox") {
+-      richListBoxNode = richListBoxNode.parentNode;
+-    }
+-
+-    let boxObject = richListBoxNode.scrollBoxObject;
+-    let nsIScrollBoxObject = boxObject.QueryInterface(Ci.nsIScrollBoxObject);
+-    nsIScrollBoxObject.ensureElementIsVisible(aNode);
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: longString,
++        category: CATEGORY_OUTPUT,
++        longString: false,
++      }],
++    }).then(finishTest);
+   }
+ }
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
-@@ -931,17 +931,17 @@ function waitForMessages(aOptions)
+@@ -913,17 +913,20 @@ function waitForMessages(aOptions)
+   let rulesMatched = 0;
+   let listenerAdded = false;
+   let deferred = promise.defer();
+   aOptions.matchCondition = aOptions.matchCondition || "all";
+ 
+   function checkText(aRule, aText)
+   {
+     let result;
+-    if (typeof aRule == "string") {
++    if (Array.isArray(aRule)) {
++      result = aRule.every((s) => checkText(s, aText));
++    }
++    else if (typeof aRule == "string") {
+       result = aText.indexOf(aRule) > -1;
+     }
+     else if (aRule instanceof RegExp) {
+       result = aRule.test(aText);
+     }
+     return result;
+   }
+ 
+@@ -931,17 +934,17 @@ function waitForMessages(aOptions)
    {
      let elemText = getMessageElementText(aElement);
      let trace = aRule.consoleTrace;
@@ -793,7 +989,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      aRule.clickableElements = [clickable];
  
      if (trace.file &&
-@@ -1002,17 +1002,17 @@ function waitForMessages(aOptions)
+@@ -1002,17 +1005,17 @@ function waitForMessages(aOptions)
      aRule.category = CATEGORY_WEBDEV;
      aRule.severity = SEVERITY_LOG;
  
@@ -812,7 +1008,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
        return false;
      }
  
-@@ -1022,17 +1022,17 @@ function waitForMessages(aOptions)
+@@ -1022,17 +1025,17 @@ function waitForMessages(aOptions)
        return false;
      }
  
@@ -831,7 +1027,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
    }
  
    function checkMessage(aRule, aElement)
-@@ -1082,36 +1082,36 @@ function waitForMessages(aOptions)
+@@ -1082,36 +1085,36 @@ function waitForMessages(aOptions)
        // TODO: we keep this behavior until bug 778766 is fixed. After that we
        // will not require |type| to match newer types of messages.
        return false;
@@ -872,7 +1068,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      if ("longString" in aRule) {
        let longStrings = aElement.querySelectorAll(".longStringEllipsis");
        if (aRule.longString != !!longStrings[0]) {
-@@ -1122,17 +1122,17 @@ function waitForMessages(aOptions)
+@@ -1122,17 +1125,17 @@ function waitForMessages(aOptions)
            displayErrorContext(aRule, aElement);
          }
          return false;
@@ -891,7 +1087,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
            displayErrorContext(aRule, aElement);
          }
          return false;
-@@ -1236,35 +1236,16 @@ function waitForMessages(aOptions)
+@@ -1236,35 +1239,16 @@ function waitForMessages(aOptions)
        webconsole.ui.on("messages-added", onMessagesAdded);
        webconsole.ui.on("messages-updated", onMessagesAdded);
      }
@@ -927,3 +1123,110 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
        executeSoon(aCallback);
      }
    }, "browser-delayed-startup-finished", false);
+diff --git a/browser/devtools/webconsole/test/test-bug-859170-longstring-hang.html b/browser/devtools/webconsole/test/test-bug-859170-longstring-hang.html
+--- a/browser/devtools/webconsole/test/test-bug-859170-longstring-hang.html
++++ b/browser/devtools/webconsole/test/test-bug-859170-longstring-hang.html
+@@ -6,17 +6,17 @@
+          http://creativecommons.org/publicdomain/zero/1.0/ -->
+ <script type="application/javascript">
+ (function() {
+ var longString = "abbababazomglolztest";
+ for (var i = 0; i < 10; i++) {
+   longString += longString + longString;
+ }
+ 
+-longString = "foobar" + (new Array(20000)).join("a") + "foobaz" +
++longString = "foobar" + (new Array(9000)).join("a") + "foobaz" +
+              longString + "boom!";
+ console.log(longString);
+ })();
+ </script>
+   </head>
+   <body>
+     <p>Web Console test for bug 859170 - very long strings hang the browser.</p>
+   </body>
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -157,17 +157,17 @@ const THROTTLE_UPDATES = 1000; // millis
+ 
+ // The preference prefix for all of the Web Console filters.
+ const FILTER_PREFS_PREFIX = "devtools.webconsole.filter.";
+ 
+ // The minimum font size.
+ const MIN_FONT_SIZE = 10;
+ 
+ // The maximum length of strings to be displayed by the Web Console.
+-const MAX_LONG_STRING_LENGTH = 200000;
++const MAX_LONG_STRING_LENGTH = 10000;
+ 
+ const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
+ const PREF_PERSISTLOG = "devtools.webconsole.persistlog";
+ 
+ /**
+  * A WebConsoleFrame instance is an interactive console initialized *per target*
+  * that displays console log data as well as provides an interactive terminal to
+  * manipulate the target's document content.
+diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
+--- a/browser/themes/shared/devtools/webconsole.inc.css
++++ b/browser/themes/shared/devtools/webconsole.inc.css
+@@ -11,16 +11,17 @@ a {
+   text-decoration: underline;
+ }
+ 
+ .message {
+   display: flex;
+   flex: 0 0 auto;
+   -moz-margin-start: 6px;
+   -moz-margin-end: 8px;
++  width: calc(100% - 6px - 8px);
+ }
+ 
+ .message > .timestamp {
+   flex: 0 0 auto;
+   color: GrayText;
+   margin: 4px 0;
+   font-family: monospace;
+   font-size: 0.9em;
+@@ -32,18 +33,22 @@ a {
+   flex: 0 0 auto;
+   margin: 0 6px;
+   padding: 0 4px;
+   width: 8px;
+ }
+ 
+ .message > .body {
+   flex: 1 1 100%;
++  /* Make sure the message body is very small initially, let flex change width
++   * as needed. */
++  width: 300px;
+   white-space: pre-wrap;
+   font-family: monospace;
++  word-wrap: break-word;
+ }
+ 
+ /* The red bubble that shows the number of times a message is repeated */
+ .message > .repeats {
+   -moz-user-select: none;
+   flex: 0 0 auto;
+   margin: 2px 6px;
+   padding: 0 6px;
+@@ -159,17 +164,17 @@ a {
+ 
+ .message[category=network] .method {
+   flex: 0 0 auto;
+ }
+ 
+ .message[category=network]:not(.navigation-marker) .url {
+   flex: 1 1 auto;
+   /* Make sure the URL is very small initially, let flex change width as needed. */
+-  width: 1px;
++  width: 100px;
+   min-width: 5em;
+   white-space: nowrap;
+   overflow: hidden;
+   text-overflow: ellipsis;
+ }
+ 
+ .message[category=network] .status {
+   flex: 0 0 auto;
