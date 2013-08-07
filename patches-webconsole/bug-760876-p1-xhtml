@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 959c593c6bd31343b620e6e37ab5860aff585cc1
+# Parent daf88d34960c94fcbd77e9eff76db9d2c4b7b1bb
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1375719835 -10800
+# Date 1375880718 -10800
 
 Bug 760876 - Part 1: switch from XUL to XHTML for the Web Console output; r=robcee
 
@@ -202,7 +202,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -28,19 +28,17 @@ loader.lazyGetter(this, "Messages",
+@@ -28,23 +28,21 @@ loader.lazyGetter(this, "Messages",
                    () => require("devtools/webconsole/console-output").Messages);
  loader.lazyImporter(this, "GripClient", "resource://gre/modules/devtools/dbg-client.jsm");
  loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
@@ -214,16 +214,24 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -
 -// The XUL namespace.
 -const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+-
+-const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/en/Security/MixedContent";
+-
+-const INSECURE_PASSWORDS_LEARN_MORE = "https://developer.mozilla.org/en-US/docs/Security/InsecurePasswords";
 +const XHTML_NS = "http://www.w3.org/1999/xhtml";
- 
- const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/en/Security/MixedContent";
++
++const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/docs/Security/MixedContent";
++
++const INSECURE_PASSWORDS_LEARN_MORE = "https://developer.mozilla.org/docs/Security/InsecurePasswords";
  
  const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
  
  const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/widgets/VariablesView.xul";
  
  const CONSOLE_DIR_VIEW_HEIGHT = 0.6;
-@@ -915,25 +913,25 @@ WebConsoleFrame.prototype = {
+ 
+ const IGNORED_SOURCE_URLS = ["debugger eval code", "self-hosted"];
+@@ -917,25 +915,25 @@ WebConsoleFrame.prototype = {
     * @param nsIDOMNode aOriginal
     *        The Original Node. The one being merged into.
     * @param nsIDOMNode aFiltered
@@ -252,7 +260,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @private
     * @param nsIDOMNode aNode
     *        The message node to be filtered or not.
-@@ -1065,17 +1063,17 @@ WebConsoleFrame.prototype = {
+@@ -1067,17 +1065,17 @@ WebConsoleFrame.prototype = {
        case "trace": {
          let filename = WebConsoleUtils.abbreviateSourceURL(aMessage.filename);
          let functionName = aMessage.functionName ||
@@ -271,7 +279,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          });
  
          clipboardText = clipboardText.trimRight();
-@@ -1148,17 +1146,17 @@ WebConsoleFrame.prototype = {
+@@ -1150,17 +1148,17 @@ WebConsoleFrame.prototype = {
                                        level, aMessage.timeStamp);
      if (aMessage.private) {
        node.setAttribute("private", true);
@@ -290,7 +298,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (level == "trace") {
        node._stacktrace = aMessage.stacktrace;
  
-@@ -1313,70 +1311,56 @@ WebConsoleFrame.prototype = {
+@@ -1321,70 +1319,56 @@ WebConsoleFrame.prototype = {
    logNetEvent: function WCF_logNetEvent(aActorId)
    {
      let networkInfo = this._networkRequests[aActorId];
@@ -386,7 +394,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      networkInfo.node = messageNode;
  
-@@ -1391,21 +1375,20 @@ WebConsoleFrame.prototype = {
+@@ -1399,21 +1383,20 @@ WebConsoleFrame.prototype = {
     * @param aLinkNode
     *        Parent to the requested urlNode.
     */
@@ -411,7 +419,56 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        aEvent.preventDefault();
        aEvent.stopPropagation();
      }.bind(this));
-@@ -1416,24 +1399,20 @@ WebConsoleFrame.prototype = {
+@@ -1437,64 +1420,53 @@ WebConsoleFrame.prototype = {
+     }
+   },
+ 
+   /*
+    * Appends a clickable insecure passwords warning node to the node passed
+    * as a parameter to the function. When a user clicks on the appended
+    * warning node, the browser navigates to a page where the user can learn
+    * more about security issues associated with insecure passwords.
++   *
++   * @param nsIDOMElement aNode
++   *        Message to append the "learn more" link to.
+    */
+   addInsecurePasswordsWarningNode:
+   function WCF_addInsecurePasswordsWarningNode(aNode)
+   {
+-    let moreInfoLabel =
+-      "[" + l10n.getStr("webConsoleMoreInfoLabel") + "]";
+-
+-    // The node that holds the clickable warning node.
+-    let linkNode = this.document.createElementNS(XUL_NS, "hbox");
+-    linkNode.flex = 1;
+-    linkNode.classList.add("webconsole-msg-body-piece");
+-    linkNode.classList.add("webconsole-msg-link");
+-    aNode.appendChild(linkNode);
+-
+-    // Create the actual insecure passwords warning node and make it clickable
+-    let warningNode = this.document.createElement("label");
+-    warningNode.setAttribute("value", moreInfoLabel);
+-    warningNode.setAttribute("title", moreInfoLabel);
+-    warningNode.classList.add("hud-clickable");
++    let moreInfoLabel = "[" + l10n.getStr("webConsoleMoreInfoLabel") + "]";
++
++    let warningNode = this.document.createElementNS(XHTML_NS, "a");
++    warningNode.textContent = moreInfoLabel;
++    warningNode.title = INSECURE_PASSWORDS_LEARN_MORE;
+     warningNode.classList.add("webconsole-learn-more-link");
+ 
+     warningNode.addEventListener("click", function(aEvent) {
+       this.owner.openLink(INSECURE_PASSWORDS_LEARN_MORE);
+       aEvent.preventDefault();
+       aEvent.stopPropagation();
+     }.bind(this));
+ 
+-    linkNode.appendChild(warningNode);
++    aNode.appendChild(warningNode);
+   },
+ 
+   /**
+    * Log file activity.
     *
     * @param string aFileURI
     *        The file URI that was loaded.
@@ -438,7 +495,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this.owner.viewSource(aFileURI);
      }.bind(this));
  
-@@ -1588,19 +1567,18 @@ WebConsoleFrame.prototype = {
+@@ -1649,19 +1621,18 @@ WebConsoleFrame.prototype = {
          status = [response.httpVersion, response.status, response.statusText];
        }
        if (hasEventTimings) {
@@ -460,7 +517,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            response.status <= MAX_HTTP_ERROR_CODE) {
          this.setMessageType(messageNode, CATEGORY_NETWORK, SEVERITY_ERROR);
        }
-@@ -1858,18 +1836,16 @@ WebConsoleFrame.prototype = {
+@@ -1919,18 +1890,16 @@ WebConsoleFrame.prototype = {
      if (!batch.length) {
        this._outputTimerInitialized = false;
        return;
@@ -479,7 +536,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      for (let item of batch) {
        let result = this._outputMessageFromQueue(hudIdSupportsString, item);
        if (result) {
-@@ -1886,17 +1862,17 @@ WebConsoleFrame.prototype = {
+@@ -1947,17 +1916,17 @@ WebConsoleFrame.prototype = {
      }
  
      let oldScrollHeight = 0;
@@ -498,7 +555,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this._pruneCategoriesQueue = {};
      }
  
-@@ -1906,20 +1882,20 @@ WebConsoleFrame.prototype = {
+@@ -1967,20 +1936,20 @@ WebConsoleFrame.prototype = {
  
      // Scroll to the new node if it is not filtered, and if the output node is
      // scrolled at the bottom or if the new node is a jsterm input/output
@@ -521,7 +578,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (updatedMessages.size) {
        this.emit("messages-updated", updatedMessages);
      }
-@@ -2188,61 +2164,52 @@ WebConsoleFrame.prototype = {
+@@ -2249,61 +2218,52 @@ WebConsoleFrame.prototype = {
     *        copied. If omitted, defaults to the body text. If `aBody` is not
     *        a string, then the clipboard text must be supplied.
     * @param number aLevel [optional]
@@ -594,7 +651,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        let str = undefined;
        if (aLevel == "dir") {
          str = VariablesView.getString(aBody.arguments[0]);
-@@ -2256,84 +2223,76 @@ WebConsoleFrame.prototype = {
+@@ -2317,84 +2277,76 @@ WebConsoleFrame.prototype = {
        }
  
        if (str !== undefined) {
@@ -703,7 +760,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement aMessage
-@@ -2346,17 +2305,17 @@ WebConsoleFrame.prototype = {
+@@ -2407,17 +2359,17 @@ WebConsoleFrame.prototype = {
     *        the call information that we need to display - mainly the arguments
     *        array of the given API call.
     */
@@ -722,7 +779,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        configurable: false
      });
  
-@@ -2367,36 +2326,34 @@ WebConsoleFrame.prototype = {
+@@ -2428,36 +2380,34 @@ WebConsoleFrame.prototype = {
  
        let text = VariablesView.getString(aItem);
        let inspectable = !VariablesView.isPrimitive({ value: aItem });
@@ -762,7 +819,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }, this);
    },
  
-@@ -2450,30 +2407,30 @@ WebConsoleFrame.prototype = {
+@@ -2511,30 +2461,30 @@ WebConsoleFrame.prototype = {
  
          if (toIndex != longString.length) {
            this.logWarningAboutStringTooLong();
@@ -796,7 +853,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
        displayLocation = aSourceURL;
-@@ -2484,24 +2441,19 @@ WebConsoleFrame.prototype = {
+@@ -2545,24 +2495,19 @@ WebConsoleFrame.prototype = {
        displayLocation = WebConsoleUtils.abbreviateSourceURL(fullURL);
      }
  
@@ -822,7 +879,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
          while (wins.hasMoreElements()) {
            let win = wins.getNext();
-@@ -2622,29 +2574,27 @@ WebConsoleFrame.prototype = {
+@@ -2683,29 +2628,27 @@ WebConsoleFrame.prototype = {
     *
     * @param object aOptions
     *        - linkOnly:
@@ -859,7 +916,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            strings.push(item.url);
          }
          else {
-@@ -2693,17 +2643,18 @@ WebConsoleFrame.prototype = {
+@@ -2754,17 +2697,18 @@ WebConsoleFrame.prototype = {
      }
    },
  
@@ -879,7 +936,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.owner.openLink(item.url);
    },
  
-@@ -3029,58 +2980,57 @@ JSTerm.prototype = {
+@@ -3090,58 +3034,57 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
          result.type == "undefined" &&
@@ -948,7 +1005,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                                                      formatter);
          this.hud._addMessageLinkCallback(ellipsis, onclick);
  
-@@ -3245,17 +3195,17 @@ JSTerm.prototype = {
+@@ -3306,17 +3249,17 @@ JSTerm.prototype = {
        return view;
      };
  
@@ -967,7 +1024,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
        iframe.flex = 1;
        iframe.setAttribute("src", VARIABLES_VIEW_URL);
-@@ -3670,17 +3620,17 @@ JSTerm.prototype = {
+@@ -3731,17 +3674,17 @@ JSTerm.prototype = {
  
    /**
     * Remove all of the private messages from the Web Console output.
@@ -986,7 +1043,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Updates the size of the input field (command line) to fit its contents.
-@@ -4405,57 +4355,43 @@ JSTerm.prototype = {
+@@ -4466,57 +4409,43 @@ JSTerm.prototype = {
   */
  var Utils = {
    /**
@@ -1050,7 +1107,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The script error you want to determine the category for.
     * @return CATEGORY_JS|CATEGORY_CSS|CATEGORY_SECURITY
-@@ -4513,60 +4449,52 @@ var Utils = {
+@@ -4575,60 +4504,52 @@ var Utils = {
   */
  function CommandController(aWebConsole)
  {
@@ -1118,7 +1175,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        case "cmd_fontSizeReset":
        case "cmd_selectAll":
        case "cmd_find":
-@@ -4575,19 +4503,16 @@ CommandController.prototype = {
+@@ -4637,19 +4558,16 @@ CommandController.prototype = {
          return this.owner.owner._browserConsole;
      }
      return false;
@@ -1138,7 +1195,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          break;
        case "consoleCmd_clearOutput":
          this.owner.jsterm.clearOutput(true);
-@@ -5059,47 +4984,53 @@ function ConsoleContextMenu(aOwner)
+@@ -5121,47 +5039,53 @@ function ConsoleContextMenu(aOwner)
  {
    this.owner = aOwner;
    this.popup = this.owner.document.getElementById("output-contextmenu");
@@ -1202,7 +1259,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            selection.add("network");
            break;
          case CATEGORY_CSS:
-@@ -5153,11 +5084,12 @@ ConsoleContextMenu.prototype = {
+@@ -5215,11 +5139,12 @@ ConsoleContextMenu.prototype = {
    /**
     * Destroy the ConsoleContextMenu object instance.
     */
@@ -1298,7 +1355,7 @@ diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webco
 diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 --- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
-@@ -178,8 +178,13 @@ connectionTimeout=Connection timeout. Ch
+@@ -182,8 +182,13 @@ connectionTimeout=Connection timeout. Ch
  
  # LOCALIZATION NOTE (propertiesFilterPlaceholder): this is the text that
  # appears in the filter text box for the properties view container.
@@ -1315,7 +1372,7 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
 --- a/browser/themes/shared/devtools/webconsole.inc.css
 +++ b/browser/themes/shared/devtools/webconsole.inc.css
-@@ -1,107 +1,142 @@
+@@ -1,112 +1,143 @@
  /* This Source Code Form is subject to the terms of the Mozilla Public
   * License, v. 2.0. If a copy of the MPL was not distributed with this
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -1441,9 +1498,15 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    color: #FF0000;
  }
  
- .webconsole-mixed-content-link {
-   color: #0000EE;
+-.webconsole-mixed-content-link {
+-  color: #0000EE;
 -  margin: 0;
+-}
+-
++.webconsole-mixed-content-link,
+ .webconsole-learn-more-link {
+   color: #0000EE;
+-  margin: 0 0 0 4px;
 -}
 -
 -.hud-msg-node[selected="true"] > .webconsole-timestamp,
@@ -1489,7 +1552,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
  }
  
  .hidden-message {
-@@ -133,95 +168,108 @@
+@@ -138,95 +169,108 @@
  }
  
  /* Network styles */
@@ -1626,7 +1689,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    border: none;
    padding: 0 0 0 16px;
    -moz-appearance: none;
-@@ -236,53 +284,60 @@
+@@ -241,53 +285,60 @@
            .jsterm-complete-node) > .textbox-input-box > .textbox-textarea {
    overflow-x: hidden;
  }
