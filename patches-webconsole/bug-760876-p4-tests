@@ -1,10 +1,34 @@
 # HG changeset patch
-# Parent 827980f1af6a416e75ac5aece4e499c1438f488a
+# Parent e0ae7d0e22b712b26df8930db254bbae334887b9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1375992848 -10800
+# Date 1376339833 -10800
 
 Bug 760876 - Part 4: fix broken tests; r=robcee
 
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -120,16 +120,20 @@ ConsoleOutput.prototype = {
+    */
+   getSelectedMessages: function(limit)
+   {
+     let selection = this.window.getSelection();
+     if (selection.isCollapsed) {
+       return [];
+     }
+ 
++    if (selection.containsNode(this.element, true)) {
++      return Array.slice(this.element.children);
++    }
++
+     let anchor = this.getMessageForElement(selection.anchorNode);
+     let focus = this.getMessageForElement(selection.focusNode);
+     if (!anchor || !focus) {
+       return [];
+     }
+ 
+     let start, end;
+     if (anchor.timestamp > focus.timestamp) {
 diff --git a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
 --- a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
 +++ b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
@@ -1385,7 +1409,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585237_line
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_586388_select_all.js b/browser/devtools/webconsole/test/browser_webconsole_bug_586388_select_all.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_586388_select_all.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_586388_select_all.js
-@@ -6,76 +6,88 @@
+@@ -6,76 +6,87 @@
   * Contributor(s):
   *  Patrick Walton <pcwalton@mozilla.com>
   *
@@ -1447,12 +1471,11 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_586388_sele
 +       "all console messages are selected after performing a regular browser " +
 +       "select-all operation");
 +
-+    return;
 +    hud.iframeWindow.getSelection().removeAllRanges();
 +
 +    // Test the context menu "Select All" (which has a different code path) works
 +    // properly as well.
-+    let contextMenuId = outputNode.getAttribute("context");
++    let contextMenuId = outputNode.parentNode.getAttribute("context");
 +    let contextMenu = hud.ui.document.getElementById(contextMenuId);
 +    ok(contextMenu != null, "the output node has a context menu");
 +
@@ -1536,6 +1559,110 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_586388_sele
 -
 -  finishTest();
 -}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js b/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_587617_output_copy.js
+@@ -20,72 +20,62 @@ function test() {
+   }, true);
+ }
+ 
+ function consoleOpened(aHud) {
+   HUD = aHud;
+ 
+   // See bugs 574036, 586386 and 587617.
+   outputNode = HUD.outputNode;
+-  let selection = getSelection();
+-  let jstermInput = HUD.jsterm.inputNode;
+-  let console = content.wrappedJSObject.console;
+-  let contentSelection = content.wrappedJSObject.getSelection();
+ 
+   HUD.jsterm.clearOutput();
+ 
+   let controller = top.document.commandDispatcher.
+                    getControllerForCommand("cmd_copy");
+   is(controller.isCommandEnabled("cmd_copy"), false, "cmd_copy is disabled");
+ 
+-  console.log("Hello world! bug587617");
++  content.console.log("Hello world! bug587617");
+ 
+-  waitForSuccess({
+-    name: "console log 'Hello world!' message",
+-    validatorFn: function()
+-    {
+-      return outputNode.textContent.indexOf("bug587617") > -1;
+-    },
+-    successFn: function()
+-    {
+-      outputNode.selectedIndex = 0;
+-      outputNode.focus();
++  waitForMessages({
++    webconsole: HUD,
++    messages: [{
++      text: "bug587617",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(([result]) => {
++    let msg = [...result.matched][0];
++    HUD.ui.output.selectMessage(msg);
+ 
+-      goUpdateCommand("cmd_copy");
+-      controller = top.document.commandDispatcher.
+-        getControllerForCommand("cmd_copy");
+-      is(controller.isCommandEnabled("cmd_copy"), true, "cmd_copy is enabled");
+-      let selectedNode = outputNode.getItemAtIndex(0);
+-      waitForClipboard(getExpectedClipboardText(selectedNode), clipboardSetup,
+-                       testContextMenuCopy, testContextMenuCopy);
+-    },
+-    failureFn: finishTest,
++    outputNode.focus();
++
++    goUpdateCommand("cmd_copy");
++    controller = top.document.commandDispatcher.getControllerForCommand("cmd_copy");
++    is(controller.isCommandEnabled("cmd_copy"), true, "cmd_copy is enabled");
++
++    let selection = HUD.iframeWindow.getSelection() + "";
++    isnot(selection.indexOf("bug587617"), -1,
++          "selection text includes 'bug587617'");
++
++    waitForClipboard(selection, () => goDoCommand("cmd_copy"),
++                     testContextMenuCopy, testContextMenuCopy);
+   });
+ }
+ 
+ // Test that the context menu "Copy" (which has a different code path) works
+ // properly as well.
+ function testContextMenuCopy() {
+-  let contextMenuId = outputNode.getAttribute("context");
++  let contextMenuId = outputNode.parentNode.getAttribute("context");
+   let contextMenu = HUD.ui.document.getElementById(contextMenuId);
+   ok(contextMenu, "the output node has a context menu");
+ 
+   let copyItem = contextMenu.querySelector("*[command='cmd_copy']");
+   ok(copyItem, "the context menu on the output node has a \"Copy\" item");
+ 
++  let selection = HUD.iframeWindow.getSelection() + "";
++
+   copyItem.doCommand();
+ 
+-  let selectedNode = outputNode.getItemAtIndex(0);
+-
++  waitForClipboard(selection, () => goDoCommand("cmd_copy"),
++                   finishTest, finishTest);
+   HUD = outputNode = null;
+-  waitForClipboard(getExpectedClipboardText(selectedNode), clipboardSetup,
+-    finishTest, finishTest);
+ }
+ 
+-function getExpectedClipboardText(aItem) {
+-  return "[" + WCU_l10n.timestampString(aItem.timestamp) + "] " +
+-         aItem.clipboardText;
+-}
+-
+-function clipboardSetup() {
+-  goDoCommand("cmd_copy");
+-}
+-
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
