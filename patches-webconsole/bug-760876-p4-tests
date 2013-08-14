@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent e0ae7d0e22b712b26df8930db254bbae334887b9
+# Parent c56435268b19986d77d844713a4bf5eec29baea2
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1376339833 -10800
+# Date 1376511477 -10800
 
 Bug 760876 - Part 4: fix broken tests; r=robcee
 
@@ -1663,10 +1663,408 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_587617_outp
 -  goDoCommand("cmd_copy");
 -}
 -
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_593003_iframe_wrong_hud.js b/browser/devtools/webconsole/test/browser_webconsole_bug_593003_iframe_wrong_hud.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_593003_iframe_wrong_hud.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_593003_iframe_wrong_hud.js
+@@ -37,39 +37,32 @@ function tab2Loaded(aEvent) {
+ }
+ 
+ function tab1Reloaded(aEvent) {
+   tab1.linkedBrowser.removeEventListener(aEvent.type, tab1Reloaded, true);
+ 
+   let hud1 = HUDService.getHudByWindow(tab1.linkedBrowser.contentWindow);
+   let outputNode1 = hud1.outputNode;
+ 
+-  waitForSuccess({
+-    name: "iframe network request displayed in tab1",
+-    validatorFn: function()
+-    {
+-      let selector = ".webconsole-msg-url[value='" + TEST_IFRAME_URI +"']";
+-      return outputNode1.querySelector(selector);
+-    },
+-    successFn: function()
+-    {
+-      let hud2 = HUDService.getHudByWindow(tab2.linkedBrowser.contentWindow);
+-      let outputNode2 = hud2.outputNode;
++  waitForMessages({
++    webconsole: hud1,
++    messages: [{
++      text: TEST_IFRAME_URI,
++      category: CATEGORY_NETWORK,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(() => {
++    let hud2 = HUDService.getHudByWindow(tab2.linkedBrowser.contentWindow);
++    let outputNode2 = hud2.outputNode;
+ 
+-      isnot(outputNode1, outputNode2,
+-            "the two HUD outputNodes must be different");
++    isnot(outputNode1, outputNode2,
++      "the two HUD outputNodes must be different");
+ 
+-      let msg = "Didn't find the iframe network request in tab2";
+-      testLogEntry(outputNode2, TEST_IFRAME_URI, msg, true, true);
++    let msg = "Didn't find the iframe network request in tab2";
++    testLogEntry(outputNode2, TEST_IFRAME_URI, msg, true, true);
+ 
+-      testEnd();
+-    },
+-    failureFn: testEnd,
++    closeConsole(tab2, function() {
++      gBrowser.removeTab(tab2);
++      tab1 = tab2 = null;
++      executeSoon(finishTest);
++    });
+   });
+ }
+-
+-function testEnd() {
+-  closeConsole(tab2, function() {
+-    gBrowser.removeTab(tab2);
+-    tab1 = tab2 = null;
+-    executeSoon(finishTest);
+-  });
+-}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
+@@ -22,32 +22,31 @@ function consoleOpened(aHud) {
+ 
+   // Reload so we get some output in the console.
+   browser.contentWindow.location.reload();
+ }
+ 
+ function tabLoad2(aEvent) {
+   browser.removeEventListener(aEvent.type, tabLoad2, true);
+ 
+-  waitForSuccess({
+-    name: "network message displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelector(".hud-networkinfo .hud-clickable");
+-    },
+-    successFn: function() {
+-      outputItem = outputNode.querySelector(".hud-networkinfo .hud-clickable");
+-      ok(outputItem, "found a network message");
+-      document.addEventListener("popupshown", networkPanelShown, false);
++  waitForMessages({
++    webconsole: HUD,
++    messages: [{
++      category: CATEGORY_NETWORK,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(([result]) => {
++    let msg = [...result.matched][0];
++    outputItem = msg.querySelector(".body .url");
++    ok(outputItem, "found a network message");
++    document.addEventListener("popupshown", networkPanelShown, false);
+ 
+-      // Send the mousedown and click events such that the network panel opens.
+-      EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+-      EventUtils.sendMouseEvent({type: "click"}, outputItem);
+-    },
+-    failureFn: finishTest,
++    // Send the mousedown and click events such that the network panel opens.
++    EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
++    EventUtils.sendMouseEvent({type: "click"}, outputItem);
+   });
+ }
+ 
+ function networkPanelShown(aEvent) {
+   document.removeEventListener(aEvent.type, networkPanelShown, false);
+ 
+   info("networkPanelShown");
+ 
+@@ -93,22 +92,21 @@ function networkPanelHidden(aEvent) {
+   EventUtils.sendMouseEvent({type: "click", button: 2},
+     outputItem);
+ 
+   executeSoon(function() {
+     document.removeEventListener("popupshown", networkPanelShowFailure, false);
+ 
+     // Done with the network output. Now test the jsterm output and the property
+     // panel.
+-    HUD.jsterm.execute("document", () => {
++    HUD.jsterm.execute("document", (msg) => {
+       info("jsterm execute 'document' callback");
+ 
+       HUD.jsterm.once("variablesview-open", onVariablesViewOpen);
+-      let outputItem = outputNode
+-                       .querySelector(".webconsole-msg-output .hud-clickable");
++      let outputItem = msg.querySelector(".body a");
+       ok(outputItem, "jsterm output message found");
+ 
+       // Send the mousedown and click events such that the property panel opens.
+       EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+       EventUtils.sendMouseEvent({type: "click"}, outputItem);
+     });
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js b/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_595223_file_uri.js
+@@ -3,34 +3,39 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ const TEST_FILE = "test-network.html";
+ 
+ function tabReload(aEvent) {
+   browser.removeEventListener(aEvent.type, tabReload, true);
+ 
+-  outputNode = hud.outputNode;
+-
+-  waitForSuccess({
+-    name: "console.log() message displayed",
+-    validatorFn: function()
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "running network console logging tests",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    },
+     {
+-      return outputNode.textContent
+-             .indexOf("running network console logging tests") > -1;
++      text: "test-network.html",
++      category: CATEGORY_NETWORK,
++      severity: SEVERITY_LOG,
+     },
+-    successFn: function()
+     {
+-      findLogEntry("test-network.html");
+-      findLogEntry("test-image.png");
+-      findLogEntry("testscript.js");
+-      finishTest();
++      text: "test-image.png",
++      category: CATEGORY_NETWORK,
++      severity: SEVERITY_LOG,
+     },
+-    failureFn: finishTest,
+-  });
++    {
++      text: "testscript.js",
++      category: CATEGORY_NETWORK,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(finishTest);
+ }
+ 
+ function test() {
+   let jar = getJar(getRootDirectory(gTestPath));
+   let dir = jar ?
+             extractJarToTmp(jar) :
+             getChromeDir(getResolvedURI(gTestPath));
+   dir.append(TEST_FILE);
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_597460_filter_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_597460_filter_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_597460_filter_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_597460_filter_scroll.js
+@@ -33,38 +33,35 @@ function consoleOpened(aHud) {
+     }],
+   }).then(() => {
+     waitForMessages({
+       webconsole: hud,
+       messages: [{
+         text: "test-network.html",
+         category: CATEGORY_NETWORK,
+         severity: SEVERITY_LOG,
+-        successFn: testScroll,
+-        failureFn: finishTest,
+       }],
+     }).then(testScroll);
+     content.location.reload();
+   });
+ }
+ 
+-function testScroll() {
+-  let msgNode = hud.outputNode.querySelector(".webconsole-msg-network");
+-  ok(msgNode.classList.contains("hud-filtered-by-type"),
++function testScroll([result]) {
++  let msgNode = [...result.matched][0];
++  ok(msgNode.classList.contains("filtered-by-type"),
+     "network message is filtered by type");
+-  ok(msgNode.classList.contains("hud-filtered-by-string"),
++  ok(msgNode.classList.contains("filtered-by-string"),
+     "network message is filtered by string");
+ 
+-  let scrollBox = hud.outputNode.scrollBoxObject.element;
+-  ok(scrollBox.scrollTop > 0, "scroll location is not at the top");
++  ok(hud.outputNode.scrollTop > 0, "scroll location is not at the top");
+ 
+   // Make sure the Web Console output is scrolled as near as possible to the
+   // bottom.
+-  let nodeHeight = hud.outputNode.querySelector(".hud-log").clientHeight;
+-  ok(scrollBox.scrollTop >= scrollBox.scrollHeight - scrollBox.clientHeight -
++  let nodeHeight = msgNode.clientHeight;
++  ok(hud.outputNode.scrollTop >= hud.outputNode.scrollHeight - hud.outputNode.clientHeight -
+      nodeHeight * 2, "scroll location is correct");
+ 
+   hud.setFilterState("network", true);
+   hud.setFilterState("networkinfo", true);
+ 
+   executeSoon(finishTest);
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+@@ -143,87 +143,64 @@ function testGen() {
+     inputValues[cpos][4] : printOutput;
+ 
+   let consoleTest = inputValues[cpos][5] || inputValue;
+ 
+   HUD.jsterm.clearOutput();
+ 
+   // Test the console.log() output.
+ 
++  let outputItem;
++  function onExecute(msg) {
++    outputItem = msg;
++    subtestNext();
++  }
++
+   HUD.jsterm.execute("console.log(" + consoleTest + ")");
+ 
+-  waitForSuccess({
+-    name: "console.log message for test #" + cpos,
+-    validatorFn: function()
+-    {
+-      return HUD.outputNode.querySelector(".hud-log");
+-    },
+-    successFn: subtestNext,
+-    failureFn: testNext,
+-  });
++  waitForMessages({
++    webconsole: HUD,
++    messages: [{
++      name: "console API output is correct for inputValues[" + cpos + "]",
++      text: consoleOutput,
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(subtestNext);
+ 
+   yield undefined;
+ 
+-  let outputItem = HUD.outputNode.querySelector(".hud-log:last-child");
+-  ok(outputItem,
+-    "found the window.console output line for inputValues[" + cpos + "]");
+-  ok(outputItem.textContent.indexOf(consoleOutput) > -1,
+-    "console API output is correct for inputValues[" + cpos + "]");
+-
+   HUD.jsterm.clearOutput();
+ 
+   // Test jsterm print() output.
+ 
+   HUD.jsterm.setInputValue("print(" + inputValue + ")");
+-  HUD.jsterm.execute();
+-
+-  waitForSuccess({
+-    name: "jsterm print() output for test #" + cpos,
+-    validatorFn: function()
+-    {
+-      return HUD.outputNode.querySelector(".webconsole-msg-output:last-child");
+-    },
+-    successFn: subtestNext,
+-    failureFn: testNext,
+-  });
++  HUD.jsterm.execute(null, onExecute);
+ 
+   yield undefined;
+ 
+-  outputItem = HUD.outputNode.querySelector(".webconsole-msg-output:" +
+-                                            "last-child");
+   ok(outputItem,
+     "found the jsterm print() output line for inputValues[" + cpos + "]");
+   ok(outputItem.textContent.indexOf(printOutput) > -1,
+     "jsterm print() output is correct for inputValues[" + cpos + "]");
+ 
+   // Test jsterm execution output.
+ 
+   HUD.jsterm.clearOutput();
+   HUD.jsterm.setInputValue(inputValue);
+-  HUD.jsterm.execute();
+-
+-  waitForSuccess({
+-    name: "jsterm output for test #" + cpos,
+-    validatorFn: function()
+-    {
+-      return HUD.outputNode.querySelector(".webconsole-msg-output:last-child");
+-    },
+-    successFn: subtestNext,
+-    failureFn: testNext,
+-  });
++  HUD.jsterm.execute(null, onExecute);
+ 
+   yield undefined;
+ 
+-  outputItem = HUD.outputNode.querySelector(".webconsole-msg-output:" +
+-                                            "last-child");
+   ok(outputItem, "found the jsterm output line for inputValues[" + cpos + "]");
+   ok(outputItem.textContent.indexOf(expectedOutput) > -1,
+     "jsterm output is correct for inputValues[" + cpos + "]");
+ 
+-  let messageBody = outputItem.querySelector(".webconsole-msg-body");
++  let messageBody = outputItem.querySelector(".body a") ||
++                    outputItem.querySelector(".body");
+   ok(messageBody, "we have the message body for inputValues[" + cpos + "]");
+ 
+   // Test click on output.
+   let eventHandlerID = eventHandlers.length + 1;
+ 
+   let variablesViewShown = function(aEvent, aView, aOptions) {
+     if (aOptions.label.indexOf(expectedOutput) == -1) {
+       return;
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
-@@ -913,17 +913,20 @@ function waitForMessages(aOptions)
+@@ -102,42 +102,33 @@ function afterAllTabsLoaded(callback, wi
+  * @param {boolean} [aFailIfFound=false]
+  *        fail the test if the string is found in the output node.
+  * @param {string} aClass [optional]
+  *        find only messages with the given CSS class.
+  */
+ function testLogEntry(aOutputNode, aMatchString, aMsg, aOnlyVisible,
+                       aFailIfFound, aClass)
+ {
+-  let selector = ".hud-msg-node";
++  let selector = ".message";
+   // Skip entries that are hidden by the filter.
+   if (aOnlyVisible) {
+-    selector += ":not(.hud-filtered-by-type)";
++    selector += ":not(.filtered-by-type):not(.filtered-by-string)";
+   }
+   if (aClass) {
+     selector += "." + aClass;
+   }
+ 
+   let msgs = aOutputNode.querySelectorAll(selector);
+   let found = false;
+   for (let i = 0, n = msgs.length; i < n; i++) {
+     let message = msgs[i].textContent.indexOf(aMatchString);
+     if (message > -1) {
+       found = true;
+       break;
+     }
+-
+-    // Search the labels too.
+-    let labels = msgs[i].querySelectorAll("label");
+-    for (let j = 0; j < labels.length; j++) {
+-      if (labels[j].getAttribute("value").indexOf(aMatchString) > -1) {
+-        found = true;
+-        break;
+-      }
+-    }
+   }
+ 
+   is(found, !aFailIfFound, aMsg);
+ }
+ 
+ /**
+  * A convenience method to call testLogEntry().
+  *
+@@ -913,17 +904,20 @@ function waitForMessages(aOptions)
    let rulesMatched = 0;
    let listenerAdded = false;
    let deferred = promise.defer();
@@ -1688,7 +2086,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      return result;
    }
  
-@@ -931,17 +934,17 @@ function waitForMessages(aOptions)
+@@ -931,17 +925,17 @@ function waitForMessages(aOptions)
    {
      let elemText = getMessageElementText(aElement);
      let trace = aRule.consoleTrace;
@@ -1707,7 +2105,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      aRule.clickableElements = [clickable];
  
      if (trace.file &&
-@@ -1002,17 +1005,17 @@ function waitForMessages(aOptions)
+@@ -1002,17 +996,17 @@ function waitForMessages(aOptions)
      aRule.category = CATEGORY_WEBDEV;
      aRule.severity = SEVERITY_LOG;
  
@@ -1726,7 +2124,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
        return false;
      }
  
-@@ -1022,17 +1025,17 @@ function waitForMessages(aOptions)
+@@ -1022,17 +1016,17 @@ function waitForMessages(aOptions)
        return false;
      }
  
@@ -1745,7 +2143,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
    }
  
    function checkMessage(aRule, aElement)
-@@ -1082,36 +1085,36 @@ function waitForMessages(aOptions)
+@@ -1082,36 +1076,36 @@ function waitForMessages(aOptions)
        // TODO: we keep this behavior until bug 778766 is fixed. After that we
        // will not require |type| to match newer types of messages.
        return false;
@@ -1786,7 +2184,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      if ("longString" in aRule) {
        let longStrings = aElement.querySelectorAll(".longStringEllipsis");
        if (aRule.longString != !!longStrings[0]) {
-@@ -1122,17 +1125,17 @@ function waitForMessages(aOptions)
+@@ -1122,17 +1116,17 @@ function waitForMessages(aOptions)
            displayErrorContext(aRule, aElement);
          }
          return false;
@@ -1805,7 +2203,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
            displayErrorContext(aRule, aElement);
          }
          return false;
-@@ -1236,35 +1239,16 @@ function waitForMessages(aOptions)
+@@ -1236,35 +1230,16 @@ function waitForMessages(aOptions)
        webconsole.ui.on("messages-added", onMessagesAdded);
        webconsole.ui.on("messages-updated", onMessagesAdded);
      }
