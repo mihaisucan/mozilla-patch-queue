@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent c56435268b19986d77d844713a4bf5eec29baea2
+# Parent 4726c6e5051dedb5a292973b7dd494cab3e9938f
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1376511477 -10800
+# Date 1376596910 -10800
 
 Bug 760876 - Part 4: fix broken tests; r=robcee
 
@@ -29,6 +29,27 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
      let start, end;
      if (anchor.timestamp > focus.timestamp) {
+diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
+--- a/browser/devtools/webconsole/test/Makefile.in
++++ b/browser/devtools/webconsole/test/Makefile.in
+@@ -76,17 +76,16 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_webconsole_bug_613642_prune_scroll.js \
+ 	browser_webconsole_bug_618078_network_exceptions.js \
+ 	browser_webconsole_bug_613280_jsterm_copy.js \
+ 	browser_webconsole_bug_630733_response_redirect_headers.js \
+ 	browser_webconsole_bug_621644_jsterm_dollar.js \
+ 	browser_webconsole_bug_632817.js \
+ 	browser_webconsole_bug_611795.js \
+ 	browser_webconsole_bug_618311_close_panels.js \
+-	browser_webconsole_bug_626484_output_copy_order.js \
+ 	browser_webconsole_bug_632347_iterators_generators.js \
+ 	browser_webconsole_bug_642108_pruneTest.js \
+ 	browser_webconsole_bug_585956_console_trace.js \
+ 	browser_webconsole_bug_595223_file_uri.js \
+ 	browser_webconsole_bug_632275_getters_document_width.js \
+ 	browser_webconsole_bug_644419_log_limits.js \
+ 	browser_webconsole_bug_646025_console_file_location.js \
+ 	browser_webconsole_bug_642615_autocomplete.js \
 diff --git a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
 --- a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
 +++ b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
@@ -2016,6 +2037,728 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
    let variablesViewShown = function(aEvent, aView, aOptions) {
      if (aOptions.label.indexOf(expectedOutput) == -1) {
        return;
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
+@@ -21,53 +21,36 @@ function consoleOpened(HUD) {
+   }
+ 
+   content.console.log(longMessage);
+ 
+   for (let i = 0; i < 50; i++) {
+     content.console.log("test message " + i);
+   }
+ 
+-  HUD.jsterm.execute("1+1");
++  HUD.jsterm.execute("1+1", performTest);
+ 
+-  function performTest() {
+-    let scrollBox = HUD.outputNode.scrollBoxObject.element;
+-    isnot(scrollBox.scrollTop, 0, "scroll location is not at the top");
++  function performTest(node) {
++    isnot(HUD.outputNode.scrollTop, 0, "scroll location is not at the top");
+ 
+-    let node = HUD.outputNode.getItemAtIndex(HUD.outputNode.itemCount - 1);
+     let rectNode = node.getBoundingClientRect();
+     let rectOutput = HUD.outputNode.getBoundingClientRect();
+ 
+     // Visible scroll viewport.
+-    let height = scrollBox.scrollHeight - scrollBox.scrollTop;
++    let height = HUD.outputNode.scrollHeight - HUD.outputNode.scrollTop;
+ 
+     // Top position of the last message node, relative to the outputNode.
+-    let top = rectNode.top - rectOutput.top;
++    let top = rectNode.top + HUD.outputNode.scrollTop;
++    let bottom = top + node.clientHeight;
++    info("output height " + height + " node top " + top + " node bottom " + bottom + " node height " + node.clientHeight);
+ 
+-    // Bottom position of the last message node, relative to the outputNode.
+-    let bottom = rectNode.bottom - rectOutput.top;
+-
+-    ok(top >= 0 && Math.floor(bottom) <= height + 1,
+-       "last message is visible");
++    ok(top >= 0 && bottom <= height, "last message is visible");
+ 
+     finishTest();
+   };
+-
+-  waitForSuccess({
+-    name: "console output displayed",
+-    validatorFn: function()
+-    {
+-      return HUD.outputNode.itemCount >= 103;
+-    },
+-    successFn: performTest,
+-    failureFn: function() {
+-      info("itemCount: " + HUD.outputNode.itemCount);
+-      finishTest();
+-    },
+-  });
+ }
+ 
+ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 601352");
+   browser.addEventListener("load", function tabLoad(aEvent) {
+     browser.removeEventListener(aEvent.type, tabLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js b/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_611795.js
+@@ -5,78 +5,49 @@
+ const TEST_URI = 'data:text/html;charset=utf-8,<div style="-moz-opacity:0;">test repeated' +
+                  ' css warnings</div><p style="-moz-opacity:0">hi</p>';
+ 
+ function onContentLoaded()
+ {
+   browser.removeEventListener("load", onContentLoaded, true);
+ 
+   let HUD = HUDService.getHudByWindow(content);
+-  let jsterm = HUD.jsterm;
+-  let outputNode = HUD.outputNode;
+ 
+   let cssWarning = "Unknown property '-moz-opacity'.  Declaration dropped.";
+-  let textFound = false;
+-  let repeats = 0;
+ 
+-  function displayResults()
+-  {
+-    ok(textFound, "css warning was found");
+-    is(repeats, 2, "The unknown CSS property warning is displayed only once");
+-  }
+-
+-  waitForSuccess({
+-    name: "2 repeated CSS warnings",
+-    validatorFn: () => {
+-      let node = outputNode.querySelector(".webconsole-msg-cssparser");
+-      if (!node) {
+-        return false;
+-      }
+-
+-      textFound = node.textContent.indexOf(cssWarning) > -1;
+-      repeats = node.querySelector(".webconsole-msg-repeat")
+-                .getAttribute("value");
+-      return textFound && repeats == 2;
+-    },
+-    successFn: () => {
+-      displayResults();
+-      testConsoleLogRepeats();
+-    },
+-    failureFn: () => {
+-      displayResults();
+-      finishTest();
+-    },
+-  });
++  waitForMessages({
++    webconsole: HUD,
++    messages: [{
++      text: cssWarning,
++      category: CATEGORY_CSS,
++      severity: SEVERITY_WARNING,
++      repeats: 2,
++    }],
++  }).then(testConsoleLogRepeats);
+ }
+ 
+ function testConsoleLogRepeats()
+ {
+   let HUD = HUDService.getHudByWindow(content);
+   let jsterm = HUD.jsterm;
+-  let outputNode = HUD.outputNode;
+ 
+   jsterm.clearOutput();
+ 
+   jsterm.setInputValue("for (let i = 0; i < 10; ++i) console.log('this is a line of reasonably long text that I will use to verify that the repeated text node is of an appropriate size.');");
+   jsterm.execute();
+ 
+-  waitForSuccess({
+-    timeout: 10000,
+-    name: "10 repeated console.log messages",
+-    validatorFn: function()
+-    {
+-      let node = outputNode.querySelector(".webconsole-msg-console");
+-      return node && node.childNodes[3].firstChild.getAttribute("value") == 10;
+-    },
+-    successFn: finishTest,
+-    failureFn: function() {
+-      info("output content: " + outputNode.textContent);
+-      finishTest();
+-    },
+-  });
++  waitForMessages({
++    webconsole: HUD,
++    messages: [{
++      text: "this is a line of reasonably long text",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++      repeats: 10,
++    }],
++  }).then(finishTest);
+ }
+ 
+ /**
+  * Unit test for bug 611795:
+  * Repeated CSS messages get collapsed into one.
+  */
+ function test()
+ {
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jsterm_copy.js
+@@ -9,33 +9,33 @@
+ const TEST_URI = "data:text/html;charset=utf-8,Web Console test for bug 613280";
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, function(HUD) {
+       content.console.log("foobarBazBug613280");
+-      waitForSuccess({
+-        name: "a message is displayed",
+-        validatorFn: function()
+-        {
+-          return HUD.outputNode.itemCount > 0;
+-        },
+-        successFn: performTest.bind(null, HUD),
+-        failureFn: finishTest,
+-      });
++      waitForMessages({
++        webconsole: HUD,
++        messages: [{
++          text: "foobarBazBug613280",
++          category: CATEGORY_WEBDEV,
++          severity: SEVERITY_LOG,
++        }],
++      }).then(performTest.bind(null, HUD));
+     });
+   }, true);
+ }
+ 
+-function performTest(HUD) {
++function performTest(HUD, [result]) {
++  let msg = [...result.matched][0];
+   let input = HUD.jsterm.inputNode;
+   let selection = getSelection();
+-  let contentSelection = browser.contentWindow.wrappedJSObject.getSelection();
++  let contentSelection = content.getSelection();
+ 
+   let clipboard_setup = function() {
+     goDoCommand("cmd_copy");
+   };
+ 
+   let clipboard_copy_done = function() {
+     finishTest();
+   };
+@@ -57,29 +57,24 @@ function performTest(HUD) {
+ 
+     goUpdateCommand("cmd_copy");
+   }
+ 
+   let controller = top.document.commandDispatcher.
+                    getControllerForCommand("cmd_copy");
+   is(controller.isCommandEnabled("cmd_copy"), false, "cmd_copy is disabled");
+ 
+-  HUD.jsterm.execute("'bug613280: hello world!'");
+-
+-  HUD.outputNode.selectedIndex = HUD.outputNode.itemCount - 1;
++  HUD.ui.output.selectMessage(msg);
+   HUD.outputNode.focus();
+ 
+   goUpdateCommand("cmd_copy");
+ 
+   controller = top.document.commandDispatcher.
+                getControllerForCommand("cmd_copy");
+   is(controller.isCommandEnabled("cmd_copy"), true, "cmd_copy is enabled");
+ 
+-  ok(HUD.outputNode.selectedItem, "we have a selected message");
++  let selectionText = HUD.iframeWindow.getSelection() + "";
++  isnot(selectionText.indexOf("foobarBazBug613280"), -1,
++        "selection text includes 'foobarBazBug613280'");
+ 
+-  waitForClipboard(getExpectedClipboardText(HUD.outputNode.selectedItem),
+-    clipboard_setup, clipboard_copy_done, clipboard_copy_done);
++  waitForClipboard(selectionText, clipboard_setup, clipboard_copy_done,
++                   clipboard_copy_done);
+ }
+-
+-function getExpectedClipboardText(aItem) {
+-  return "[" + WCU_l10n.timestampString(aItem.timestamp) + "] " +
+-         aItem.clipboardText;
+-}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
+@@ -11,79 +11,79 @@ let hud, testDriver;
+ 
+ function testNext() {
+   testDriver.next();
+ }
+ 
+ function testGen() {
+   hud.jsterm.clearOutput();
+   let outputNode = hud.outputNode;
+-  let scrollBox = outputNode.scrollBoxObject.element;
++  let scrollBox = outputNode;
+ 
+   for (let i = 0; i < 150; i++) {
+     content.console.log("test message " + i);
+   }
+ 
+-  waitForSuccess({
+-    name: "150 console.log messages displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".hud-log").length == 150;
+-    },
+-    successFn: testNext,
+-    failureFn: finishTest,
+-  });
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "test message 149",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(testNext);
+ 
+   yield undefined;
+ 
+   let oldScrollTop = scrollBox.scrollTop;
+   ok(oldScrollTop > 0, "scroll location is not at the top");
+ 
+   // scroll to the first node
+   outputNode.focus();
+ 
+   EventUtils.synthesizeKey("VK_HOME", {});
+ 
+-  let topPosition = scrollBox.scrollTop;
+-  isnot(topPosition, oldScrollTop, "scroll location updated (moved to top)");
++  window.requestAnimationFrame(() => {
++    isnot(scrollBox.scrollTop, 0, "scroll location updated (moved to top)");
++    testNext();
++  });
++  yield undefined;
+ 
+   // add a message and make sure scroll doesn't change
+   content.console.log("test message 150");
+ 
+-  waitForSuccess({
+-    name: "console.log message no. 151 displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".hud-log").length == 151;
+-    },
+-    successFn: testNext,
+-    failureFn: finishTest,
+-  });
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "test message 150",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(testNext);
+ 
+   yield undefined;
+ 
+-  is(scrollBox.scrollTop, topPosition, "scroll location is still at the top");
++  is(scrollBox.scrollTop, 0, "scroll location is still at the top");
+ 
+   // scroll back to the bottom
+   outputNode.lastChild.focus();
+   EventUtils.synthesizeKey("VK_END", {});
+ 
+   oldScrollTop = outputNode.scrollTop;
+ 
+   content.console.log("test message 151");
+ 
+-  waitForSuccess({
+-    name: "console.log message no. 152 displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".hud-log").length == 152;
+-    },
+-    successFn: testNext,
+-    failureFn: finishTest,
+-  });
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "test message 151",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(testNext);
+ 
+   yield undefined;
+ 
+   isnot(scrollBox.scrollTop, oldScrollTop,
+         "scroll location updated (moved to bottom)");
+ 
+   hud = testDriver = null;
+   finishTest();
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
+@@ -12,79 +12,75 @@ let hud, testDriver;
+ function testNext() {
+   testDriver.next();
+ }
+ 
+ function testGen() {
+   hud.jsterm.clearOutput();
+ 
+   let outputNode = hud.outputNode;
+-  let oldPref = Services.prefs.getIntPref("devtools.hud.loglimit.console");
+ 
+   Services.prefs.setIntPref("devtools.hud.loglimit.console", 140);
+-  let scrollBoxElement = outputNode.scrollBoxObject.element;
+-  let boxObject = outputNode.scrollBoxObject;
++  let scrollBoxElement = outputNode;
+ 
+   for (let i = 0; i < 150; i++) {
+     content.console.log("test message " + i);
+   }
+ 
+-  waitForSuccess({
+-    name: "150 console.log messages displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".hud-log").length == 140;
+-    },
+-    successFn: testNext,
+-    failureFn: finishTest,
+-  });
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "test message 149",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(testNext);
+ 
+   yield undefined;
+ 
+   let oldScrollTop = scrollBoxElement.scrollTop;
+-  ok(oldScrollTop > 0, "scroll location is not at the top");
++  isnot(oldScrollTop, 0, "scroll location is not at the top");
+ 
+   let firstNode = outputNode.firstChild;
+   ok(firstNode, "found the first message");
+ 
+-  let msgNode = outputNode.querySelectorAll("richlistitem")[80];
++  let msgNode = outputNode.children[80];
+   ok(msgNode, "found the 80th message");
+ 
+   // scroll to the middle message node
+-  boxObject.ensureElementIsVisible(msgNode);
++  msgNode.scrollIntoView(false);
+ 
+   isnot(scrollBoxElement.scrollTop, oldScrollTop,
+         "scroll location updated (scrolled to message)");
+ 
+   oldScrollTop = scrollBoxElement.scrollTop;
+ 
+   // add a message
+   content.console.log("hello world");
+ 
+-  waitForSuccess({
+-    name: "console.log message #151 displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.textContent.indexOf("hello world") > -1;
+-    },
+-    successFn: testNext,
+-    failureFn: finishTest,
+-  });
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "hello world",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(testNext);
+ 
+   yield undefined;
+ 
+   // Scroll location needs to change, because one message is also removed, and
+   // we need to scroll a bit towards the top, to keep the current view in sync.
+   isnot(scrollBoxElement.scrollTop, oldScrollTop,
+         "scroll location updated (added a message)");
+ 
+   isnot(outputNode.firstChild, firstNode,
+         "first message removed");
+ 
+-  Services.prefs.setIntPref("devtools.hud.loglimit.console", oldPref);
++  Services.prefs.clearUserPref("devtools.hud.loglimit.console");
+ 
+   hud = testDriver = null;
+   finishTest();
+ 
+   yield undefined;
+ }
+ 
+ function test() {
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_614793_jsterm_scroll.js
+@@ -6,61 +6,49 @@
+  * Contributor(s):
+  *   Mihai Șucan <mihai.sucan@gmail.com>
+  */
+ 
+ function consoleOpened(hud) {
+   hud.jsterm.clearOutput();
+ 
+   let outputNode = hud.outputNode;
+-  let boxObject = outputNode.scrollBoxObject.element;
+ 
+   for (let i = 0; i < 150; i++) {
+     content.console.log("test message " + i);
+   }
+ 
+   let oldScrollTop = -1;
+ 
+-  waitForSuccess({
+-    name: "console.log messages displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.itemCount == 150;
+-    },
+-    successFn: function()
+-    {
+-      oldScrollTop = boxObject.scrollTop;
+-      ok(oldScrollTop > 0, "scroll location is not at the top");
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "test message 149",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(() => {
++    oldScrollTop = outputNode.scrollTop;
++    isnot(oldScrollTop, 0, "scroll location is not at the top");
+ 
+-      hud.jsterm.execute("'hello world'");
+-
+-      waitForSuccess(waitForExecute);
+-    },
+-    failureFn: finishTest,
++    hud.jsterm.execute("'hello world'", onExecute);
+   });
+ 
+-  let waitForExecute = {
+-    name: "jsterm output displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelector(".webconsole-msg-output");
+-    },
+-    successFn: function()
+-    {
+-      isnot(boxObject.scrollTop, oldScrollTop, "scroll location updated");
++  function onExecute(msg)
++  {
++    isnot(outputNode.scrollTop, oldScrollTop, "scroll location updated");
+ 
+-      oldScrollTop = boxObject.scrollTop;
+-      outputNode.scrollBoxObject.ensureElementIsVisible(outputNode.lastChild);
++    oldScrollTop = outputNode.scrollTop;
+ 
+-      is(boxObject.scrollTop, oldScrollTop, "scroll location is the same");
++    msg.scrollIntoView(false);
+ 
+-      finishTest();
+-    },
+-    failureFn: finishTest,
+-  };
++    is(outputNode.scrollTop, oldScrollTop, "scroll location is the same");
++
++    finishTest();
++  }
+ }
+ 
+ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 614793: jsterm result scroll");
+   browser.addEventListener("load", function onLoad(aEvent) {
+     browser.removeEventListener(aEvent.type, onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_618311_close_panels.js
+@@ -26,17 +26,17 @@ function test() {
+ }
+ 
+ function performTest(results) {
+   let HUD = HUDService.getHudByWindow(content);
+ 
+   let networkMessage = [...results[0].matched][0];
+   ok(networkMessage, "network message element");
+ 
+-  let networkLink = networkMessage.querySelector(".webconsole-msg-link");
++  let networkLink = networkMessage.querySelector(".url");
+   ok(networkLink, "found network message link");
+ 
+   let popupset = document.getElementById("mainPopupSet");
+   ok(popupset, "found #mainPopupSet");
+ 
+   let popupsShown = 0;
+   let hiddenPopups = 0;
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_621644_jsterm_dollar.js
+@@ -7,60 +7,32 @@
+  *   Mihai Sucan <mihai.sucan@gmail.com>
+  */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-621644-jsterm-dollar.html";
+ 
+ function test$(HUD) {
+   HUD.jsterm.clearOutput();
+ 
+-  HUD.jsterm.setInputValue("$(document.body)");
+-  HUD.jsterm.execute();
++  HUD.jsterm.execute("$(document.body)", (msg) => {
++    ok(msg.textContent.indexOf("<p>") > -1,
++       "jsterm output is correct for $()");
+ 
+-  waitForSuccess({
+-    name: "jsterm output for $()",
+-    validatorFn: function()
+-    {
+-      return HUD.outputNode.querySelector(".webconsole-msg-output:last-child");
+-    },
+-    successFn: function()
+-    {
+-      let outputItem = HUD.outputNode.
+-                       querySelector(".webconsole-msg-output:last-child");
+-      ok(outputItem.textContent.indexOf("<p>") > -1,
+-         "jsterm output is correct for $()");
+-
+-      test$$(HUD);
+-    },
+-    failureFn: test$$.bind(null, HUD),
++    test$$(HUD);
+   });
+ }
+ 
+ function test$$(HUD) {
+   HUD.jsterm.clearOutput();
+ 
+-  HUD.jsterm.setInputValue("$$(document)");
+-  HUD.jsterm.execute();
+-
+-  waitForSuccess({
+-    name: "jsterm output for $$()",
+-    validatorFn: function()
+-    {
+-      return HUD.outputNode.querySelector(".webconsole-msg-output:last-child");
+-    },
+-    successFn: function()
+-    {
+-      let outputItem = HUD.outputNode.
+-                       querySelector(".webconsole-msg-output:last-child");
+-      ok(outputItem.textContent.indexOf("621644") > -1,
+-         "jsterm output is correct for $$()");
+-
+-      executeSoon(finishTest);
+-    },
+-    failureFn: finishTest,
++  HUD.jsterm.setInputValue();
++  HUD.jsterm.execute("$$(document)", (msg) => {
++    ok(msg.textContent.indexOf("621644") > -1,
++       "jsterm output is correct for $$()");
++    finishTest();
+   });
+ }
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, test$);
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js b/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
+deleted file mode 100644
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_626484_output_copy_order.js
++++ /dev/null
+@@ -1,70 +0,0 @@
+-/* Any copyright is dedicated to the Public Domain.
+-   http://creativecommons.org/publicdomain/zero/1.0/ */
+-let itemsSet, HUD, outputNode;
+-
+-function test() {
+-  addTab("data:text/html;charset=utf-8,Web Console test for bug 626484");
+-  browser.addEventListener("load", function tabLoaded(aEvent) {
+-    browser.removeEventListener(aEvent.type, tabLoaded, true);
+-    openConsole(null, consoleOpened);
+-  }, true);
+-}
+-
+-
+-function consoleOpened(aHud) {
+-  HUD = aHud;
+-  outputNode = HUD.outputNode;
+-  HUD.jsterm.clearOutput();
+-
+-  let console = content.wrappedJSObject.console;
+-  console.log("The first line.");
+-  console.log("The second line.");
+-  console.log("The last line.");
+-  itemsSet = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1],
+-    [2, 1, 0]];
+-
+-  waitForSuccess({
+-    name: "console.log messages displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".hud-log").length == 3;
+-    },
+-    successFn: nextTest,
+-    failureFn: finishTest,
+-  });
+-}
+-
+-function nextTest() {
+-  if (itemsSet.length === 0) {
+-    outputNode.clearSelection();
+-    HUD.jsterm.clearOutput();
+-    HUD = outputNode = null;
+-    executeSoon(finishTest);
+-  }
+-  else {
+-    outputNode.clearSelection();
+-    let items = itemsSet.shift();
+-    items.forEach(function (index) {
+-      outputNode.addItemToSelection(outputNode.getItemAtIndex(index));
+-    });
+-    outputNode.focus();
+-    waitForClipboard(getExpectedClipboardText(items.length),
+-      clipboardSetup, nextTest, nextTest);
+-  }
+-}
+-
+-function getExpectedClipboardText(aItemCount) {
+-  let expectedClipboardText = [];
+-  for (let i = 0; i < aItemCount; i++) {
+-    let item = outputNode.getItemAtIndex(i);
+-    expectedClipboardText.push("[" +
+-      WCU_l10n.timestampString(item.timestamp) + "] " +
+-      item.clipboardText);
+-  }
+-  return expectedClipboardText.join("\n");
+-}
+-
+-function clipboardSetup() {
+-  goDoCommand("cmd_copy");
+-}
+-
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
