@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 642cdc4b8c28cc600d8ed4d49354954d68b14004
+# Parent b1aae5eda3ddc21158d1035a267ea1f73b5201f1
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1376684261 -10800
+# Date 1376938453 -10800
 
 Bug 760876 - Part 4: fix broken tests; r=robcee
 
@@ -32,11 +32,16 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
 +++ b/browser/devtools/webconsole/test/Makefile.in
-@@ -28,17 +28,16 @@ MOCHITEST_BROWSER_FILES = \
+@@ -23,28 +23,24 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_webconsole_bug_597136_network_requests_from_chrome.js \
+ 	browser_webconsole_completion.js \
+ 	browser_webconsole_console_logging_api.js \
+ 	browser_webconsole_change_font_size.js \
+ 	browser_webconsole_chrome.js \
  	browser_webconsole_execution_scope.js \
  	browser_webconsole_for_of.js \
  	browser_webconsole_history.js \
- 	browser_webconsole_js_input_and_output_styling.js \
+-	browser_webconsole_js_input_and_output_styling.js \
  	browser_webconsole_js_input_expansion.js \
  	browser_webconsole_live_filtering_of_message_types.js \
  	browser_webconsole_live_filtering_on_search_strings.js \
@@ -44,13 +49,19 @@ diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/web
 -	browser_webconsole_copying_multiple_messages_inserts_newlines_in_between.js \
  	browser_webconsole_bug_586388_select_all.js  \
  	browser_webconsole_bug_588967_input_expansion.js \
- 	browser_webconsole_log_node_classes.js \
+-	browser_webconsole_log_node_classes.js \
  	browser_webconsole_network_panel.js \
  	browser_webconsole_jsterm.js \
- 	browser_webconsole_null_and_undefined_output.js \
+-	browser_webconsole_null_and_undefined_output.js \
  	browser_webconsole_output_order.js \
  	browser_webconsole_property_provider.js \
-@@ -76,17 +75,16 @@ MOCHITEST_BROWSER_FILES = \
+ 	browser_webconsole_bug_587617_output_copy.js \
+ 	browser_webconsole_bug_585237_line_limit.js \
+ 	browser_webconsole_bug_582201_duplicate_errors.js \
+ 	browser_webconsole_bug_580454_timestamp_l10n.js \
+ 	browser_webconsole_netlogging.js \
+ 	browser_webconsole_bug_583816_No_input_and_Tab_key_pressed.js \
+@@ -76,17 +72,16 @@ MOCHITEST_BROWSER_FILES = \
  	browser_webconsole_bug_613642_prune_scroll.js \
  	browser_webconsole_bug_618078_network_exceptions.js \
  	browser_webconsole_bug_613280_jsterm_copy.js \
@@ -3756,6 +3767,761 @@ deleted file mode 100644
 -                   finishTest, finishTest);
 -}
 -
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_execution_scope.js
+@@ -15,31 +15,27 @@ function test() {
+   }, true);
+ }
+ 
+ function testExecutionScope(hud) {
+   let jsterm = hud.jsterm;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("window.location.href;");
+-
+-  waitForSuccess({
+-    name: "jsterm execution output (two nodes)",
+-    validatorFn: function()
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "window.location.href;",
++      category: CATEGORY_INPUT,
++    },
+     {
+-      return jsterm.outputNode.querySelectorAll(".hud-msg-node").length == 2;
+-    },
+-    successFn: function()
+-    {
+-      let nodes = jsterm.outputNode.querySelectorAll(".hud-msg-node");
+-
+-      is(/window.location.href;/.test(nodes[0].textContent), true,
+-        "'window.location.href;' written to output");
+-
+-      isnot(nodes[1].textContent.indexOf(TEST_URI), -1,
+-        "command was executed in the window scope");
+-
+-      executeSoon(finishTest);
+-    },
+-    failureFn: finishTest,
++      text: TEST_URI,
++      category: CATEGORY_OUTPUT,
++    }],
++  }).then(([input, output]) => {
++    let inputNode = [...input.matched][0];
++    let outputNode = [...output.matched][0];
++    is(inputNode.getAttribute("category"), "input", "input node category is correct");
++    is(outputNode.getAttribute("category"), "output", "output node category is correct");
++    finishTest();
+   });
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_for_of.js b/browser/devtools/webconsole/test/browser_webconsole_for_of.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_for_of.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_for_of.js
+@@ -10,26 +10,15 @@ function test() {
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, testForOf);
+   }, true);
+ }
+ 
+ function testForOf(hud) {
+   var jsterm = hud.jsterm;
+-  jsterm.execute("{ [x.tagName for (x of document.body.childNodes) if (x.nodeType === 1)].join(' '); }");
+-
+-  waitForSuccess({
+-    name: "jsterm output displayed",
+-    validatorFn: function()
+-    {
+-      return hud.outputNode.querySelector(".webconsole-msg-output");
+-    },
+-    successFn: function()
+-    {
+-      let node = hud.outputNode.querySelector(".webconsole-msg-output");
++  jsterm.execute("{ [x.tagName for (x of document.body.childNodes) if (x.nodeType === 1)].join(' '); }",
++    (node) => {
+       ok(/H1 DIV H2 P/.test(node.textContent),
+         "for-of loop should find all top-level nodes");
+       finishTest();
+-    },
+-    failureFn: finishTest,
+-  });
++    });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js b/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
+deleted file mode 100644
+--- a/browser/devtools/webconsole/test/browser_webconsole_js_input_and_output_styling.js
++++ /dev/null
+@@ -1,48 +0,0 @@
+-/* vim:set ts=2 sw=2 sts=2 et: */
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-// Tests that the correct CSS styles are applied to the lines of console
+-// output.
+-
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+-
+-function test() {
+-  addTab(TEST_URI);
+-  browser.addEventListener("load", function onLoad() {
+-    browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, testJSInputAndOutputStyling);
+-  }, true);
+-}
+-
+-function testJSInputAndOutputStyling(hud) {
+-  let jsterm = hud.jsterm;
+-
+-  jsterm.clearOutput();
+-  jsterm.execute("2 + 2");
+-
+-  waitForSuccess({
+-    name: "jsterm output is displayed",
+-    validatorFn: function()
+-    {
+-      return jsterm.outputNode.querySelector(".webconsole-msg-output");
+-    },
+-    successFn: function()
+-    {
+-      let jsInputNode = jsterm.outputNode.querySelector(".hud-msg-node");
+-      isnot(jsInputNode.textContent.indexOf("2 + 2"), -1,
+-            "JS input node contains '2 + 2'");
+-      ok(jsInputNode.classList.contains("webconsole-msg-input"),
+-         "JS input node is of the CSS class 'webconsole-msg-input'");
+-
+-      let output = jsterm.outputNode.querySelector(".webconsole-msg-output");
+-      isnot(output.textContent.indexOf("4"), -1,
+-            "JS output node contains '4'");
+-
+-      finishTest();
+-    },
+-    failureFn: finishTest,
+-  });
+-}
+-
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+@@ -17,60 +17,55 @@ function test() {
+     });
+   }, true);
+ }
+ 
+ function nextTest() {
+   testDriver.next();
+ }
+ 
+-function checkResult(msg, desc, lines) {
+-  waitForSuccess({
+-    name: "correct number of results shown for " + desc,
+-    validatorFn: function()
+-    {
+-      let nodes = jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+-      return nodes.length == lines;
+-    },
+-    successFn: function()
+-    {
+-      let labels = jsterm.outputNode.querySelectorAll(".webconsole-msg-output");
+-      if (typeof msg == "string") {
+-        is(labels[lines-1].textContent.trim(), msg,
+-           "correct message shown for " + desc);
+-      }
+-      else if (typeof msg == "function") {
+-        ok(msg(labels), "correct message shown for " + desc);
+-      }
++function checkResult(msg, desc) {
++  waitForMessages({
++    webconsole: jsterm.hud.owner,
++    messages: [{
++      name: desc,
++      category: CATEGORY_OUTPUT,
++    }],
++  }).then(([result]) => {
++    let node = [...result.matched][0].querySelector(".body");
++    if (typeof msg == "string") {
++      is(node.textContent.trim(), msg,
++        "correct message shown for " + desc);
++    }
++    else if (typeof msg == "function") {
++      ok(msg(node), "correct message shown for " + desc);
++    }
+ 
+-      nextTest();
+-    },
+-    failureFn: nextTest,
++    nextTest();
+   });
+ }
+ 
+ function testJSTerm(hud)
+ {
+   jsterm = hud.jsterm;
++  const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
+ 
+   jsterm.clearOutput();
+-  jsterm.execute("'id=' + $('#header').getAttribute('id')");
+-  checkResult('"id=header"', "$() worked", 1);
++  jsterm.execute("$('#header').getAttribute('id')");
++  checkResult('"header"', "$() worked");
+   yield undefined;
+ 
+   jsterm.clearOutput();
+-  jsterm.execute("headerQuery = $$('h1')");
+-  jsterm.execute("'length=' + headerQuery.length");
+-  checkResult('"length=1"', "$$() worked", 2);
++  jsterm.execute("$$('h1').length");
++  checkResult("1", "$$() worked");
+   yield undefined;
+ 
+   jsterm.clearOutput();
+-  jsterm.execute("xpathQuery = $x('.//*', document.body);");
+-  jsterm.execute("'headerFound='  + (xpathQuery[0] == headerQuery[0])");
+-  checkResult('"headerFound=true"', "$x() worked", 2);
++  jsterm.execute("$x('.//*', document.body)[0] == $$('h1')[0]");
++  checkResult("true", "$x() worked");
+   yield undefined;
+ 
+   // no jsterm.clearOutput() here as we clear the output using the clear() fn.
+   jsterm.execute("clear()");
+ 
+   waitForSuccess({
+     name: "clear() worked",
+     validatorFn: function()
+@@ -79,116 +74,104 @@ function testJSTerm(hud)
+     },
+     successFn: nextTest,
+     failureFn: nextTest,
+   });
+ 
+   yield undefined;
+ 
+   jsterm.clearOutput();
+-  jsterm.execute("'keysResult=' + (keys({b:1})[0] == 'b')");
+-  checkResult('"keysResult=true"', "keys() worked", 1);
++  jsterm.execute("keys({b:1})[0] == 'b'");
++  checkResult("true", "keys() worked", 1);
+   yield undefined;
+ 
+   jsterm.clearOutput();
+-  jsterm.execute("'valuesResult=' + (values({b:1})[0] == 1)");
+-  checkResult('"valuesResult=true"', "values() worked", 1);
++  jsterm.execute("values({b:1})[0] == 1");
++  checkResult("true", "values() worked", 1);
+   yield undefined;
+ 
+   jsterm.clearOutput();
+ 
+-  let tabs = gBrowser.tabs.length;
++  let openedLinks = 0;
++  let onExecuteCalls = 0;
++  let oldOpenLink = hud.openLink;
++  hud.openLink = (url) => {
++    if (url == HELP_URL) {
++      openedLinks++;
++    }
++  };
+ 
+-  jsterm.execute("help()");
+-  let output = jsterm.outputNode.querySelector(".webconsole-msg-output");
+-  ok(!output, "help() worked");
++  function onExecute() {
++    onExecuteCalls++;
++    if (onExecuteCalls == 3) {
++      nextTest();
++    }
++  }
+ 
+-  jsterm.execute("help");
+-  output = jsterm.outputNode.querySelector(".webconsole-msg-output");
+-  ok(!output, "help worked");
++  jsterm.execute("help()", onExecute);
++  jsterm.execute("help", onExecute);
++  jsterm.execute("?", onExecute);
++  yield undefined;
+ 
+-  jsterm.execute("?");
+-  output = jsterm.outputNode.querySelector(".webconsole-msg-output");
+-  ok(!output, "? worked");
+-
+-  let foundTab = null;
+-  waitForSuccess({
+-    name: "help tabs opened",
+-    validatorFn: function()
+-    {
+-      let newTabOpen = gBrowser.tabs.length == tabs + 3;
+-      if (!newTabOpen) {
+-        return false;
+-      }
+-
+-      foundTab = gBrowser.tabs[tabs];
+-      return true;
+-    },
+-    successFn: function()
+-    {
+-      gBrowser.removeTab(gBrowser.tabs[gBrowser.tabs.length - 1]);
+-      gBrowser.removeTab(gBrowser.tabs[gBrowser.tabs.length - 1]);
+-      gBrowser.removeTab(gBrowser.tabs[gBrowser.tabs.length - 1]);
+-      nextTest();
+-    },
+-    failureFn: nextTest,
+-  });
+-  yield undefined;
++  let output = jsterm.outputNode.querySelector(".message[category='output']");
++  ok(!output, "no output for help() calls");
++  is(openedLinks, 3, "correct number of pages opened by the help calls");
++  hud.openLink = oldOpenLink;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("pprint({b:2, a:1})");
+-  checkResult('"  b: 2\n  a: 1"', "pprint()", 1);
++  checkResult('"  b: 2\n  a: 1"', "pprint()");
+   yield undefined;
+ 
+   // check instanceof correctness, bug 599940
+   jsterm.clearOutput();
+   jsterm.execute("[] instanceof Array");
+-  checkResult("true", "[] instanceof Array == true", 1);
++  checkResult("true", "[] instanceof Array == true");
+   yield undefined;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("({}) instanceof Object");
+-  checkResult("true", "({}) instanceof Object == true", 1);
++  checkResult("true", "({}) instanceof Object == true");
+   yield undefined;
+ 
+   // check for occurrences of Object XRayWrapper, bug 604430
+   jsterm.clearOutput();
+   jsterm.execute("document");
+-  checkResult(function(nodes) {
+-    return nodes[0].textContent.search(/\[object xraywrapper/i) == -1;
+-  }, "document - no XrayWrapper", 1);
++  checkResult(function(node) {
++    return node.textContent.search(/\[object xraywrapper/i) == -1;
++  }, "document - no XrayWrapper");
+   yield undefined;
+ 
+   // check that pprint(window) and keys(window) don't throw, bug 608358
+   jsterm.clearOutput();
+   jsterm.execute("pprint(window)");
+-  checkResult(null, "pprint(window)", 1);
++  checkResult(null, "pprint(window)");
+   yield undefined;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("keys(window)");
+-  checkResult(null, "keys(window)", 1);
++  checkResult(null, "keys(window)");
+   yield undefined;
+ 
+   // bug 614561
+   jsterm.clearOutput();
+   jsterm.execute("pprint('hi')");
+-  checkResult('"  0: "h"\n  1: "i""', "pprint('hi')", 1);
++  checkResult('"  0: "h"\n  1: "i""', "pprint('hi')");
+   yield undefined;
+ 
+   // check that pprint(function) shows function source, bug 618344
+   jsterm.clearOutput();
+   jsterm.execute("pprint(print)");
+-  checkResult(function(nodes) {
+-    return nodes[0].textContent.indexOf("aOwner.helperResult") > -1;
+-  }, "pprint(function) shows source", 1);
++  checkResult(function(node) {
++    return node.textContent.indexOf("aOwner.helperResult") > -1;
++  }, "pprint(function) shows source");
+   yield undefined;
+ 
+   // check that an evaluated null produces "null", bug 650780
+   jsterm.clearOutput();
+   jsterm.execute("null");
+-  checkResult("null", "null is null", 1);
++  checkResult("null", "null is null");
+   yield undefined;
+ 
+   jsterm = testDriver = null;
+   executeSoon(finishTest);
+   yield undefined;
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_live_filtering_of_message_types.js b/browser/devtools/webconsole/test/browser_webconsole_live_filtering_of_message_types.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_live_filtering_of_message_types.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_live_filtering_of_message_types.js
+@@ -33,31 +33,31 @@ function consoleOpened(aHud) {
+       text: "foobarz #49",
+       category: CATEGORY_WEBDEV,
+       severity: SEVERITY_LOG,
+     }],
+   }).then(testLiveFilteringOfMessageTypes);
+ }
+ 
+ function testLiveFilteringOfMessageTypes() {
+-  is(hud.outputNode.itemCount, 50, "number of messages");
++  is(hud.outputNode.children.length, 50, "number of messages");
+ 
+   hud.setFilterState("log", false);
+   is(countMessageNodes(), 0, "the log nodes are hidden when the " +
+     "corresponding filter is switched off");
+ 
+   hud.setFilterState("log", true);
+   is(countMessageNodes(), 50, "the log nodes reappear when the " +
+     "corresponding filter is switched on");
+ 
+   finishTest();
+ }
+ 
+ function countMessageNodes() {
+-  let messageNodes = hud.outputNode.querySelectorAll(".hud-log");
++  let messageNodes = hud.outputNode.querySelectorAll(".message");
+   let displayedMessageNodes = 0;
+   let view = hud.iframeWindow;
+   for (let i = 0; i < messageNodes.length; i++) {
+     let computedStyle = view.getComputedStyle(messageNodes[i], null);
+     if (computedStyle.display !== "none") {
+       displayedMessageNodes++;
+     }
+   }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_live_filtering_on_search_strings.js b/browser/devtools/webconsole/test/browser_webconsole_live_filtering_on_search_strings.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_live_filtering_on_search_strings.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_live_filtering_on_search_strings.js
+@@ -32,17 +32,17 @@ function consoleOpened(aHud) {
+       text: "http://www.example.com/ 49",
+       category: CATEGORY_WEBDEV,
+       severity: SEVERITY_LOG,
+     }],
+   }).then(testLiveFilteringOnSearchStrings);
+ }
+ 
+ function testLiveFilteringOnSearchStrings() {
+-  is(hud.outputNode.itemCount, 50, "number of messages");
++  is(hud.outputNode.children.length, 50, "number of messages");
+ 
+   setStringFilter("http");
+   isnot(countMessageNodes(), 0, "the log nodes are not hidden when the " +
+     "search string is set to \"http\"");
+ 
+   setStringFilter("hxxp");
+   is(countMessageNodes(), 0, "the log nodes are hidden when the search " +
+     "string is set to \"hxxp\"");
+@@ -80,17 +80,17 @@ function testLiveFilteringOnSearchString
+     "the string \"foo\"bar'baz\"boo'\"");
+ 
+   finishTest();
+ }
+ 
+ function countMessageNodes() {
+   let outputNode = hud.outputNode;
+ 
+-  let messageNodes = outputNode.querySelectorAll(".hud-log");
++  let messageNodes = outputNode.querySelectorAll(".message");
+   let displayedMessageNodes = 0;
+   let view = hud.iframeWindow;
+   for (let i = 0; i < messageNodes.length; i++) {
+     let computedStyle = view.getComputedStyle(messageNodes[i], null);
+     if (computedStyle.display !== "none") {
+       displayedMessageNodes++;
+     }
+   }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_log_node_classes.js b/browser/devtools/webconsole/test/browser_webconsole_log_node_classes.js
+deleted file mode 100644
+--- a/browser/devtools/webconsole/test/browser_webconsole_log_node_classes.js
++++ /dev/null
+@@ -1,71 +0,0 @@
+-/* vim:set ts=2 sw=2 sts=2 et: */
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-// Tests that console logging via the console API produces nodes of the correct
+-// CSS classes.
+-
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+-
+-function test() {
+-  addTab(TEST_URI);
+-  browser.addEventListener("load", function onLoad() {
+-    browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, consoleOpened);
+-  }, true);
+-}
+-
+-function consoleOpened(aHud) {
+-  let console = content.console;
+-  outputNode = aHud.outputNode;
+-
+-  ok(console, "console exists");
+-  console.log("I am a log message");
+-  console.error("I am an error");
+-  console.info("I am an info message");
+-  console.warn("I am a warning  message");
+-
+-  waitForSuccess({
+-    name: "console.warn displayed",
+-    validatorFn: function()
+-    {
+-      return aHud.outputNode.textContent.indexOf("a warning") > -1;
+-    },
+-    successFn: testLogNodeClasses,
+-    failureFn: finishTest,
+-  });
+-}
+-
+-function testLogNodeClasses() {
+-  let domLogEntries = outputNode.childNodes;
+-
+-  let count = outputNode.childNodes.length;
+-  ok(count > 0, "LogCount: " + count);
+-
+-  let klasses = ["hud-log",
+-                 "hud-warn",
+-                 "hud-info",
+-                 "hud-error",
+-                 "hud-exception",
+-                 "hud-network"];
+-
+-  function verifyClass(classList) {
+-    let len = klasses.length;
+-    for (var i = 0; i < len; i++) {
+-      if (classList.contains(klasses[i])) {
+-        return true;
+-      }
+-    }
+-    return false;
+-  }
+-
+-  for (var i = 0; i < count; i++) {
+-    let classList = domLogEntries[i].classList;
+-    ok(verifyClass(classList),
+-       "Log Node class verified: " + domLogEntries[i].getAttribute("class"));
+-  }
+-
+-  finishTest();
+-}
+-
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_message_node_id.js b/browser/devtools/webconsole/test/browser_webconsole_message_node_id.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_message_node_id.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_message_node_id.js
+@@ -10,20 +10,22 @@ function test() {
+   browser.addEventListener("DOMContentLoaded", onLoad, false);
+ }
+ 
+ function onLoad() {
+   browser.removeEventListener("DOMContentLoaded", onLoad, false);
+   openConsole(null, function(hud) {
+     content.console.log("a log message");
+ 
+-    waitForSuccess({
+-      name: "console.log message shown with an ID attribute",
+-      validatorFn: function()
+-      {
+-        let node = hud.outputNode.querySelector(".hud-msg-node");
+-        return node && node.getAttribute("id");
+-      },
+-      successFn: finishTest,
+-      failureFn: finishTest,
++    waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "a log message",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++      }],
++    }).then(([result]) => {
++      let msg = [...result.matched][0];
++      ok(msg.getAttribute("id"), "log message has an ID");
++      finishTest();
+     });
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js b/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
+deleted file mode 100644
+--- a/browser/devtools/webconsole/test/browser_webconsole_null_and_undefined_output.js
++++ /dev/null
+@@ -1,62 +0,0 @@
+-/* vim:set ts=2 sw=2 sts=2 et: */
+-/* This Source Code Form is subject to the terms of the Mozilla Public
+- * License, v. 2.0. If a copy of the MPL was not distributed with this
+- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+-
+-// Test that JavaScript expressions that evaluate to null or undefined produce
+-// meaningful output.
+-
+-const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+-
+-function test() {
+-  addTab(TEST_URI);
+-  browser.addEventListener("load", function onLoad() {
+-    browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, testNullAndUndefinedOutput);
+-  }, true);
+-}
+-
+-function testNullAndUndefinedOutput(hud) {
+-  let jsterm = hud.jsterm;
+-  let outputNode = jsterm.outputNode;
+-
+-  jsterm.clearOutput();
+-  jsterm.execute("null;");
+-
+-  waitForSuccess({
+-    name: "null displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".hud-msg-node").length == 2;
+-    },
+-    successFn: function()
+-    {
+-      let nodes = outputNode.querySelectorAll(".hud-msg-node");
+-      isnot(nodes[1].textContent.indexOf("null"), -1,
+-            "'null' printed to output");
+-
+-      jsterm.clearOutput();
+-      jsterm.execute("undefined;");
+-      waitForSuccess(waitForUndefined);
+-    },
+-    failureFn: finishTest,
+-  });
+-
+-  let waitForUndefined = {
+-    name: "undefined displayed",
+-    validatorFn: function()
+-    {
+-      return outputNode.querySelectorAll(".hud-msg-node").length == 2;
+-    },
+-    successFn: function()
+-    {
+-      let nodes = outputNode.querySelectorAll(".hud-msg-node");
+-      isnot(nodes[1].textContent.indexOf("undefined"), -1,
+-            "'undefined' printed to output");
+-
+-      finishTest();
+-    },
+-    failureFn: finishTest,
+-  };
+-}
+-
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_order.js b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_order.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_order.js
+@@ -18,27 +18,34 @@ function test() {
+ 
+ function testOutputOrder(hud) {
+   let jsterm = hud.jsterm;
+   let outputNode = jsterm.outputNode;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("console.log('foo', 'bar');");
+ 
+-  waitForSuccess({
+-    name: "console.log message displayed",
+-    validatorFn: function()
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "console.log('foo', 'bar');",
++      category: CATEGORY_INPUT,
++    },
+     {
+-      return outputNode.querySelectorAll(".hud-msg-node").length == 3;
++      text: "undefined",
++      category: CATEGORY_OUTPUT,
+     },
+-    successFn: function()
+     {
+-      let nodes = outputNode.querySelectorAll(".hud-msg-node");
+-      let executedStringFirst =
+-        /console\.log\('foo', 'bar'\);/.test(nodes[0].textContent);
+-      let outputSecond = /"foo" "bar"/.test(nodes[2].textContent);
+-      ok(executedStringFirst && outputSecond, "executed string comes first");
+-
+-      finishTest();
+-    },
+-    failureFn: finishTest,
++      text: '"foo" "bar"',
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(([function_call, result, console_message]) => {
++    let fncall_node = [...function_call.matched][0];
++    let result_node = [...result.matched][0];
++    let console_message_node = [...console_message.matched][0];
++    is(fncall_node.nextElementSibling, result_node,
++       "console.log() is followed by undefined");
++    is(result_node.nextElementSibling, console_message_node,
++       "undefined is followed by 'foo' 'bar'");
++    finishTest();
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_view_source.js b/browser/devtools/webconsole/test/browser_webconsole_view_source.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_view_source.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_view_source.js
+@@ -5,47 +5,43 @@
+ // standard View Source window.
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-error.html";
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, function(hud) {
+-      executeSoon(function() {
+-        testViewSource(hud);
+-      });
+-    });
++    openConsole(null, testViewSource);
+   }, true);
+ }
+ 
+ function testViewSource(hud) {
+   let button = content.document.querySelector("button");
+-  button = XPCNativeWrapper.unwrap(button);
+   ok(button, "we have the button on the page");
+ 
+   expectUncaughtException();
+-  EventUtils.sendMouseEvent({ type: "click" }, button, XPCNativeWrapper.unwrap(content));
++  EventUtils.sendMouseEvent({ type: "click" }, button, content);
+ 
+-  waitForSuccess({
+-    name: "find the location node",
+-    validatorFn: function()
+-    {
+-      return hud.outputNode.querySelector(".webconsole-location");
+-    },
+-    successFn: function()
+-    {
+-      let locationNode = hud.outputNode.querySelector(".webconsole-location");
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "fooBazBaz is not defined",
++      category: CATEGORY_JS,
++      severity: SEVERITY_ERROR,
++    }],
++  }).then(([result]) => {
++    let msg = [...result.matched][0];
++    ok(msg, "error message");
++    let locationNode = msg.querySelector(".location");
++    ok(locationNode, "location node");
+ 
+-      Services.ww.registerNotification(observer);
++    Services.ww.registerNotification(observer);
+ 
+-      EventUtils.sendMouseEvent({ type: "click" }, locationNode);
+-    },
+-    failureFn: finishTest,
++    EventUtils.sendMouseEvent({ type: "click" }, locationNode);
+   });
+ }
+ 
+ let observer = {
+   observe: function(aSubject, aTopic, aData) {
+     if (aTopic != "domwindowopened") {
+       return;
+     }
 diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
 --- a/browser/devtools/webconsole/test/head.js
 +++ b/browser/devtools/webconsole/test/head.js
