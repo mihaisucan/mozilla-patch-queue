@@ -1,10 +1,152 @@
 # HG changeset patch
-# Parent 1d87f9ab599f5265fe2542592e9b0d925e0ddb91
+# Parent 412213606f57f7bc4268076d1765701ad5ac2eb5
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1377026613 -10800
+# Date 1377372959 -10800
 
 Bug 760876 - Part 4: fix broken tests; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u all -t none
 
+diff --git a/browser/devtools/commandline/test/browser_cmd_commands.js b/browser/devtools/commandline/test/browser_cmd_commands.js
+--- a/browser/devtools/commandline/test/browser_cmd_commands.js
++++ b/browser/devtools/commandline/test/browser_cmd_commands.js
+@@ -23,34 +23,33 @@ tests.testConsole = function(options) {
+     subject.QueryInterface(Ci.nsISupportsString);
+     hud = HUDService.getHudReferenceById(subject.data);
+     ok(hud, "console open");
+ 
+     hud.jsterm.execute("pprint(window)", onExecute);
+   }
+   Services.obs.addObserver(onWebConsoleOpen, "web-console-created", false);
+ 
+-  function onExecute () {
+-    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
+-    ok(labels.length > 0, "output for pprint(window)");
++  function onExecute (msg) {
++    ok(msg, "output for pprint(window)");
+ 
+     hud.jsterm.once("messages-cleared", onClear);
+ 
+     helpers.audit(options, [
+       {
+         setup: "console clear",
+         exec: {
+           output: ""
+         },
+       }
+     ]);
+   }
+ 
+   function onClear() {
+-    let labels = hud.outputNode.querySelectorAll(".webconsole-msg-output");
++    let labels = hud.outputNode.querySelectorAll(".message");
+     is(labels.length, 0, "no output in console");
+ 
+     helpers.audit(options, [
+       {
+         setup: "console close",
+         exec: {
+           output: ""
+         },
+diff --git a/browser/devtools/scratchpad/test/browser_scratchpad_bug_661762_wrong_window_focus.js b/browser/devtools/scratchpad/test/browser_scratchpad_bug_661762_wrong_window_focus.js
+--- a/browser/devtools/scratchpad/test/browser_scratchpad_bug_661762_wrong_window_focus.js
++++ b/browser/devtools/scratchpad/test/browser_scratchpad_bug_661762_wrong_window_focus.js
+@@ -45,22 +45,22 @@ function test()
+   }, true);
+ 
+   content.location = "data:text/html;charset=utf8,<p>test window focus for Scratchpad.";
+ }
+ 
+ function testFocus(sw, hud) {
+   let sp = sw.Scratchpad;
+ 
+-  function onMessage(subj) {
+-    Services.obs.removeObserver(onMessage, "web-console-message-created");
++  function onMessage(event, messages) {
++    let msg = [...messages][0];
+ 
+-    var loc = hud.jsterm.outputNode.querySelector(".webconsole-location");
++    var loc = msg.querySelector(".location");
+     ok(loc, "location element exists");
+-    is(loc.value, sw.Scratchpad.uniqueName + ":1",
++    is(loc.textContent.trim(), sw.Scratchpad.uniqueName + ":1",
+         "location value is correct");
+ 
+     sw.addEventListener("focus", function onFocus() {
+       sw.removeEventListener("focus", onFocus, true);
+ 
+       let win = Services.wm.getMostRecentWindow("devtools:scratchpad");
+ 
+       ok(win, "there are active Scratchpad windows");
+@@ -74,17 +74,17 @@ function testFocus(sw, hud) {
+     }, true);
+ 
+     // Simulate a click on the "Scratchpad/N:1" link.
+     EventUtils.synthesizeMouse(loc, 2, 2, {}, hud.iframeWindow);
+   }
+ 
+   // Sending messages to web console is an asynchronous operation. That's
+   // why we have to setup an observer here.
+-  Services.obs.addObserver(onMessage, "web-console-message-created", false);
++  hud.ui.once("messages-added", onMessage);
+ 
+   sp.setText("console.log('foo');");
+   sp.run().then(function ([selection, error, result]) {
+     is(selection, "console.log('foo');", "selection is correct");
+     is(error, undefined, "error is correct");
+     is(result.type, "undefined", "result is correct");
+   });
+ }
+diff --git a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+--- a/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
++++ b/browser/devtools/shared/test/browser_toolbar_webconsole_errors_count.js
+@@ -88,24 +88,27 @@ function test() {
+       name: "button shows the page errors from tab 1",
+       errors: 4,
+       warnings: 1,
+       callback: openWebConsole.bind(null, tab1, onWebConsoleOpen),
+     });
+   }
+ 
+   function onWebConsoleOpen(hud) {
++    dump("lolz!!\n");
+     waitForValue({
+       name: "web console shows the page errors",
+       validator: function() {
+-        return hud.outputNode.querySelectorAll(".hud-exception").length;
++        return hud.outputNode.querySelectorAll(".message[category=exception][severity=error]").length;
+       },
+       value: 4,
+       success: checkConsoleOutput.bind(null, hud),
+-      failure: finish,
++      failure: () => {
++        finish();
++      },
+     });
+   }
+ 
+   function checkConsoleOutput(hud) {
+     let msgs = ["foobarBug762996a", "foobarBug762996b", "foobarBug762996load",
+                 "foobarBug762996click", "foobarBug762996consoleLog",
+                 "foobarBug762996css", "fooBug788445"];
+     msgs.forEach(function(msg) {
+@@ -170,17 +173,17 @@ function test() {
+         warnings: 0,
+         callback: waitForValue.bind(null, waitForConsoleOutputAfterReload),
+       });
+     }
+ 
+     let waitForConsoleOutputAfterReload = {
+       name: "the Web Console displays the correct number of errors after reload",
+       validator: function() {
+-        return hud.outputNode.querySelectorAll(".hud-exception").length;
++        return hud.outputNode.querySelectorAll(".message[category=exception][severity=error]").length;
+       },
+       value: 3,
+       success: function() {
+         isnot(hud.outputNode.textContent.indexOf("foobarBug762996load"), -1,
+               "foobarBug762996load found in console output after page reload");
+         testEnd();
+       },
+       failure: testEnd,
 diff --git a/browser/devtools/webconsole/test/Makefile.in b/browser/devtools/webconsole/test/Makefile.in
 --- a/browser/devtools/webconsole/test/Makefile.in
 +++ b/browser/devtools/webconsole/test/Makefile.in

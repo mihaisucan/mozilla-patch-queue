@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent fb2318875cd48d38d9be87c04e21c6fccea9fa9b
+# Parent b0e50fa7205896756a76e5370f09f468cf431b53
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1377028016 -10800
 
@@ -97,7 +97,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +   */
 +  getMessageForElement: function(elem)
 +  {
-+    while (elem.parentNode) {
++    while (elem && elem.parentNode) {
 +      if (elem.classList && elem.classList.contains("hud-msg-node")) {
 +        return elem;
 +      }
@@ -561,7 +561,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        this._pruneCategoriesQueue = {};
      }
  
-@@ -1983,20 +1953,20 @@ WebConsoleFrame.prototype = {
+@@ -1983,36 +1953,43 @@ WebConsoleFrame.prototype = {
  
      // Scroll to the new node if it is not filtered, and if the output node is
      // scrolled at the bottom or if the new node is a jsterm input/output
@@ -584,7 +584,31 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (updatedMessages.size) {
        this.emit("messages-updated", updatedMessages);
      }
-@@ -2265,61 +2235,52 @@ WebConsoleFrame.prototype = {
+ 
+     // If the queue is not empty, schedule another flush.
+     if (this._outputQueue.length > 0) {
+       this._initOutputTimer();
+     }
+     else {
+       this._outputTimerInitialized = false;
+-      this._flushCallback && this._flushCallback();
++      if (this._flushCallback) {
++        try {
++          this._flushCallback();
++        }
++        catch (ex) {
++          console.error(ex);
++        }
++      }
+     }
+ 
+     this._lastOutputFlush = Date.now();
+   },
+ 
+   /**
+    * Initialize the output timer.
+    * @private
+@@ -2265,61 +2242,52 @@ WebConsoleFrame.prototype = {
     *        copied. If omitted, defaults to the body text. If `aBody` is not
     *        a string, then the clipboard text must be supplied.
     * @param number aLevel [optional]
@@ -657,7 +681,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        let str = undefined;
        if (aLevel == "dir") {
          str = VariablesView.getString(aBody.arguments[0]);
-@@ -2333,84 +2294,76 @@ WebConsoleFrame.prototype = {
+@@ -2333,84 +2301,76 @@ WebConsoleFrame.prototype = {
        }
  
        if (str !== undefined) {
@@ -766,7 +790,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @private
     * @param nsIDOMElement aMessage
-@@ -2423,17 +2376,17 @@ WebConsoleFrame.prototype = {
+@@ -2423,17 +2383,17 @@ WebConsoleFrame.prototype = {
     *        the call information that we need to display - mainly the arguments
     *        array of the given API call.
     */
@@ -785,7 +809,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        configurable: false
      });
  
-@@ -2444,36 +2397,34 @@ WebConsoleFrame.prototype = {
+@@ -2444,36 +2404,34 @@ WebConsoleFrame.prototype = {
  
        let text = VariablesView.getString(aItem);
        let inspectable = !VariablesView.isPrimitive({ value: aItem });
@@ -825,7 +849,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }, this);
    },
  
-@@ -2527,30 +2478,30 @@ WebConsoleFrame.prototype = {
+@@ -2527,30 +2485,30 @@ WebConsoleFrame.prototype = {
  
          if (toIndex != longString.length) {
            this.logWarningAboutStringTooLong();
@@ -859,7 +883,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      if (/^Scratchpad\/\d+$/.test(aSourceURL)) {
        displayLocation = aSourceURL;
-@@ -2561,24 +2512,19 @@ WebConsoleFrame.prototype = {
+@@ -2561,24 +2519,19 @@ WebConsoleFrame.prototype = {
        displayLocation = WebConsoleUtils.abbreviateSourceURL(fullURL);
      }
  
@@ -885,7 +909,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
          while (wins.hasMoreElements()) {
            let win = wins.getNext();
-@@ -2699,29 +2645,27 @@ WebConsoleFrame.prototype = {
+@@ -2699,29 +2652,27 @@ WebConsoleFrame.prototype = {
     *
     * @param object aOptions
     *        - linkOnly:
@@ -922,7 +946,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            strings.push(item.url);
          }
          else {
-@@ -2770,17 +2714,18 @@ WebConsoleFrame.prototype = {
+@@ -2770,17 +2721,18 @@ WebConsoleFrame.prototype = {
      }
    },
  
@@ -942,7 +966,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.owner.openLink(item.url);
    },
  
-@@ -3106,58 +3051,57 @@ JSTerm.prototype = {
+@@ -3106,58 +3058,62 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
          result.type == "undefined" &&
@@ -978,11 +1002,16 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
 +    if (aCallback) {
 +      let oldFlushCallback = this.hud._flushCallback;
-+      this.hud._flushCallback = function() {
++      this.hud._flushCallback = () => {
 +        aCallback(node);
-+        oldFlushCallback && oldFlushCallback();
-+        this.hud._flushCallback = oldFlushCallback;
-+      }.bind(this);
++        if (oldFlushCallback) {
++          oldFlushCallback();
++          this.hud._flushCallback = oldFlushCallback;
++        }
++        else {
++          this.hud._flushCallback = null;
++        }
++      };
 +    }
 +
      node._objectActors = new Set();
@@ -1011,7 +1040,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
                                                      formatter);
          this.hud._addMessageLinkCallback(ellipsis, onclick);
  
-@@ -3322,17 +3266,17 @@ JSTerm.prototype = {
+@@ -3322,17 +3278,17 @@ JSTerm.prototype = {
        return view;
      };
  
@@ -1030,7 +1059,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
        iframe.flex = 1;
        iframe.setAttribute("src", VARIABLES_VIEW_URL);
-@@ -3747,17 +3691,17 @@ JSTerm.prototype = {
+@@ -3747,17 +3703,17 @@ JSTerm.prototype = {
  
    /**
     * Remove all of the private messages from the Web Console output.
@@ -1049,7 +1078,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
    /**
     * Updates the size of the input field (command line) to fit its contents.
-@@ -4477,62 +4421,42 @@ JSTerm.prototype = {
+@@ -4477,62 +4433,42 @@ JSTerm.prototype = {
    },
  };
  
@@ -1117,7 +1146,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param nsIScriptError aScriptError
     *        The script error you want to determine the category for.
     * @return CATEGORY_JS|CATEGORY_CSS|CATEGORY_SECURITY
-@@ -4591,60 +4515,52 @@ var Utils = {
+@@ -4591,60 +4527,52 @@ var Utils = {
   */
  function CommandController(aWebConsole)
  {
@@ -1185,7 +1214,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        case "cmd_fontSizeReset":
        case "cmd_selectAll":
        case "cmd_find":
-@@ -4653,19 +4569,16 @@ CommandController.prototype = {
+@@ -4653,19 +4581,16 @@ CommandController.prototype = {
          return this.owner.owner._browserConsole;
      }
      return false;
@@ -1205,7 +1234,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          break;
        case "consoleCmd_clearOutput":
          this.owner.jsterm.clearOutput(true);
-@@ -5137,47 +5050,53 @@ function ConsoleContextMenu(aOwner)
+@@ -5137,47 +5062,53 @@ function ConsoleContextMenu(aOwner)
  {
    this.owner = aOwner;
    this.popup = this.owner.document.getElementById("output-contextmenu");
@@ -1269,7 +1298,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            selection.add("network");
            break;
          case CATEGORY_CSS:
-@@ -5231,11 +5150,12 @@ ConsoleContextMenu.prototype = {
+@@ -5231,11 +5162,12 @@ ConsoleContextMenu.prototype = {
    /**
     * Destroy the ConsoleContextMenu object instance.
     */
