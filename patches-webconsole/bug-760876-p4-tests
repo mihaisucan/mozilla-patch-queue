@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 7eb5e72b18f3060acf9ab7f269df552ca77e1741
+# Parent 27753cc643ff27cf65412cfe7d0238a1b92b98be
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1377697010 -7200
+# Date 1377771661 -7200
 
 Bug 760876 - Part 4: fix broken tests; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u all -t none
 
@@ -2467,6 +2467,28 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jste
    let variablesViewShown = function(aEvent, aView, aOptions) {
      if (aOptions.label.indexOf(expectedOutput) == -1) {
        return;
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601177_log_levels.js b/browser/devtools/webconsole/test/browser_webconsole_bug_601177_log_levels.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_601177_log_levels.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_601177_log_levels.js
+@@ -7,16 +7,18 @@
+  *  Mihai Șucan <mihai.sucan@gmail.com>
+  *
+  * ***** END LICENSE BLOCK ***** */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-601177-log-levels.html";
+ 
+ function test()
+ {
++  //requestLongerTimeout(20);
++  //FIXME
+   Services.prefs.setBoolPref("javascript.options.strict", true);
+   registerCleanupFunction(function() {
+     Services.prefs.clearUserPref("javascript.options.strict");
+   });
+ 
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 601177: log levels");
+ 
+   browser.addEventListener("load", function onLoad() {
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_601352_scroll.js
@@ -2721,7 +2743,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613280_jste
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_maintain_scroll.js
-@@ -11,79 +11,84 @@ let hud, testDriver;
+@@ -11,85 +11,111 @@ let hud, testDriver;
  
  function testNext() {
    testDriver.next();
@@ -2757,13 +2779,18 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_main
  
    yield undefined;
  
-   let oldScrollTop = scrollBox.scrollTop;
-   ok(oldScrollTop > 0, "scroll location is not at the top");
+-  let oldScrollTop = scrollBox.scrollTop;
+-  ok(oldScrollTop > 0, "scroll location is not at the top");
++  ok(scrollBox.scrollTop > 0, "scroll location is not at the top");
  
    // scroll to the first node
    outputNode.focus();
  
 +  scrollBox.onscroll = () => {
++    if (scrollBox.scrollTop == 0) {
++      // Wait for scroll to 0.
++      return;
++    }
 +    scrollBox.onscroll = null;
 +    isnot(scrollBox.scrollTop, 0, "scroll location updated (moved to top)");
 +    testNext();
@@ -2785,7 +2812,6 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_main
 -    },
 -    successFn: testNext,
 -    failureFn: finishTest,
--  });
 +  waitForMessages({
 +    webconsole: hud,
 +    messages: [{
@@ -2794,25 +2820,65 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_main
 +      severity: SEVERITY_LOG,
 +    }],
 +  }).then(testNext);
- 
-   yield undefined;
- 
--  is(scrollBox.scrollTop, topPosition, "scroll location is still at the top");
++
++  yield undefined;
++
 +  window.requestAnimationFrame(() => {
 +    is(scrollBox.scrollTop, 0, "scroll location is still at the top");
 +    testNext();
 +  });
 +  yield undefined;
++
++  // scroll back to the bottom
++  outputNode.lastChild.focus();
++
++  scrollBox.onscroll = () => {
++    if (scrollBox.scrollTop == 0) {
++      // Wait for scroll to bottom.
++      return;
++    }
++    scrollBox.onscroll = null;
++    isnot(scrollBox.scrollTop, 0, "scroll location updated (moved to bottom)");
++    testNext();
++  };
++  EventUtils.synthesizeKey("VK_END", {});
++  yield;
++
++  let oldScrollTop = scrollBox.scrollTop;
++
++  content.console.log("test message 151");
++
++  waitForMessages({
++    webconsole: hud,
++    messages: [{
++      text: "test message 151",
++      category: CATEGORY_WEBDEV,
++      severity: SEVERITY_LOG,
++    }],
++  }).then(() => {
++    scrollBox.onscroll = () => {
++      if (scrollBox.scrollTop == oldScrollTop) {
++        // Wait for scroll to change.
++        return;
++      }
++      scrollBox.onscroll = null;
++      isnot(scrollBox.scrollTop, oldScrollTop, "scroll location updated (moved to bottom again)");
++      testNext();
++    };
+   });
  
-   // scroll back to the bottom
-   outputNode.lastChild.focus();
-   EventUtils.synthesizeKey("VK_END", {});
+   yield undefined;
  
+-  is(scrollBox.scrollTop, topPosition, "scroll location is still at the top");
+-
+-  // scroll back to the bottom
+-  outputNode.lastChild.focus();
+-  EventUtils.synthesizeKey("VK_END", {});
+-
 -  oldScrollTop = outputNode.scrollTop;
-+  oldScrollTop = scrollBox.scrollTop;
- 
-   content.console.log("test message 151");
- 
+-
+-  content.console.log("test message 151");
+-
 -  waitForSuccess({
 -    name: "console.log message no. 152 displayed",
 -    validatorFn: function()
@@ -2822,22 +2888,20 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_main
 -    successFn: testNext,
 -    failureFn: finishTest,
 -  });
-+  waitForMessages({
-+    webconsole: hud,
-+    messages: [{
-+      text: "test message 151",
-+      category: CATEGORY_WEBDEV,
-+      severity: SEVERITY_LOG,
-+    }],
-+  }).then(testNext);
- 
-   yield undefined;
- 
-   isnot(scrollBox.scrollTop, oldScrollTop,
-         "scroll location updated (moved to bottom)");
- 
+-
+-  yield undefined;
+-
+-  isnot(scrollBox.scrollTop, oldScrollTop,
+-        "scroll location updated (moved to bottom)");
+-
    hud = testDriver = null;
    finishTest();
+   
+   yield undefined;
+ }
+ 
+ function test() {
+   addTab("data:text/html;charset=utf-8,Web Console test for bug 613642: remember scroll location");
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_613642_prune_scroll.js
@@ -5006,7 +5070,82 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  /**
   * A convenience method to call testLogEntry().
   *
-@@ -877,26 +871,29 @@ function getMessageElementText(aElement)
+@@ -239,17 +233,17 @@ function waitForContextMenu(aPopup, aBut
+ 
+ /**
+  * Dump the output of all open Web Consoles - used only for debugging purposes.
+  */
+ function dumpConsoles()
+ {
+   if (gPendingOutputTest) {
+     console.log("dumpConsoles start");
+-    for (let hud of HUDService.consoles) {
++    for (let [, hud] of HUDService.consoles) {
+       if (!hud.outputNode) {
+         console.debug("no output content for", hud.hudId);
+         continue;
+       }
+ 
+       console.debug("output content for", hud.hudId);
+       for (let elem of hud.outputNode.childNodes) {
+         dumpMessageElement(elem);
+@@ -264,18 +258,18 @@ function dumpConsoles()
+ /**
+  * Dump to output debug information for the given webconsole message.
+  *
+  * @param nsIDOMNode aMessage
+  *        The message element you want to display.
+  */
+ function dumpMessageElement(aMessage)
+ {
+-  let text = getMessageElementText(aMessage);
+-  let repeats = aMessage.querySelector(".webconsole-msg-repeat");
++  let text = aMessage.textContent;
++  let repeats = aMessage.querySelector(".repeats");
+   if (repeats) {
+     repeats = repeats.getAttribute("value");
+   }
+   console.debug("id", aMessage.getAttribute("id"),
+                 "date", aMessage.timestamp,
+                 "class", aMessage.className,
+                 "category", aMessage.category,
+                 "severity", aMessage.severity,
+@@ -826,34 +820,16 @@ function openDebugger(aOptions = {})
+     console.debug("failed to open the toolbox for 'jsdebugger'", aReason);
+     deferred.reject(aReason);
+   });
+ 
+   return deferred.promise;
+ }
+ 
+ /**
+- * Get the full text displayed by a Web Console message.
+- *
+- * @param nsIDOMElement aElement
+- *        The message element from the Web Console output.
+- * @return string
+- *         The full text displayed by the given message element.
+- */
+-function getMessageElementText(aElement)
+-{
+-  let text = aElement.textContent;
+-  let labels = aElement.querySelectorAll("label");
+-  for (let label of labels) {
+-    text += " " + label.getAttribute("value");
+-  }
+-  return text;
+-}
+-
+-/**
+  * Wait for messages in the Web Console output.
+  *
+  * @param object aOptions
+  *        Options for what you want to wait for:
+  *        - webconsole: the webconsole instance you work with.
+  *        - matchCondition: "any" or "all". Default: "all". The promise
+  *        returned by this function resolves when all of the messages are
+  *        matched, if the |matchCondition| is "all". If you set the condition to
+@@ -877,26 +853,29 @@ function getMessageElementText(aElement)
   *            - consoleTrace: boolean, set to |true| to match a console.trace()
   *            message. Optionally this can be an object of the form
   *            { file, fn, line } that can match the specified file, function
@@ -5036,7 +5175,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *         - matched: a Set of web console messages that matched the rule.
   *         - clickableElements: a list of inspectable objects. This is available
   *         if any of the following properties are present in the rule:
-@@ -913,17 +910,20 @@ function waitForMessages(aOptions)
+@@ -913,35 +892,38 @@ function waitForMessages(aOptions)
    let rulesMatched = 0;
    let listenerAdded = false;
    let deferred = promise.defer();
@@ -5058,9 +5197,10 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      return result;
    }
  
-@@ -931,17 +931,17 @@ function waitForMessages(aOptions)
+   function checkConsoleTrace(aRule, aElement)
    {
-     let elemText = getMessageElementText(aElement);
+-    let elemText = getMessageElementText(aElement);
++    let elemText = aElement.textContent;
      let trace = aRule.consoleTrace;
  
      if (!checkText("Stack trace from ", elemText)) {
@@ -5077,7 +5217,40 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      aRule.clickableElements = [clickable];
  
      if (trace.file &&
-@@ -1002,17 +1002,17 @@ function waitForMessages(aOptions)
+@@ -971,78 +953,89 @@ function waitForMessages(aOptions)
+     aRule.category = CATEGORY_WEBDEV;
+     aRule.severity = SEVERITY_LOG;
+ 
+     return true;
+   }
+ 
+   function checkConsoleTime(aRule, aElement)
+   {
+-    let elemText = getMessageElementText(aElement);
++    let elemText = aElement.textContent;
+     let time = aRule.consoleTime;
+ 
+     if (!checkText(time + ": timer started", elemText)) {
+       return false;
+     }
+ 
+     aRule.category = CATEGORY_WEBDEV;
+     aRule.severity = SEVERITY_LOG;
+ 
+     return true;
+   }
+ 
+   function checkConsoleTimeEnd(aRule, aElement)
+   {
+-    let elemText = getMessageElementText(aElement);
++    let elemText = aElement.textContent;
+     let time = aRule.consoleTimeEnd;
+     let regex = new RegExp(time + ": -?\\d+ms");
+ 
+     if (!checkText(regex, elemText)) {
+       return false;
+     }
+ 
      aRule.category = CATEGORY_WEBDEV;
      aRule.severity = SEVERITY_LOG;
  
@@ -5091,12 +5264,13 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
        return false;
      }
  
-     let elemText = getMessageElementText(aElement);
+-    let elemText = getMessageElementText(aElement);
++    let elemText = aElement.textContent;
      if (!checkText(aRule.consoleDir, elemText)) {
        return false;
      }
  
-@@ -1020,19 +1020,30 @@ function waitForMessages(aOptions)
+     let iframe = aElement.querySelector("iframe");
      if (!iframe) {
        ok(false, "console.dir message has no iframe");
        return false;
@@ -5128,7 +5302,18 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
    }
  
    function checkMessage(aRule, aElement)
-@@ -1058,16 +1069,20 @@ function waitForMessages(aOptions)
+   {
+-    let elemText = getMessageElementText(aElement);
++    let elemText = aElement.textContent;
+ 
+     if (aRule.text && !checkText(aRule.text, elemText)) {
+       return false;
+     }
+ 
+     if (aRule.noText && checkText(aRule.noText, elemText)) {
+       return false;
+     }
+@@ -1058,16 +1051,20 @@ function waitForMessages(aOptions)
      if (aRule.consoleTimeEnd && !checkConsoleTimeEnd(aRule, aElement)) {
        return false;
      }
@@ -5149,7 +5334,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
        // The rule tries to match the newer types of messages, based on their
        // object constructor.
        if (!aElement._messageObject ||
-@@ -1091,48 +1106,58 @@ function waitForMessages(aOptions)
+@@ -1091,48 +1088,58 @@ function waitForMessages(aOptions)
        if (partialMatch) {
          is(aElement.category, aRule.category,
             "message category for rule: " + displayRule(aRule));
@@ -5212,7 +5397,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
            displayErrorContext(aRule, aElement);
          }
          return false;
-@@ -1236,35 +1261,16 @@ function waitForMessages(aOptions)
+@@ -1236,35 +1243,16 @@ function waitForMessages(aOptions)
        webconsole.ui.on("messages-added", onMessagesAdded);
        webconsole.ui.on("messages-updated", onMessagesAdded);
      }
@@ -5307,26 +5492,43 @@ diff --git a/browser/devtools/webconsole/test/test-result-format-as-string.html 
          );
          return element;
        };
-diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
---- a/browser/themes/shared/devtools/webconsole.inc.css
-+++ b/browser/themes/shared/devtools/webconsole.inc.css
-@@ -6,16 +6,19 @@
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -2292,16 +2292,18 @@ WebConsoleFrame.prototype = {
+     // Store the body text, since it is needed later for the variables view.
+     let body = aBody;
+     // If a string was supplied for the body, turn it into a DOM node and an
+     // associated clipboard string now.
+     aClipboardText = aClipboardText ||
+                      (aBody + (aSourceURL ? " @ " + aSourceURL : "") +
+                               (aSourceLine ? ":" + aSourceLine : ""));
  
- a {
-   -moz-user-focus: normal;
-   -moz-user-input: enabled;
-   cursor: pointer;
-   text-decoration: underline;
- }
- 
-+/* Workaround for bug 575675 */
-+*:visited { }
++    let timestamp = aTimeStamp || Date.now();
 +
- .message {
-   display: flex;
-   -moz-margin-start: 6px;
-   -moz-margin-end: 8px;
-   width: calc(100% - 6px - 8px);
- }
+     // Create the containing node and append all its elements to it.
+     let node = this.document.createElementNS(XHTML_NS, "div");
+     node.id = "console-msg-" + gSequenceId();
+     node.className = "message";
+     node.clipboardText = aClipboardText;
+     node.timestamp = timestamp;
+     this.setMessageType(node, aCategory, aSeverity);
  
- .message > .timestamp {
+@@ -2340,17 +2342,16 @@ WebConsoleFrame.prototype = {
+     }
+ 
+     // Create the timestamp.
+     let timestampNode = this.document.createElementNS(XHTML_NS, "span");
+     timestampNode.className = "timestamp devtools-monospace";
+     // Apply the current group by indenting appropriately.
+     timestampNode.style.marginRight = this.groupDepth * GROUP_INDENT + "px";
+ 
+-    let timestamp = aTimeStamp || Date.now();
+     let timestampString = l10n.timestampString(timestamp);
+     timestampNode.textContent = timestampString + " ";
+ 
+     // Create the source location (e.g. www.example.com:6) that sits on the
+     // right side of the message, if applicable.
+     let locationNode;
+     if (aSourceURL && IGNORED_SOURCE_URLS.indexOf(aSourceURL) == -1) {
+       locationNode = this.createLocationNode(aSourceURL, aSourceLine);

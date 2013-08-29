@@ -1,0 +1,238 @@
+# HG changeset patch
+# Date 1377793202 -7200
+# Parent 8788a8f813848ce741d1a6147db0eafecc1ebb55
+# User Mihai Sucan <mihai.sucan@gmail.com>
+Bug 860672 - command line option -jsconsole should open the Browser Console; r=robcee
+
+diff --git a/browser/devtools/devtools-clhandler.js b/browser/devtools/devtools-clhandler.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/devtools-clhandler.js
+@@ -0,0 +1,37 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++
++function devtoolsCommandlineHandler() {}
++devtoolsCommandlineHandler.prototype = {
++  handle: function(cmdLine) {
++    if (!cmdLine.handleFlag("jsconsole", false))
++      return;
++
++    Cu.import('resource://gre/modules/Services.jsm');
++    let window = Services.wm.getMostRecentWindow("devtools:webconsole");
++    if (!window) {
++      let devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
++      // Load the browser devtools main module as the loader's main module.
++      devtools.main("main");
++      let hudservice = devtools.require("devtools/webconsole/hudservice");
++      let console = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).console;
++      hudservice.toggleBrowserConsole().then(null, console.error);
++    } else {
++      window.focus(); // the Browser Console was already open
++    }
++
++    if (cmdLine.state == Ci.nsICommandLine.STATE_REMOTE_AUTO)
++      cmdLine.preventDefault = true;
++  },
++
++  helpInfo : "  -jsconsole         Open the Browser Console.\n",
++
++  classID: Components.ID("{9e9a9283-0ce9-4e4a-8f1c-ba129a032c32}"),
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsICommandLineHandler]),
++};
++
++this.NSGetFactory = XPCOMUtils.generateNSGetFactory([devtoolsCommandlineHandler]);
+diff --git a/browser/devtools/devtools-clhandler.manifest b/browser/devtools/devtools-clhandler.manifest
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/devtools-clhandler.manifest
+@@ -0,0 +1,3 @@
++component {9e9a9283-0ce9-4e4a-8f1c-ba129a032c32} devtools-clhandler.js
++contract @mozilla.org/devtools/devtools-clh;1 {9e9a9283-0ce9-4e4a-8f1c-ba129a032c32}
++category command-line-handler devtools-jsconsole @mozilla.org/devtools/devtools-clh;1
+diff --git a/browser/devtools/moz.build b/browser/devtools/moz.build
+--- a/browser/devtools/moz.build
++++ b/browser/devtools/moz.build
+@@ -19,8 +19,13 @@ DIRS += [
+     'layoutview',
+     'shared',
+     'responsivedesign',
+     'framework',
+     'profiler',
+     'fontinspector',
+     'app-manager',
+ ]
++
++EXTRA_COMPONENTS += [
++    'devtools-clhandler.js',
++    'devtools-clhandler.manifest',
++]
+diff --git a/browser/devtools/webconsole/hudservice.js b/browser/devtools/webconsole/hudservice.js
+--- a/browser/devtools/webconsole/hudservice.js
++++ b/browser/devtools/webconsole/hudservice.js
+@@ -249,23 +249,24 @@ HUD_SERVICE.prototype =
+         root.setAttribute("title", root.getAttribute("browserConsoleTitle"));
+ 
+         deferred.resolve(win);
+       });
+ 
+       return deferred.promise;
+     }
+ 
+-    connect().then(getTarget).then(openWindow).then((aWindow) =>
++    connect().then(getTarget).then(openWindow).then((aWindow) => {
+       this.openBrowserConsole(target, aWindow, aWindow)
+         .then((aBrowserConsole) => {
+           this._browserConsoleID = aBrowserConsole.hudId;
+           this._browserConsoleDefer.resolve(aBrowserConsole);
+           this._browserConsoleDefer = null;
+-        }));
++        })
++    }, console.error);
+ 
+     return this._browserConsoleDefer.promise;
+   },
+ 
+   /**
+    * Get the Browser Console instance, if open.
+    *
+    * @return object|null
+diff --git a/browser/devtools/webconsole/test/browser_console_dead_objects.js b/browser/devtools/webconsole/test/browser_console_dead_objects.js
+--- a/browser/devtools/webconsole/test/browser_console_dead_objects.js
++++ b/browser/devtools/webconsole/test/browser_console_dead_objects.js
+@@ -19,17 +19,20 @@ function test()
+   }, true);
+ 
+   function onBrowserConsoleOpen(aHud)
+   {
+     hud = aHud;
+     ok(hud, "browser console opened");
+ 
+     hud.jsterm.clearOutput();
+-    hud.jsterm.execute("foobarzTezt = content.document", onAddVariable);
++    hud.jsterm.execute("Cu = Components.utils;" +
++                       "Cu.import('resource://gre/modules/Services.jsm');" +
++                       "chromeWindow = Services.wm.getMostRecentWindow('navigator:browser');" +
++                       "foobarzTezt = chromeWindow.content.document", onAddVariable);
+   }
+ 
+   function onAddVariable()
+   {
+     gBrowser.removeCurrentTab();
+ 
+     hud.jsterm.execute("foobarzTezt", onReadVariable);
+   }
+diff --git a/toolkit/components/console/moz.build b/toolkit/components/console/moz.build
+--- a/toolkit/components/console/moz.build
++++ b/toolkit/components/console/moz.build
+@@ -1,12 +1,15 @@
+ # -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
+ # vim: set filetype=python:
+ # This Source Code Form is subject to the terms of the Mozilla Public
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ TEST_DIRS += ['tests']
+ 
+-EXTRA_COMPONENTS += [
+-    'jsconsole-clhandler.js',
+-    'jsconsole-clhandler.manifest',
+-]
++# The '-jsconsole' command-line argument is handled by the devtools
++# if we are building the browser.
++if CONFIG['MOZ_BUILD_APP'] != 'browser':
++    EXTRA_COMPONENTS += [
++        'jsconsole-clhandler.js',
++        'jsconsole-clhandler.manifest',
++    ]
+diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/server/actors/webbrowser.js
+--- a/toolkit/devtools/server/actors/webbrowser.js
++++ b/toolkit/devtools/server/actors/webbrowser.js
+@@ -182,18 +182,28 @@ function BrowserTabList(aConnection)
+ 
+   /* True if we're testing, and should throw if consistency checks fail. */
+   this._testing = false;
+ }
+ 
+ BrowserTabList.prototype.constructor = BrowserTabList;
+ 
+ 
++/**
++ * Get the selected browser for the given navigator:browser window.
++ * @private
++ * @param aWindow nsIChromeWindow
++ *        The navigator:browser window for which you want the selected browser.
++ * @return nsIDOMElement|null
++ *         The currently selected xul:browser element, if any. Note that the
++ *         browser window might not be loaded yet - the function will return
++ *         |null| in such cases.
++ */
+ BrowserTabList.prototype._getSelectedBrowser = function(aWindow) {
+-  return aWindow.gBrowser.selectedBrowser;
++  return aWindow.gBrowser ? aWindow.gBrowser.selectedBrowser : null;
+ };
+ 
+ BrowserTabList.prototype._getChildren = function(aWindow) {
+   return aWindow.gBrowser.browsers;
+ };
+ 
+ BrowserTabList.prototype.getList = function() {
+   let topXULWindow = windowMediator.getMostRecentWindow("navigator:browser");
+@@ -206,16 +216,19 @@ BrowserTabList.prototype.getList = funct
+   // To avoid mysterious behavior if tabs are closed or opened mid-iteration,
+   // we update the map first, and then make a second pass over it to yield
+   // the actors. Thus, the sequence yielded is always a snapshot of the
+   // actors that were live when we began the iteration.
+ 
+   // Iterate over all navigator:browser XUL windows.
+   for (let win of allAppShellDOMWindows("navigator:browser")) {
+     let selectedBrowser = this._getSelectedBrowser(win);
++    if (!selectedBrowser) {
++      continue;
++    }
+ 
+     // For each tab in this XUL window, ensure that we have an actor for
+     // it, reusing existing actors where possible. We actually iterate
+     // over 'browser' XUL elements, and BrowserTabActor uses
+     // browser.contentWindow.wrappedJSObject as the debuggee global.
+     for (let browser of this._getChildren(win)) {
+       // Do we have an existing actor for this browser? If not, create one.
+       let actor = this._actorByBrowser.get(browser);
+diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
+--- a/toolkit/devtools/server/actors/webconsole.js
++++ b/toolkit/devtools/server/actors/webconsole.js
+@@ -125,20 +125,28 @@ WebConsoleActor.prototype =
+ 
+   /**
+    * The debugger server connection instance.
+    * @type object
+    */
+   conn: null,
+ 
+   /**
+-   * The content window we work with.
++   * The window we work with.
+    * @type nsIDOMWindow
+    */
+-  get window() this.parentActor.window,
++  get window() {
++    if (this.parentActor.isRootActor) {
++      // Try to find the Browser Console window, otherwise use the window of
++      // the root actor.
++      let window = Services.wm.getMostRecentWindow("devtools:webconsole");
++      return window || this.parentActor.window;
++    }
++    return this.parentActor.window;
++  },
+ 
+   /**
+    * The ConsoleServiceListener instance.
+    * @type object
+    */
+   consoleServiceListener: null,
+ 
+   /**
