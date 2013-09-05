@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 417733473098eb06ea8af2f8d8e9c1eb5c152c07
+# Parent ed6f09411e8bf0f130bbbda5666c5dd16cb6ba2d
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1377876336 -7200
 
@@ -517,7 +517,7 @@ diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devto
 -        break;
 -      }
 -    }
-+    xhrRequest = text.indexOf(TEST_URI);
++    xhrRequest = text.indexOf("test-console.html");
    }
  
    function showResults()
@@ -3418,6 +3418,40 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_prun
 -  return outputNode.querySelectorAll(".hud-msg-node").length;
 +  return outputNode.querySelectorAll(".message").length;
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_644419_log_limits.js
+@@ -151,24 +151,26 @@ function loadImage() {
+     return;
+   }
+ 
+   is(gCounter, 11, "loaded 11 files");
+ 
+   waitForMessages({
+     webconsole: hud,
+     messages: [{
+-      text: "test-image.png?_fubar=10",
++      text: "test-image.png",
++      url: "test-image.png?_fubar=10",
+       category: CATEGORY_NETWORK,
+       severity: SEVERITY_LOG,
+     }],
+   }).then(() => {
+-    testLogEntry(outputNode, "test-image.png?_fubar=0", "first message is pruned", false, true);
+-    findLogEntry("test-image.png?_fubar=1");
+-    // Check if the sentinel entry is still there.
++    let msgs = outputNode.querySelectorAll(".message[category=network]");
++    is(msgs.length, 10, "number of network messages");
++    isnot(msgs[0].url.indexOf("fubar=1"), -1, "first network message");
++    isnot(msgs[1].url.indexOf("fubar=2"), -1, "second network message");
+     findLogEntry("testing Net limits");
+ 
+     Services.prefs.clearUserPref("devtools.hud.loglimit.network");
+     testCssLimits();
+   });
+ }
+ 
+ function testCssLimits() {
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
@@ -5181,7 +5215,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *        - matchCondition: "any" or "all". Default: "all". The promise
   *        returned by this function resolves when all of the messages are
   *        matched, if the |matchCondition| is "all". If you set the condition to
-@@ -877,26 +853,29 @@ function getMessageElementText(aElement)
+@@ -877,26 +853,30 @@ function getMessageElementText(aElement)
   *            - consoleTrace: boolean, set to |true| to match a console.trace()
   *            message. Optionally this can be an object of the form
   *            { file, fn, line } that can match the specified file, function
@@ -5203,6 +5237,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *            match the source URL of the message.
 + *            - groupDepth: number used to check the depth of the message in
 + *            a group.
++ *            - url: URL to match for network requests.
   * @return object
   *         A promise object is returned once the messages you want are found.
   *         The promise is resolved with the array of rule objects you give in
@@ -5211,7 +5246,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
   *         - matched: a Set of web console messages that matched the rule.
   *         - clickableElements: a list of inspectable objects. This is available
   *         if any of the following properties are present in the rule:
-@@ -913,35 +892,38 @@ function waitForMessages(aOptions)
+@@ -913,35 +893,38 @@ function waitForMessages(aOptions)
    let rulesMatched = 0;
    let listenerAdded = false;
    let deferred = promise.defer();
@@ -5253,7 +5288,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      aRule.clickableElements = [clickable];
  
      if (trace.file &&
-@@ -971,78 +953,89 @@ function waitForMessages(aOptions)
+@@ -971,78 +954,89 @@ function waitForMessages(aOptions)
      aRule.category = CATEGORY_WEBDEV;
      aRule.severity = SEVERITY_LOG;
  
@@ -5349,7 +5384,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
      if (aRule.noText && checkText(aRule.noText, elemText)) {
        return false;
      }
-@@ -1058,16 +1051,20 @@ function waitForMessages(aOptions)
+@@ -1058,16 +1052,20 @@ function waitForMessages(aOptions)
      if (aRule.consoleTimeEnd && !checkConsoleTimeEnd(aRule, aElement)) {
        return false;
      }
@@ -5370,7 +5405,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
        // The rule tries to match the newer types of messages, based on their
        // object constructor.
        if (!aElement._messageObject ||
-@@ -1091,48 +1088,58 @@ function waitForMessages(aOptions)
+@@ -1091,48 +1089,63 @@ function waitForMessages(aOptions)
        if (partialMatch) {
          is(aElement.category, aRule.category,
             "message category for rule: " + displayRule(aRule));
@@ -5391,6 +5426,11 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
  
 -    if (aRule.repeats) {
 -      let repeats = aElement.querySelector(".webconsole-msg-repeat");
++    if (aRule.category == CATEGORY_NETWORK && "url" in aRule &&
++        !checkText(aRule.url, aElement.url)) {
++      return false;
++    }
++
 +    if ("repeats" in aRule) {
 +      let repeats = aElement.querySelector(".repeats");
        if (!repeats || repeats.getAttribute("value") != aRule.repeats) {
@@ -5433,7 +5473,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
            displayErrorContext(aRule, aElement);
          }
          return false;
-@@ -1147,19 +1154,19 @@ function waitForMessages(aOptions)
+@@ -1147,19 +1160,19 @@ function waitForMessages(aOptions)
      aRule.matched.add(aElement);
  
      return aRule.matched.size == count;
@@ -5455,7 +5495,7 @@ diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webcons
        }
  
        for (let rule of rules) {
-@@ -1236,35 +1243,16 @@ function waitForMessages(aOptions)
+@@ -1236,35 +1249,16 @@ function waitForMessages(aOptions)
        webconsole.ui.on("messages-added", onMessagesAdded);
        webconsole.ui.on("messages-updated", onMessagesAdded);
      }
