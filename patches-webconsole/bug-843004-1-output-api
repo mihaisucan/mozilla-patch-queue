@@ -1,0 +1,390 @@
+# HG changeset patch
+# Parent 36d351d8269becbc223670b1a3afb44ce152e223
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1380053851 -10800
+
+Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
+
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -1,15 +1,17 @@
+ /* vim: set ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
++const {Cc, Ci, Cu} = require("chrome");
++
+ const Heritage = require("sdk/core/heritage");
+ const XHTML_NS = "http://www.w3.org/1999/xhtml";
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ 
+ // Constants for compatibility with the Web Console output implementation before
+ // bug 778766.
+ // TODO: remove these once bug 778766 is fixed.
+ const COMPAT = {
+@@ -26,16 +28,19 @@ const COMPAT = {
+ 
+   // The possible message severities.
+   SEVERITIES: {
+     ERROR: 0,
+     WARNING: 1,
+     INFO: 2,
+     LOG: 3,
+   },
++
++// The indent of a console group in pixels.
++  GROUP_INDENT: 12,
+ };
+ 
+ /**
+  * The ConsoleOutput object is used to manage output of messages in the Web
+  * Console.
+  *
+  * @constructor
+  * @param object owner
+@@ -263,16 +268,24 @@ Messages.BaseMessage.prototype = {
+    * Tells if this message is visible or not.
+    * @type boolean
+    */
+   get visible() {
+     return this.element && this.element.parentNode;
+   },
+ 
+   /**
++   * The owner DOM document.
++   * @type DOMElement
++   */
++  get document() {
++    return this.output.document;
++  },
++
++  /**
+    * Holds the text-only representation of the message.
+    * @type string
+    */
+   textContent: "",
+ 
+   /**
+    * Set of widgets included in this message.
+    * @type Set
+@@ -314,17 +327,17 @@ Messages.BaseMessage.prototype = {
+       this.element = this._renderCompat();
+     }
+     return this;
+   },
+ 
+   /**
+    * Prepare the message container for the Web Console, such that it is
+    * compatible with the current implementation.
+-   * TODO: remove this once bug 778766.
++   * TODO: remove this once bug 778766 is fixed.
+    */
+   _renderCompat: function()
+   {
+     let doc = this.output.document;
+     let container = doc.createElementNS(XHTML_NS, "div");
+     container.id = "console-msg-" + gSequenceId();
+     container.className = "message";
+     container.category = this._categoryCompat;
+@@ -349,17 +362,17 @@ Messages.BaseMessage.prototype = {
+  * @param string url
+  *        The URL to display.
+  * @param number timestamp
+  *        The message date and time, milliseconds elapsed since 1 January 1970
+  *        00:00:00 UTC.
+  */
+ Messages.NavigationMarker = function(url, timestamp)
+ {
+-  Messages.BaseMessage.apply(this, arguments);
++  Messages.BaseMessage.call(this);
+   this._url = url;
+   this.textContent = "------ " + url;
+   this.timestamp = timestamp;
+ };
+ 
+ Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
+ {
+   /**
+@@ -415,16 +428,254 @@ Messages.NavigationMarker.prototype = He
+     this.element.url = this._url;
+     this.element.appendChild(doc.createTextNode("\n"));
+ 
+     return this;
+   },
+ }); // Messages.NavigationMarker.prototype
+ 
+ 
++/**
++ * The Simple message is used to show any basic message in the Web Console.
++ *
++ * @constructor
++ * @extends Messages.BaseMessage
++ * @param string|DOMElement message
++ *        The message to display.
++ * @param object [options]
++ *        Options for this message:
++ *        - html: (boolean) tells if |message| is an HTML string or not.
++ *        Defaults to |false|.
++ *        - category: (string) category that this message belongs to. Defaults
++ *        to no category.
++ *        - severity: (string) severity of the message. Defaults to no severity.
++ *        - timestamp: (number) date and time when the message was recorded.
++ *        Defaults to |Date.now()|.
++ *        - location: object that tells the message source: file, line, column
++ *        and lineText.
++ *        - className: (string) additional element class names for styling
++ *        purposes.
++ */
++Messages.Simple = function(message, options = {})
++{
++  Messages.BaseMessage.call(this);
++
++  this.category = options.category;
++  this.severity = options.severity;
++  this.timestamp = options.timestamp || Date.now();
++
++  this._message = message;
++  this._messageIsHTML = options.html;
++  this._className = options.className;
++};
++
++Messages.Simple.prototype = Heritage.extend(Messages.BaseMessage.prototype,
++{
++  /**
++   * Message timestamp.
++   *
++   * @type number
++   *       Milliseconds elapsed since 1 January 1970 00:00:00 UTC.
++   */
++  timestamp: 0,
++
++  _categoryCompat: COMPAT.CATEGORIES.NETWORK,
++  _severityCompat: COMPAT.SEVERITIES.LOG,
++  _categoryNameCompat: "network",
++  _severityNameCompat: "info",
++  _filterKeyCompat: "networkinfo",
++
++  /**
++   * Prepare the DOM element for this message.
++   * @return this
++   */
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let timestamp = new Widgets.MessageTimestamp(this, this.timestamp).render();
++    this.widgets.add(timestamp);
++
++    let icon = this.document.createElementNS(XHTML_NS, "span");
++    icon.className = "icon";
++
++    let body = this._renderBody();
++
++    Messages.BaseMessage.prototype.render.call(this);
++    this.element.appendChild(timestamp.element);
++    this.element.appendChild(icon);
++    this.element.appendChild(body);
++    this.element.appendChild(this.document.createTextNode("\n"));
++
++    return this;
++  },
++
++  _renderBody: function()
++  {
++    let body = this.document.createElementNS(XHTML_NS, "span");
++    body.className = "body devtools-monospace";
++    if (this._className) {
++      body.className += " " + this._className;
++    }
++
++    if (this._message instanceof Ci.nsIDOMElement) {
++      body.appendChild(this._message);
++    } else if (this._messageIsHTML) {
++      body.innerHTML = this._message;
++    } else {
++      body.textContent = this._message;
++    }
++
++    return body;
++  },
++
++}); // Messages.Simple.prototype
++
++
++
++/**
++ * The JavaScriptEvalOutput message.
++ *
++ * @constructor
++ * @extends Messages.Simple
++ * @param object result
++ *        The message to display.
++ */
++Messages.JavaScriptEvalOutput = function(result, error)
++{
++  let options = {
++    category: "output",
++    severity: severity,
++  };
++  Messages.Simple.call(this, message, options);
++
++  this.category = options.category;
++  this.severity = options.severity;
++  this.timestamp = options.timestamp || Date.now();
++};
++
++Messages.JavaScriptEvalOutput.prototype = Heritage.extend(Messages.Simple.prototype,
++{
++  /**
++   * Prepare the DOM element for this message.
++   * @return this
++   */
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let timestamp = new Widgets.MessageTimestamp(this, this.timestamp).render();
++    this.widgets.add(timestamp);
++
++    let icon = this.document.createElementNS(XHTML_NS, "span");
++    icon.className = "icon";
++
++    let body = this._renderBody();
++
++    Messages.BaseMessage.prototype.render.call(this);
++    this.element.appendChild(timestamp.element);
++    this.element.appendChild(icon);
++    this.element.appendChild(body);
++    this.element.appendChild(this.document.createTextNode("\n"));
++
++    return this;
++  },
++
++  _renderBody: function()
++  {
++    let body = this.document.createElementNS(XHTML_NS, "span");
++    body.className = "body devtools-monospace";
++    if (this._className) {
++      body.className += " " + this._className;
++    }
++
++    if (this._message instanceof Ci.nsIDOMElement) {
++      body.appendChild(this._message);
++    } else if (this._messageIsHTML) {
++      body.innerHTML = this._message;
++    } else {
++      body.textContent = this._message;
++    }
++
++    return body;
++  },
++
++}); // Messages.JavaScriptEvalOutput.prototype
++
++
++let Widgets = {};
++
++/**
++ * The base widget class.
++ *
++ * @constructor
++ * @param object message
++ *        The owning message.
++ */
++Widgets.BaseWidget = function(message)
++{
++  this.message = message;
++};
++
++Widgets.BaseWidget.prototype = {
++  message: null,
++  element: null,
++  textContent: "",
++
++  get document() {
++    return this.message.document;
++  },
++
++  render: function() { },
++  destroy: function() { },
++};
++
++/**
++ * The timestamp widget.
++ *
++ * @constructor
++ * @param object message
++ *        The owning message.
++ * @param number timestamp
++ *        The UNIX timestamp to display.
++ */
++Widgets.MessageTimestamp = function(message, timestamp)
++{
++  Widgets.BaseWidget.call(this, message);
++  this.timestamp = timestamp;
++};
++
++Widgets.MessageTimestamp.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
++{
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    this.textContent = l10n.timestampString(this.timestamp);
++    this.element = this.document.createElementNS(XHTML_NS, "span");
++    this.element.className = "timestamp devtools-monospace";
++    this.element.textContent = this.textContent + " ";
++
++    // Apply the current group by indenting appropriately.
++    // TODO: remove this once bug 778766 is fixed.
++    this.element.style.marginRight = this.message._groupDepthCompat *
++                                     COMPAT.GROUP_INDENT + "px";
++
++    return this;
++  },
++});
++
++
+ function gSequenceId()
+ {
+   return gSequenceId.n++;
+ }
+ gSequenceId.n = 0;
+ 
+ exports.ConsoleOutput = ConsoleOutput;
+ exports.Messages = Messages;
++exports.Widgets = Widgets;
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -45,20 +45,16 @@ const STRICT_TRANSPORT_SECURITY_LEARN_MO
+ const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
+ 
+ const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/widgets/VariablesView.xul";
+ 
+ const CONSOLE_DIR_VIEW_HEIGHT = 0.6;
+ 
+ const IGNORED_SOURCE_URLS = ["debugger eval code", "self-hosted"];
+ 
+-// The amount of time in milliseconds that must pass between messages to
+-// trigger the display of a new group.
+-const NEW_GROUP_DELAY = 5000;
+-
+ // The amount of time in milliseconds that we wait before performing a live
+ // search.
+ const SEARCH_DELAY = 200;
+ 
+ // The number of lines that are displayed in the console output by default, for
+ // each category. The user can change this number by adjusting the hidden
+ // "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
+ const DEFAULT_LOG_LIMIT = 200;
