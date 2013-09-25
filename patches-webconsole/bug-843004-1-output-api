@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 36d351d8269becbc223670b1a3afb44ce152e223
+# Parent e3be443ea09325e1655a7a9a9fd2e360c31b56d6
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1380053851 -10800
+# Date 1380139721 -10800
 
 Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
 
@@ -109,7 +109,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
  {
    /**
-@@ -415,16 +428,254 @@ Messages.NavigationMarker.prototype = He
+@@ -415,16 +428,233 @@ Messages.NavigationMarker.prototype = He
      this.element.url = this._url;
      this.element.appendChild(doc.createTextNode("\n"));
  
@@ -134,10 +134,18 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *        - severity: (string) severity of the message. Defaults to no severity.
 + *        - timestamp: (number) date and time when the message was recorded.
 + *        Defaults to |Date.now()|.
-+ *        - location: object that tells the message source: file, line, column
++ *        - link: (string) if provided, the message will be wrapped in an anchor
++ *        pointing to the given URL here.
++ *        - linkCallback: (function) if provided, the message will be wrapped in
++ *        an anchor. The |linkCallback| function will be added as click event
++ *        handler.
++ *        - location: object that tells the message source: url, line, column
 + *        and lineText.
 + *        - className: (string) additional element class names for styling
 + *        purposes.
++ *        - _groupDepthCompat: (number) group depth.
++ *        - _afterMessageElement: (DOMElement) add this message element after
++ *        the given element.
 + */
 +Messages.Simple = function(message, options = {})
 +{
@@ -145,6 +153,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +  this.category = options.category;
 +  this.severity = options.severity;
++  this.location = options.location;
 +  this.timestamp = options.timestamp || Date.now();
 +
 +  this._message = message;
@@ -185,11 +194,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    icon.className = "icon";
 +
 +    let body = this._renderBody();
++    let location = this._renderLocation();
 +
 +    Messages.BaseMessage.prototype.render.call(this);
 +    this.element.appendChild(timestamp.element);
 +    this.element.appendChild(icon);
 +    this.element.appendChild(body);
++    if (location) {
++      this.element.appendChild(location);
++    }
 +    this.element.appendChild(this.document.createTextNode("\n"));
 +
 +    return this;
@@ -214,6 +227,18 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return body;
 +  },
 +
++  _renderLocation: function()
++  {
++    if (!this.location) {
++      return null;
++    }
++
++    let {url, line} = this.location;
++
++    // The ConsoleOutput owner is a WebConsoleFrame instance from webconsole.js.
++    // TODO: move createLocationNode() into this file when bug 778766 is fixed.
++    return this.output.owner.createLocationNode(url, line);
++  },
 +}); // Messages.Simple.prototype
 +
 +
@@ -241,52 +266,6 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +Messages.JavaScriptEvalOutput.prototype = Heritage.extend(Messages.Simple.prototype,
 +{
-+  /**
-+   * Prepare the DOM element for this message.
-+   * @return this
-+   */
-+  render: function()
-+  {
-+    if (this.element) {
-+      return this;
-+    }
-+
-+    let timestamp = new Widgets.MessageTimestamp(this, this.timestamp).render();
-+    this.widgets.add(timestamp);
-+
-+    let icon = this.document.createElementNS(XHTML_NS, "span");
-+    icon.className = "icon";
-+
-+    let body = this._renderBody();
-+
-+    Messages.BaseMessage.prototype.render.call(this);
-+    this.element.appendChild(timestamp.element);
-+    this.element.appendChild(icon);
-+    this.element.appendChild(body);
-+    this.element.appendChild(this.document.createTextNode("\n"));
-+
-+    return this;
-+  },
-+
-+  _renderBody: function()
-+  {
-+    let body = this.document.createElementNS(XHTML_NS, "span");
-+    body.className = "body devtools-monospace";
-+    if (this._className) {
-+      body.className += " " + this._className;
-+    }
-+
-+    if (this._message instanceof Ci.nsIDOMElement) {
-+      body.appendChild(this._message);
-+    } else if (this._messageIsHTML) {
-+      body.innerHTML = this._message;
-+    } else {
-+      body.textContent = this._message;
-+    }
-+
-+    return body;
-+  },
-+
 +}); // Messages.JavaScriptEvalOutput.prototype
 +
 +
@@ -388,3 +367,78 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // each category. The user can change this number by adjusting the hidden
  // "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
  const DEFAULT_LOG_LIMIT = 200;
+@@ -3085,55 +3081,60 @@ JSTerm.prototype = {
+     // Hide undefined results coming from JSTerm helper functions.
+     if (!errorMessage && result && typeof result == "object" &&
+         result.type == "undefined" &&
+         helperResult && !helperHasRawOutput) {
+       aCallback && aCallback();
+       return;
+     }
+ 
+-    let node;
++    let msg;
++    let options = {
++      timestamp: aResponse.timestamp,
++      category: "output",
++      severity: "log",
++      _afterMessageElement: aAfterNode,
++    };
+ 
+     if (errorMessage) {
+-      node = this.writeOutput(errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
+-                              aAfterNode, aResponse.timestamp);
+-    }
+-    else if (inspectable) {
+-      node = this.writeOutputJS(resultString,
+-                                this._evalOutputClick.bind(this, aResponse),
+-                                aAfterNode, aResponse.timestamp);
++      options.severity = "error";
++      msg = new Messages.Simple(errorMessage, options);
+     }
+     else {
+-      node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
+-                              aAfterNode, aResponse.timestamp);
+-    }
++      if (inspectable) {
++        options.linkCallback = this._evalOutputClick.bind(this, aResponse);
++      }
++      msg = new Messages.Simple(resultString, options);
++    }
++
++    this.output.addMessage(msg);
+ 
+     if (aCallback) {
+       let oldFlushCallback = this.hud._flushCallback;
+       this.hud._flushCallback = () => {
+         aCallback(node);
+         if (oldFlushCallback) {
+           oldFlushCallback();
+           this.hud._flushCallback = oldFlushCallback;
+         }
+         else {
+           this.hud._flushCallback = null;
+         }
+       };
+     }
+ 
+-    node._objectActors = new Set();
++    msg._objectActors = new Set();
+ 
+     let error = aResponse.exception;
+     if (WebConsoleUtils.isActorGrip(error)) {
+-      node._objectActors.add(error.actor);
++      msg._objectActors.add(error.actor);
+     }
+ 
+     if (WebConsoleUtils.isActorGrip(result)) {
+-      node._objectActors.add(result.actor);
++      msg._objectActors.add(result.actor);
+ 
+       if (result.type == "longString") {
+         // Add an ellipsis to expand the short string if the object is not
+         // inspectable.
+ 
+         let body = node.getElementsByClassName("body")[0];
+         let ellipsis = this.hud.document.createElementNS(XHTML_NS, "a");
+         ellipsis.classList.add("longStringEllipsis");
