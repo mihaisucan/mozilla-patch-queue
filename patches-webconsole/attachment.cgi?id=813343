@@ -1,0 +1,204 @@
+# HG changeset patch
+# Date 1380831922 -10800
+# Parent 8a1d8044a4c8f42ea8bb9a01f0d471c1a2dacff5
+# User Anton Kovalyov <anton@mozilla.com>
+
+Bug 912240 - Restore access key for the Clear button in console; r=msucan; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser_console_keyboard_accessibility.js b/browser/devtools/webconsole/test/browser_console_keyboard_accessibility.js
+--- a/browser/devtools/webconsole/test/browser_console_keyboard_accessibility.js
++++ b/browser/devtools/webconsole/test/browser_console_keyboard_accessibility.js
+@@ -31,18 +31,18 @@ function test()
+         severity: SEVERITY_LOG,
+       }],
+     }).then(onConsoleMessage);
+   }
+ 
+   function onConsoleMessage()
+   {
+     hud.jsterm.once("messages-cleared", onClear);
+-    info("try ctrl-k to clear output");
+-    EventUtils.synthesizeKey("K", { accelKey: true });
++    info("try ctrl-l to clear output");
++    EventUtils.synthesizeKey("l", { ctrlKey: true });
+   }
+ 
+   function onClear()
+   {
+     is(hud.outputNode.textContent.indexOf("foobarz1"), -1, "output cleared");
+     is(hud.jsterm.inputNode.getAttribute("focused"), "true",
+        "jsterm input is focused");
+ 
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -485,17 +485,16 @@ WebConsoleFrame.prototype = {
+ 
+     this.filterBox = doc.querySelector(".hud-filter-box");
+     this.outputNode = doc.getElementById("output-container");
+     this.completeNode = doc.querySelector(".jsterm-complete-node");
+     this.inputNode = doc.querySelector(".jsterm-input-node");
+ 
+     this._setFilterTextBoxEvents();
+     this._initFilterButtons();
+-    this._changeClearModifier();
+ 
+     let fontSize = this.owner._browserConsole ?
+                    Services.prefs.getIntPref("devtools.webconsole.fontSize") : 0;
+ 
+     if (fontSize != 0) {
+       fontSize = Math.max(MIN_FONT_SIZE, fontSize);
+ 
+       this.outputNode.style.fontSize = fontSize + "px";
+@@ -590,31 +589,16 @@ WebConsoleFrame.prototype = {
+                              Ci.nsITimer.TYPE_ONE_SHOT);
+     };
+ 
+     this.filterBox.addEventListener("command", onChange, false);
+     this.filterBox.addEventListener("input", onChange, false);
+   },
+ 
+   /**
+-   * Changes modifier for the clear output shorcut on Macs.
+-   *
+-   * @private
+-   */
+-  _changeClearModifier: function WCF__changeClearModifier()
+-  {
+-    if (Services.appinfo.OS != "Darwin") {
+-      return;
+-    }
+-
+-    let clear = this.document.querySelector("#key_clearOutput");
+-    clear.setAttribute("modifiers", "access");
+-  },
+-
+-  /**
+    * Creates one of the filter buttons on the toolbar.
+    *
+    * @private
+    * @param nsIDOMNode aParent
+    *        The node to which the filter button should be appended.
+    * @param object aDescriptor
+    *        A descriptor that contains info about the button. Contains "name",
+    *        "category", and "prefKey" properties, and optionally a "severities"
+@@ -648,16 +632,19 @@ WebConsoleFrame.prototype = {
+       let jslog = this.document.querySelector("menuitem[prefKey=jslog]");
+       jslog.hidden = true;
+     }
+ 
+     if (Services.appinfo.OS == "Darwin") {
+       let net = this.document.querySelector("toolbarbutton[category=net]");
+       let accesskey = net.getAttribute("accesskeyMacOSX");
+       net.setAttribute("accesskey", accesskey);
++
++      let logging = this.document.querySelector("toolbarbutton[category=logging]");
++      logging.removeAttribute("accesskey");
+     }
+   },
+ 
+   /**
+    * Increase, decrease or reset the font size.
+    *
+    * @param string size
+    *        The size of the font change. Accepted values are "+" and "-".
+diff --git a/browser/devtools/webconsole/webconsole.xul b/browser/devtools/webconsole/webconsole.xul
+--- a/browser/devtools/webconsole/webconsole.xul
++++ b/browser/devtools/webconsole/webconsole.xul
+@@ -51,19 +51,18 @@ function goUpdateConsoleCommands() {
+     <key id="key_fullZoomReduce"  key="&fullZoomReduceCmd.commandkey;" command="cmd_fullZoomReduce"  modifiers="accel"/>
+     <key key="&fullZoomReduceCmd.commandkey2;"  command="cmd_fullZoomReduce" modifiers="accel"/>
+     <key id="key_fullZoomEnlarge" key="&fullZoomEnlargeCmd.commandkey;" command="cmd_fullZoomEnlarge" modifiers="accel"/>
+     <key key="&fullZoomEnlargeCmd.commandkey2;" command="cmd_fullZoomEnlarge" modifiers="accel"/>
+     <key key="&fullZoomEnlargeCmd.commandkey3;" command="cmd_fullZoomEnlarge" modifiers="accel"/>
+     <key id="key_fullZoomReset" key="&fullZoomResetCmd.commandkey;" command="cmd_fullZoomReset" modifiers="accel"/>
+     <key key="&fullZoomResetCmd.commandkey2;" command="cmd_fullZoomReset" modifiers="accel"/>
+     <key key="&findCmd.key;" command="cmd_find" modifiers="accel"/>
+-    <key key="&clearOutputCmd.key;" command="consoleCmd_clearOutput" modifiers="accel"/>
+     <key key="&closeCmd.key;" command="cmd_close" modifiers="accel"/>
+-    <key id="key_clearOutput" key="&clearOutputCtrl.key;" command="consoleCmd_clearOutput" modifiers="accel"/>
++    <key key="&clearOutputCtrl.key;" command="consoleCmd_clearOutput" modifiers="control"/>
+   </keyset>
+   <keyset id="editMenuKeys"/>
+ 
+   <popupset id="mainPopupSet">
+     <menupopup id="output-contextmenu" onpopupshowing="goUpdateGlobalEditMenuItems()">
+       <menuitem id="saveBodiesContextMenu" type="checkbox" label="&saveBodies.label;"
+                 accesskey="&saveBodies.accesskey;"/>
+       <menuitem id="menu_openURL" label="&openURL.label;"
+@@ -136,32 +135,33 @@ function goUpdateConsoleCommands() {
+                       autocheck="false" prefKey="secerror"/>
+             <menuitem label="&btnConsoleWarnings;" type="checkbox"
+                       autocheck="false" prefKey="secwarn"/>
+           </menupopup>
+         </toolbarbutton>
+         <toolbarbutton label="&btnPageLogging.label;" type="menu-button"
+                        category="logging" class="devtools-toolbarbutton webconsole-filter-button"
+                        tooltiptext="&btnPageLogging.tooltip;"
+-                       accesskey="&btnPageLogging.accesskey2;"
++                       accesskey="&btnPageLogging.accesskey3;"
+                        tabindex="7">
+           <menupopup>
+             <menuitem label="&btnConsoleErrors;" type="checkbox"
+                       autocheck="false" prefKey="error"/>
+             <menuitem label="&btnConsoleWarnings;" type="checkbox"
+                       autocheck="false" prefKey="warn"/>
+             <menuitem label="&btnConsoleInfo;" type="checkbox" autocheck="false"
+                       prefKey="info"/>
+             <menuitem label="&btnConsoleLog;" type="checkbox" autocheck="false"
+                       prefKey="log"/>
+           </menupopup>
+         </toolbarbutton>
+ 
+         <toolbarbutton class="webconsole-clear-console-button devtools-toolbarbutton"
+                        label="&btnClear.label;" tooltiptext="&btnClear.tooltip;"
++                       accesskey="&btnClear.accesskey;"
+                        tabindex="8"/>
+ 
+         <spacer flex="1"/>
+ 
+         <textbox class="compact hud-filter-box devtools-searchinput" type="search"
+                  placeholder="&filterOutput.placeholder;" tabindex="2"/>
+       </toolbar>
+ 
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
+--- a/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
++++ b/browser/locales/en-US/chrome/browser/devtools/webConsole.dtd
+@@ -63,35 +63,35 @@
+ <!ENTITY btnPageSecurity.accesskey "u">
+ 
+ <!-- LOCALIZATION NOTE (btnPageLogging): This is used as the text of the
+   -  the toolbar. It shows or hides messages that the web developer inserted on
+   -  the page for debugging purposes, using calls such console.log() and
+   -  console.error(). -->
+ <!ENTITY btnPageLogging.label   "Logging">
+ <!ENTITY btnPageLogging.tooltip "Log messages sent to the window.console object">
+-<!ENTITY btnPageLogging.accesskey2 "R">
++<!ENTITY btnPageLogging.accesskey3 "L">
+ <!ENTITY btnConsoleErrors       "Errors">
+ <!ENTITY btnConsoleInfo         "Info">
+ <!ENTITY btnConsoleWarnings     "Warnings">
+ <!ENTITY btnConsoleLog          "Log">
+ 
+ <!ENTITY filterOutput.placeholder "Filter output">
+ <!ENTITY btnClear.label        "Clear">
+ <!ENTITY btnClear.tooltip      "Clear the Web Console output">
++<!ENTITY btnClear.accesskey    "r">
+ 
+ <!ENTITY fullZoomEnlargeCmd.commandkey  "+">
+ <!ENTITY fullZoomEnlargeCmd.commandkey2 "="> <!-- + is above this key on many keyboards -->
+ <!ENTITY fullZoomEnlargeCmd.commandkey3 "">
+ 
+ <!ENTITY fullZoomReduceCmd.commandkey   "-">
+ <!ENTITY fullZoomReduceCmd.commandkey2  "">
+ 
+ <!ENTITY fullZoomResetCmd.commandkey    "0">
+ <!ENTITY fullZoomResetCmd.commandkey2   "">
+ 
+ <!ENTITY copyURLCmd.label     "Copy Link Location">
+ <!ENTITY copyURLCmd.accesskey "a">
+ 
+ <!ENTITY closeCmd.key         "W">
+ <!ENTITY findCmd.key          "F">
+-<!ENTITY clearOutputCmd.key   "K">
+ <!ENTITY clearOutputCtrl.key  "L">
