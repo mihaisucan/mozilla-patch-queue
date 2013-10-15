@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent e3be443ea09325e1655a7a9a9fd2e360c31b56d6
+# Parent 344307c027959e537e5d669f1d85f33a57097135
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1380139721 -10800
+# Date 1381869677 -10800
 
 Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
 
@@ -26,7 +26,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  // bug 778766.
  // TODO: remove these once bug 778766 is fixed.
  const COMPAT = {
-@@ -26,16 +28,19 @@ const COMPAT = {
+@@ -26,16 +28,35 @@ const COMPAT = {
  
    // The possible message severities.
    SEVERITIES: {
@@ -36,7 +36,23 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      LOG: 3,
    },
 +
-+// The indent of a console group in pixels.
++  // The preference keys to use for each category/severity combination, indexed
++  // first by category (rows) and then by severity (columns).
++  //
++  // Most of these rather idiosyncratic names are historical and predate the
++  // division of message type into "category" and "severity".
++  PREFERENCE_KEYS: [
++    // Error        Warning       Info    Log
++    [ "network",    "netwarn",    null,   "networkinfo", ],  // Network
++    [ "csserror",   "cssparser",  null,   null,          ],  // CSS
++    [ "exception",  "jswarn",     null,   "jslog",       ],  // JS
++    [ "error",      "warn",       "info", "log",         ],  // Web Developer
++    [ null,         null,         null,   null,          ],  // Input
++    [ null,         null,         null,   null,          ],  // Output
++    [ "secerror",   "secwarn",    null,   null,          ],  // Security
++  ],
++
++  // The indent of a console group in pixels.
 +  GROUP_INDENT: 12,
  };
  
@@ -46,7 +62,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   *
   * @constructor
   * @param object owner
-@@ -263,16 +268,24 @@ Messages.BaseMessage.prototype = {
+@@ -263,16 +284,24 @@ Messages.BaseMessage.prototype = {
     * Tells if this message is visible or not.
     * @type boolean
     */
@@ -71,7 +87,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
     * Set of widgets included in this message.
     * @type Set
-@@ -314,17 +327,17 @@ Messages.BaseMessage.prototype = {
+@@ -314,17 +343,17 @@ Messages.BaseMessage.prototype = {
        this.element = this._renderCompat();
      }
      return this;
@@ -90,7 +106,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      container.id = "console-msg-" + gSequenceId();
      container.className = "message";
      container.category = this._categoryCompat;
-@@ -349,17 +362,17 @@ Messages.BaseMessage.prototype = {
+@@ -349,17 +378,17 @@ Messages.BaseMessage.prototype = {
   * @param string url
   *        The URL to display.
   * @param number timestamp
@@ -109,7 +125,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
  {
    /**
-@@ -415,16 +428,233 @@ Messages.NavigationMarker.prototype = He
+@@ -415,16 +444,248 @@ Messages.NavigationMarker.prototype = He
      this.element.url = this._url;
      this.element.appendChild(doc.createTextNode("\n"));
  
@@ -171,11 +187,26 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +   */
 +  timestamp: 0,
 +
-+  _categoryCompat: COMPAT.CATEGORIES.NETWORK,
-+  _severityCompat: COMPAT.SEVERITIES.LOG,
-+  _categoryNameCompat: "network",
-+  _severityNameCompat: "info",
-+  _filterKeyCompat: "networkinfo",
++  get _categoryCompat() {
++    return this.category ?
++           COMPAT.CATEGORIES[this.category.toUpperCase()] : null;
++  },
++  get _severityCompat() {
++    return this.severity ?
++           COMPAT.SEVERITIES[this.severity.toUpperCase()] : null;
++  },
++  get _categoryNameCompat() {
++    return this.category;
++  },
++  get _severityNameCompat() {
++    return this.severity;
++  },
++
++  get _filterKeyCompat() {
++    return this._categoryCompat !== null && this._severityCompat !== null ?
++           COMPAT.PREFERENCE_KEYS[this._categoryCompat][this._severityCompat] :
++           null;
++  },
 +
 +  /**
 +   * Prepare the DOM element for this message.
@@ -343,10 +374,74 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  exports.ConsoleOutput = ConsoleOutput;
  exports.Messages = Messages;
 +exports.Widgets = Widgets;
+diff --git a/browser/devtools/webconsole/hudservice.js b/browser/devtools/webconsole/hudservice.js
+--- a/browser/devtools/webconsole/hudservice.js
++++ b/browser/devtools/webconsole/hudservice.js
+@@ -6,24 +6,24 @@
+ 
+ "use strict";
+ 
+ const {Cc, Ci, Cu} = require("chrome");
+ 
+ let WebConsoleUtils = require("devtools/toolkit/webconsole/utils").Utils;
+ let Heritage = require("sdk/core/heritage");
+ 
+-loader.lazyGetter(this, "promise", () => require("sdk/core/promise"));
+ loader.lazyGetter(this, "Telemetry", () => require("devtools/shared/telemetry"));
+ loader.lazyGetter(this, "WebConsoleFrame", () => require("devtools/webconsole/webconsole").WebConsoleFrame);
+ loader.lazyImporter(this, "gDevTools", "resource:///modules/devtools/gDevTools.jsm");
+ loader.lazyImporter(this, "devtools", "resource://gre/modules/devtools/Loader.jsm");
+ loader.lazyImporter(this, "Services", "resource://gre/modules/Services.jsm");
+ loader.lazyImporter(this, "DebuggerServer", "resource://gre/modules/devtools/dbg-server.jsm");
+ loader.lazyImporter(this, "DebuggerClient", "resource://gre/modules/devtools/dbg-client.jsm");
++loader.lazyImporter(this, "promise", "resource://gre/modules/Promise.jsm", "Promise");
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ const BROWSER_CONSOLE_WINDOW_FEATURES = "chrome,titlebar,toolbar,centerscreen,resizable,dialog=no";
+ 
+ // The preference prefix for all of the Browser Console filters.
+ const BROWSER_CONSOLE_FILTER_PREFS_PREFIX = "devtools.browserconsole.filter.";
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -45,20 +45,16 @@ const STRICT_TRANSPORT_SECURITY_LEARN_MO
+@@ -9,33 +9,33 @@
+ const {Cc, Ci, Cu} = require("chrome");
+ 
+ let WebConsoleUtils = require("devtools/toolkit/webconsole/utils").Utils;
+ 
+ loader.lazyServiceGetter(this, "clipboardHelper",
+                          "@mozilla.org/widget/clipboardhelper;1",
+                          "nsIClipboardHelper");
+ loader.lazyImporter(this, "Services", "resource://gre/modules/Services.jsm");
+-loader.lazyGetter(this, "promise", () => require("sdk/core/promise"));
+ loader.lazyGetter(this, "EventEmitter", () => require("devtools/shared/event-emitter"));
+ loader.lazyGetter(this, "AutocompletePopup",
+                   () => require("devtools/shared/autocomplete-popup").AutocompletePopup);
+ loader.lazyGetter(this, "ToolSidebar",
+                   () => require("devtools/framework/sidebar").ToolSidebar);
+ loader.lazyGetter(this, "NetworkPanel",
+                   () => require("devtools/webconsole/network-panel").NetworkPanel);
+ loader.lazyGetter(this, "ConsoleOutput",
+                   () => require("devtools/webconsole/console-output").ConsoleOutput);
+ loader.lazyGetter(this, "Messages",
+                   () => require("devtools/webconsole/console-output").Messages);
+ loader.lazyImporter(this, "EnvironmentClient", "resource://gre/modules/devtools/dbg-client.jsm");
+ loader.lazyImporter(this, "ObjectClient", "resource://gre/modules/devtools/dbg-client.jsm");
+ loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
+ loader.lazyImporter(this, "VariablesViewController", "resource:///modules/devtools/VariablesViewController.jsm");
+ loader.lazyImporter(this, "PluralForm", "resource://gre/modules/PluralForm.jsm");
++loader.lazyImporter(this, "promise", "resource://gre/modules/Promise.jsm", "Promise");
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ const XHTML_NS = "http://www.w3.org/1999/xhtml";
+ 
+ const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/docs/Security/MixedContent";
+ 
+@@ -46,20 +46,16 @@ const STRICT_TRANSPORT_SECURITY_LEARN_MO
  const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
  
  const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/widgets/VariablesView.xul";
@@ -367,7 +462,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // each category. The user can change this number by adjusting the hidden
  // "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
  const DEFAULT_LOG_LIMIT = 200;
-@@ -3085,55 +3081,60 @@ JSTerm.prototype = {
+@@ -3064,57 +3060,63 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
          result.type == "undefined" &&
@@ -436,9 +531,12 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      msg._objectActors.add(result.actor);
  
        if (result.type == "longString") {
++        return; // FIXME
          // Add an ellipsis to expand the short string if the object is not
          // inspectable.
  
          let body = node.getElementsByClassName("body")[0];
          let ellipsis = this.hud.document.createElementNS(XHTML_NS, "a");
          ellipsis.classList.add("longStringEllipsis");
+         ellipsis.textContent = l10n.getStr("longStringEllipsis");
+         ellipsis.href = "#";
