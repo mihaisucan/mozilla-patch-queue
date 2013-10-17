@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 344307c027959e537e5d669f1d85f33a57097135
+# Parent 300cc4ded5d62110dd5738ba09a10fb810a4b4fa
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1381869677 -10800
+# Date 1382042995 -10800
 
 Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -1,15 +1,17 @@
+@@ -1,18 +1,24 @@
  /* vim: set ts=2 et sw=2 tw=80: */
  /* This Source Code Form is subject to the terms of the Mozilla Public
   * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -21,12 +21,19 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  const Heritage = require("sdk/core/heritage");
  const XHTML_NS = "http://www.w3.org/1999/xhtml";
  const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
++const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
++
++const WebConsoleUtils = require("devtools/toolkit/webconsole/utils").Utils;
++const l10n = new WebConsoleUtils.l10n(STRINGS_URI);
  
  // Constants for compatibility with the Web Console output implementation before
  // bug 778766.
  // TODO: remove these once bug 778766 is fixed.
  const COMPAT = {
-@@ -26,16 +28,35 @@ const COMPAT = {
+   // The various categories of messages.
+   CATEGORIES: {
+     NETWORK: 0,
+@@ -26,16 +32,35 @@ const COMPAT = {
  
    // The possible message severities.
    SEVERITIES: {
@@ -62,7 +69,29 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   *
   * @constructor
   * @param object owner
-@@ -263,16 +284,24 @@ Messages.BaseMessage.prototype = {
+@@ -203,16 +228,21 @@ ConsoleOutput.prototype = {
+   {
+     let selection = this.window.getSelection();
+     selection.removeAllRanges();
+     let range = this.document.createRange();
+     range.selectNodeContents(elem);
+     selection.addRange(range);
+   },
+ 
++  openLink: function(url)
++  {
++    this.owner.owner.openLink(url);
++  },
++
+   /**
+    * Destroy this ConsoleOutput instance.
+    */
+   destroy: function()
+   {
+     this.owner = null;
+   },
+ }; // ConsoleOutput.prototype
+@@ -263,16 +293,24 @@ Messages.BaseMessage.prototype = {
     * Tells if this message is visible or not.
     * @type boolean
     */
@@ -87,7 +116,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
     * Set of widgets included in this message.
     * @type Set
-@@ -314,17 +343,17 @@ Messages.BaseMessage.prototype = {
+@@ -314,17 +352,17 @@ Messages.BaseMessage.prototype = {
        this.element = this._renderCompat();
      }
      return this;
@@ -106,7 +135,38 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      container.id = "console-msg-" + gSequenceId();
      container.className = "message";
      container.category = this._categoryCompat;
-@@ -349,17 +378,17 @@ Messages.BaseMessage.prototype = {
+@@ -333,33 +371,48 @@ Messages.BaseMessage.prototype = {
+     container.setAttribute("severity", this._severityNameCompat);
+     container.setAttribute("filter", this._filterKeyCompat);
+     container.clipboardText = this.textContent;
+     container.timestamp = this.timestamp;
+     container._messageObject = this;
+ 
+     return container;
+   },
++
++  _anchorClickHandler: function(event)
++  {
++    this.output.owner.owner.openLink(event.target.href);
++  },
++
++  _addLinkCallback: function(element, callback = this._anchorClickHandler)
++  {
++    // This is going into the WebConsoleFrame object instance that owns
++    // the ConsoleOutput object. The WebConsoleFrame owner is the WebConsole
++    // object instance from hudservice.js.
++    // TODO: move _addMessageLinkCallback() into ConsoleOutput once bug 778766
++    // is fixed.
++    this.output.owner._addMessageLinkCallback(element, callback);
++  },
+ }; // Messages.BaseMessage.prototype
+ 
+ 
+ /**
+  * The NavigationMarker is used to show a page load event.
+  *
+  * @constructor
+  * @extends Messages.BaseMessage
   * @param string url
   *        The URL to display.
   * @param number timestamp
@@ -125,7 +185,29 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
  {
    /**
-@@ -415,16 +444,248 @@ Messages.NavigationMarker.prototype = He
+@@ -394,37 +447,271 @@ Messages.NavigationMarker.prototype = He
+ 
+     let doc = this.output.document;
+     let urlnode = doc.createElementNS(XHTML_NS, "a");
+     urlnode.className = "url";
+     urlnode.textContent = url;
+     urlnode.title = this._url;
+     urlnode.href = this._url;
+     urlnode.draggable = false;
+-
+-    // This is going into the WebConsoleFrame object instance that owns
+-    // the ConsoleOutput object. The WebConsoleFrame owner is the WebConsole
+-    // object instance from hudservice.js.
+-    // TODO: move _addMessageLinkCallback() into ConsoleOutput once bug 778766
+-    // is fixed.
+-    this.output.owner._addMessageLinkCallback(urlnode, () => {
+-      this.output.owner.owner.openLink(this._url);
+-    });
++    this._addLinkCallback(urlnode);
+ 
+     let render = Messages.BaseMessage.prototype.render.bind(this);
+     render().element.appendChild(urlnode);
+     this.element.classList.add("navigation-marker");
      this.element.url = this._url;
      this.element.appendChild(doc.createTextNode("\n"));
  
@@ -175,6 +257,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  this._message = message;
 +  this._messageIsHTML = options.html;
 +  this._className = options.className;
++  this._link = options.link;
++  this._linkCallback = options.linkCallback;
 +};
 +
 +Messages.Simple.prototype = Heritage.extend(Messages.BaseMessage.prototype,
@@ -247,12 +331,20 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +      body.className += " " + this._className;
 +    }
 +
++    let anchor, container = body;
++    if (this._link || this._linkCallback) {
++      container = anchor = this.document.createElementNS(XHTML_NS, "a");
++      anchor.href = this._link || "#";
++      anchor.draggable = false;
++      this._addLinkCallback(anchor, this._linkCallback);
++    }
++
 +    if (this._message instanceof Ci.nsIDOMElement) {
-+      body.appendChild(this._message);
++      container.appendChild(this._message);
 +    } else if (this._messageIsHTML) {
-+      body.innerHTML = this._message;
++      container.innerHTML = this._message;
 +    } else {
-+      body.textContent = this._message;
++      container.textContent = this._message;
 +    }
 +
 +    return body;
@@ -462,6 +554,63 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // each category. The user can change this number by adjusting the hidden
  // "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
  const DEFAULT_LOG_LIMIT = 200;
+@@ -1422,17 +1418,17 @@ WebConsoleFrame.prototype = {
+     mixedContentWarningNode.title = MIXED_CONTENT_LEARN_MORE;
+     mixedContentWarningNode.href = MIXED_CONTENT_LEARN_MORE;
+     mixedContentWarningNode.className = "learn-more-link";
+     mixedContentWarningNode.textContent = mixedContentWarning;
+     mixedContentWarningNode.draggable = false;
+ 
+     aLinkNode.appendChild(mixedContentWarningNode);
+ 
+-    this._addMessageLinkCallback(mixedContentWarningNode, (aNode, aEvent) => {
++    this._addMessageLinkCallback(mixedContentWarningNode, (aEvent) => {
+       aEvent.stopPropagation();
+       this.owner.openLink(MIXED_CONTENT_LEARN_MORE);
+     });
+   },
+ 
+   /**
+    * Adds a more info link node to messages based on the nsIScriptError object
+    * that we need to report to the console
+@@ -1483,17 +1479,17 @@ WebConsoleFrame.prototype = {
+ 
+     let warningNode = this.document.createElementNS(XHTML_NS, "a");
+     warningNode.title = aURL;
+     warningNode.href = aURL;
+     warningNode.draggable = false;
+     warningNode.textContent = moreInfoLabel;
+     warningNode.className = "learn-more-link";
+ 
+-    this._addMessageLinkCallback(warningNode, (aNode, aEvent) => {
++    this._addMessageLinkCallback(warningNode, (aEvent) => {
+       aEvent.stopPropagation();
+       this.owner.openLink(aURL);
+     });
+ 
+     aNode.appendChild(warningNode);
+   },
+ 
+   /**
+@@ -2644,17 +2640,17 @@ WebConsoleFrame.prototype = {
+ 
+       // If this event started with a mousedown event and it ends at a different
+       // location, we consider this text selection.
+       if (mousedown && this._startX != aEvent.clientX &&
+           this._startY != aEvent.clientY) {
+         return;
+       }
+ 
+-      aCallback(this, aEvent);
++      aCallback.call(this, aEvent);
+     }, false);
+   },
+ 
+   /**
+    * Copies the selected items to the system clipboard.
+    *
+    * @param object aOptions
+    *        - linkOnly:
 @@ -3064,57 +3060,63 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
@@ -501,7 +650,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 +      msg = new Messages.Simple(resultString, options);
 +    }
 +
-+    this.output.addMessage(msg);
++    this.hud.output.addMessage(msg);
  
      if (aCallback) {
        let oldFlushCallback = this.hud._flushCallback;
