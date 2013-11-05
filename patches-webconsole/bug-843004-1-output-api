@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 300cc4ded5d62110dd5738ba09a10fb810a4b4fa
+# Parent 81a9c890838e7f0ec50a9bb6b3ecc78e824d4a27
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1382042995 -10800
+# Date 1383686194 -7200
 
 Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
 
@@ -91,7 +91,25 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      this.owner = null;
    },
  }; // ConsoleOutput.prototype
-@@ -263,16 +293,24 @@ Messages.BaseMessage.prototype = {
+@@ -227,16 +257,17 @@ let Messages = {};
+  * The BaseMessage object is used for all types of messages. Every kind of
+  * message should use this object as its base.
+  *
+  * @constructor
+  */
+ Messages.BaseMessage = function()
+ {
+   this.widgets = new Set();
++  this._anchorClickHandler = this._anchorClickHandler.bind(this);
+ };
+ 
+ Messages.BaseMessage.prototype = {
+   /**
+    * Reference to the ConsoleOutput owner.
+    *
+    * @type object|null
+    *       This is |null| if the message is not yet initialized.
+@@ -263,16 +294,24 @@ Messages.BaseMessage.prototype = {
     * Tells if this message is visible or not.
     * @type boolean
     */
@@ -116,7 +134,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
     * Set of widgets included in this message.
     * @type Set
-@@ -314,17 +352,17 @@ Messages.BaseMessage.prototype = {
+@@ -314,17 +353,17 @@ Messages.BaseMessage.prototype = {
        this.element = this._renderCompat();
      }
      return this;
@@ -135,7 +153,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      container.id = "console-msg-" + gSequenceId();
      container.className = "message";
      container.category = this._categoryCompat;
-@@ -333,33 +371,48 @@ Messages.BaseMessage.prototype = {
+@@ -333,33 +372,48 @@ Messages.BaseMessage.prototype = {
      container.setAttribute("severity", this._severityNameCompat);
      container.setAttribute("filter", this._filterKeyCompat);
      container.clipboardText = this.textContent;
@@ -147,7 +165,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +  _anchorClickHandler: function(event)
 +  {
-+    this.output.owner.owner.openLink(event.target.href);
++    this.output.openLink(event.target.href);
 +  },
 +
 +  _addLinkCallback: function(element, callback = this._anchorClickHandler)
@@ -185,7 +203,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
  {
    /**
-@@ -394,37 +447,271 @@ Messages.NavigationMarker.prototype = He
+@@ -394,37 +448,286 @@ Messages.NavigationMarker.prototype = He
  
      let doc = this.output.document;
      let urlnode = doc.createElementNS(XHTML_NS, "a");
@@ -337,6 +355,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +      anchor.href = this._link || "#";
 +      anchor.draggable = false;
 +      this._addLinkCallback(anchor, this._linkCallback);
++      body.appendChild(anchor);
 +    }
 +
 +    if (this._message instanceof Ci.nsIDOMElement) {
@@ -374,21 +393,35 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + * @param object result
 + *        The message to display.
 + */
-+Messages.JavaScriptEvalOutput = function(result, error)
++Messages.JavaScriptEvalOutput = function(evalResponse, {onClickObjectActor,
++                                                        errorMessage})
 +{
++  let severity = "log", msg;
++
++  if (errorMessage) {
++    severity = "error";
++    msg = errorMessage;
++  } else {
++    msg = VariablesView.getString(evalResponse.result);
++  }
++
 +  let options = {
++    timestamp: response.timestamp,
 +    category: "output",
 +    severity: severity,
 +  };
-+  Messages.Simple.call(this, message, options);
++  Messages.Simple.call(this, msg, options);
 +
-+  this.category = options.category;
-+  this.severity = options.severity;
-+  this.timestamp = options.timestamp || Date.now();
++  this.evalResponse = evalResponse;
++  this._onClickObjectActor = onClickObjectActor;
 +};
 +
 +Messages.JavaScriptEvalOutput.prototype = Heritage.extend(Messages.Simple.prototype,
 +{
++  _renderBody: function()
++  {
++    return Messages.Simple.prototype._renderBody.call(this);
++  },
 +}); // Messages.JavaScriptEvalOutput.prototype
 +
 +
@@ -498,7 +531,7 @@ diff --git a/browser/devtools/webconsole/hudservice.js b/browser/devtools/webcon
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -9,33 +9,33 @@
+@@ -9,17 +9,16 @@
  const {Cc, Ci, Cu} = require("chrome");
  
  let WebConsoleUtils = require("devtools/toolkit/webconsole/utils").Utils;
@@ -516,7 +549,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  loader.lazyGetter(this, "NetworkPanel",
                    () => require("devtools/webconsole/network-panel").NetworkPanel);
  loader.lazyGetter(this, "ConsoleOutput",
-                   () => require("devtools/webconsole/console-output").ConsoleOutput);
+@@ -27,16 +26,17 @@ loader.lazyGetter(this, "ConsoleOutput",
  loader.lazyGetter(this, "Messages",
                    () => require("devtools/webconsole/console-output").Messages);
  loader.lazyImporter(this, "EnvironmentClient", "resource://gre/modules/devtools/dbg-client.jsm");
@@ -524,6 +557,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
  loader.lazyImporter(this, "VariablesViewController", "resource:///modules/devtools/VariablesViewController.jsm");
  loader.lazyImporter(this, "PluralForm", "resource://gre/modules/PluralForm.jsm");
+ loader.lazyImporter(this, "gDevTools", "resource:///modules/devtools/gDevTools.jsm");
 +loader.lazyImporter(this, "promise", "resource://gre/modules/Promise.jsm", "Promise");
  
  const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
@@ -533,7 +567,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
  const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/docs/Security/MixedContent";
  
-@@ -46,20 +46,16 @@ const STRICT_TRANSPORT_SECURITY_LEARN_MO
+@@ -47,20 +47,16 @@ const STRICT_TRANSPORT_SECURITY_LEARN_MO
  const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
  
  const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/widgets/VariablesView.xul";
@@ -554,7 +588,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // each category. The user can change this number by adjusting the hidden
  // "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
  const DEFAULT_LOG_LIMIT = 200;
-@@ -1422,17 +1418,17 @@ WebConsoleFrame.prototype = {
+@@ -1462,17 +1458,17 @@ WebConsoleFrame.prototype = {
      mixedContentWarningNode.title = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.href = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.className = "learn-more-link";
@@ -573,7 +607,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Adds a more info link node to messages based on the nsIScriptError object
     * that we need to report to the console
-@@ -1483,17 +1479,17 @@ WebConsoleFrame.prototype = {
+@@ -1523,17 +1519,17 @@ WebConsoleFrame.prototype = {
  
      let warningNode = this.document.createElementNS(XHTML_NS, "a");
      warningNode.title = aURL;
@@ -592,7 +626,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2644,17 +2640,17 @@ WebConsoleFrame.prototype = {
+@@ -2729,17 +2725,17 @@ WebConsoleFrame.prototype = {
  
        // If this event started with a mousedown event and it ends at a different
        // location, we consider this text selection.
@@ -611,7 +645,25 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param object aOptions
     *        - linkOnly:
-@@ -3064,57 +3060,63 @@ JSTerm.prototype = {
+@@ -2943,16 +2939,17 @@ function JSTerm(aWebConsoleFrame)
+   // This is reset to this.history.length when this.execute() is invoked.
+   this.historyPlaceHolder = 0;
+   this._objectActorsInVariablesViews = new Map();
+ 
+   this._keyPress = this._keyPress.bind(this);
+   this._inputEventHandler = this._inputEventHandler.bind(this);
+   this._focusEventHandler = this._focusEventHandler.bind(this);
+   this._onKeypressInVariablesView = this._onKeypressInVariablesView.bind(this);
++  this._onClickObjectActor = this._onClickObjectActor.bind(this);
+ 
+   EventEmitter.decorate(this);
+ }
+ 
+ JSTerm.prototype = {
+   SELECTED_FRAME: -1,
+ 
+   /**
+@@ -3154,57 +3151,62 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
          result.type == "undefined" &&
@@ -621,14 +673,15 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
  
 -    let node;
+-
 +    let msg;
 +    let options = {
-+      timestamp: aResponse.timestamp,
-+      category: "output",
-+      severity: "log",
++      onClickObjectActor: this._onClickObjectActor,
++      errorMessage: errorMessage,
 +      _afterMessageElement: aAfterNode,
 +    };
- 
++
++    let msg = new Messages.JavaScriptEvalOutput(aResponse, options);
      if (errorMessage) {
 -      node = this.writeOutput(errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
 -                              aAfterNode, aResponse.timestamp);
@@ -638,14 +691,13 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -                                this._evalOutputClick.bind(this, aResponse),
 -                                aAfterNode, aResponse.timestamp);
 +      options.severity = "error";
-+      msg = new Messages.Simple(errorMessage, options);
      }
      else {
 -      node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
 -                              aAfterNode, aResponse.timestamp);
 -    }
 +      if (inspectable) {
-+        options.linkCallback = this._evalOutputClick.bind(this, aResponse);
++        options.onClickObjectActor = this._onClickObjectActor;
 +      }
 +      msg = new Messages.Simple(resultString, options);
 +    }
@@ -689,3 +741,42 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          ellipsis.classList.add("longStringEllipsis");
          ellipsis.textContent = l10n.getStr("longStringEllipsis");
          ellipsis.href = "#";
+@@ -4467,27 +4469,32 @@ JSTerm.prototype = {
+   updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
+   {
+     // completion prefix = input, with non-control chars replaced by spaces
+     let prefix = aSuffix ? this.inputNode.value.replace(/[\S]/g, " ") : "";
+     this.completeNode.value = prefix + aSuffix;
+   },
+ 
+   /**
+-   * The click event handler for evaluation results in the output.
++   * The click event handler for objects shown inline.
+    *
+    * @private
+-   * @param object aResponse
+-   *        The JavaScript evaluation response received from the server.
++   * @param object aObjectActor
++   *        The object actor grip.
++   * @param nsIDOMNode [aAnchor]
++   *        Optional object inspector anchor element. This is the clickable element
++   *        in the message we display.
+    */
+-  _evalOutputClick: function JST__evalOutputClick(aResponse)
++  _onClickObjectActor: function JST__onClickObjectActor(aObjectActor, aAnchor)
+   {
++    let label = aAnchor ? aAnchor.textContent :
++                VariablesView.getString(aObjectActor);
+     this.openVariablesView({
+-      label: VariablesView.getString(aResponse.result),
+-      objectActor: aResponse.result,
++      label: label,
++      objectActor: aObjectActor,
+       autofocus: true,
+     });
+   },
+ 
+   /**
+    * Destroy the sidebar.
+    * @private
+    */

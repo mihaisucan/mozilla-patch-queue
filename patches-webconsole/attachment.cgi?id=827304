@@ -1,0 +1,170 @@
+# HG changeset patch
+# Parent 0325da4d4bbce5fa225ed9d9f908d2b2e09a9600
+# User Jackson Isaac <jacksonisaac2008@gmail.com>
+Bug 891581 - Focus the input field when switching to the web console tab; r=msucan; try: -b do -p linux,linux64,macosx64,win32 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser.ini b/browser/devtools/webconsole/test/browser.ini
+--- a/browser/devtools/webconsole/test/browser.ini
++++ b/browser/devtools/webconsole/test/browser.ini
+@@ -216,16 +216,17 @@ support-files =
+ [browser_webconsole_chrome.js]
+ [browser_webconsole_closure_inspection.js]
+ [browser_webconsole_completion.js]
+ [browser_webconsole_console_extras.js]
+ [browser_webconsole_console_logging_api.js]
+ [browser_webconsole_execution_scope.js]
+ [browser_webconsole_for_of.js]
+ [browser_webconsole_history.js]
++[browser_webconsole_input_field_focus_on_panel_select.js]
+ [browser_webconsole_js_input_expansion.js]
+ [browser_webconsole_jsterm.js]
+ [browser_webconsole_live_filtering_of_message_types.js]
+ [browser_webconsole_live_filtering_on_search_strings.js]
+ [browser_webconsole_message_node_id.js]
+ [browser_webconsole_netlogging.js]
+ [browser_webconsole_network_panel.js]
+ [browser_webconsole_notifications.js]
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_input_field_focus_on_panel_select.js b/browser/devtools/webconsole/test/browser_webconsole_input_field_focus_on_panel_select.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_input_field_focus_on_panel_select.js
+@@ -0,0 +1,46 @@
++/* Any copyright is dedicated to the Public Domain
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Test that the JS input field is focused when the user switches back to the
++// web console from other tools, see bug 891581.
++
++const TEST_URI = "data:text/html;charset=utf8,<p>hello";
++
++function test()
++{
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function consoleOpened(hud)
++{
++  is(hud.jsterm.inputNode.hasAttribute("focused"), true,
++     "inputNode should be focused");
++
++  hud.ui.filterBox.focus();
++
++  is(hud.ui.filterBox.hasAttribute("focused"), true,
++     "filterBox should be focused");
++
++  is(hud.jsterm.inputNode.hasAttribute("focused"), false,
++     "inputNode shouldn't be focused");
++
++  openDebugger().then(debuggerOpened);
++}
++
++function debuggerOpened(aResult)
++{
++  openConsole(null, consoleReopened);
++}
++
++function consoleReopened(hud)
++{
++  is(hud.jsterm.inputNode.hasAttribute("focused"), true,
++     "inputNode should be focused");
++
++  finishTest();
++}
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -26,16 +26,17 @@ loader.lazyGetter(this, "ConsoleOutput",
+                   () => require("devtools/webconsole/console-output").ConsoleOutput);
+ loader.lazyGetter(this, "Messages",
+                   () => require("devtools/webconsole/console-output").Messages);
+ loader.lazyImporter(this, "EnvironmentClient", "resource://gre/modules/devtools/dbg-client.jsm");
+ loader.lazyImporter(this, "ObjectClient", "resource://gre/modules/devtools/dbg-client.jsm");
+ loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
+ loader.lazyImporter(this, "VariablesViewController", "resource:///modules/devtools/VariablesViewController.jsm");
+ loader.lazyImporter(this, "PluralForm", "resource://gre/modules/PluralForm.jsm");
++loader.lazyImporter(this, "gDevTools", "resource:///modules/devtools/gDevTools.jsm");
+ 
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ let l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+ 
+ const XHTML_NS = "http://www.w3.org/1999/xhtml";
+ 
+ const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/docs/Security/MixedContent";
+ 
+@@ -193,16 +194,17 @@ function WebConsoleFrame(aWebConsoleOwne
+   this._outputQueue = [];
+   this._pruneCategoriesQueue = {};
+   this._networkRequests = {};
+   this.filterPrefs = {};
+ 
+   this.output = new ConsoleOutput(this);
+ 
+   this._toggleFilter = this._toggleFilter.bind(this);
++  this._onPanelSelected = this._onPanelSelected.bind(this);
+   this._flushMessageQueue = this._flushMessageQueue.bind(this);
+ 
+   this._outputTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+   this._outputTimerInitialized = false;
+ 
+   EventEmitter.decorate(this);
+ }
+ exports.WebConsoleFrame = WebConsoleFrame;
+@@ -550,16 +552,31 @@ WebConsoleFrame.prototype = {
+     clearButton.addEventListener("command", () => {
+       this.owner._onClearButton();
+       this.jsterm.clearOutput(true);
+     });
+ 
+     this.jsterm = new JSTerm(this);
+     this.jsterm.init();
+     this.jsterm.inputNode.focus();
++
++    let toolbox = gDevTools.getToolbox(this.owner.target);
++    if (toolbox) {
++      toolbox.on("webconsole-selected", this._onPanelSelected);
++    }
++  },
++
++  /**
++   * Sets the focus to JavaScript input field when the web console tab is
++   * selected.
++   * @private
++   */
++  _onPanelSelected: function WCF__onPanelSelected()
++  {
++    this.jsterm.inputNode.focus();
+   },
+ 
+   /**
+    * Initialize the default filter preferences.
+    * @private
+    */
+   _initDefaultFilterPrefs: function WCF__initDefaultFilterPrefs()
+   {
+@@ -2821,16 +2838,21 @@ WebConsoleFrame.prototype = {
+   destroy: function WCF_destroy()
+   {
+     if (this._destroyer) {
+       return this._destroyer.promise;
+     }
+ 
+     this._destroyer = promise.defer();
+ 
++    let toolbox = gDevTools.getToolbox(this.owner.target);
++    if (toolbox) {
++      toolbox.off("webconsole-selected", this._onPanelSelected);
++    }
++
+     this._repeatNodes = {};
+     this._outputQueue = [];
+     this._pruneCategoriesQueue = {};
+     this._networkRequests = {};
+ 
+     if (this._outputTimerInitialized) {
+       this._outputTimerInitialized = false;
+       this._outputTimer.cancel();
