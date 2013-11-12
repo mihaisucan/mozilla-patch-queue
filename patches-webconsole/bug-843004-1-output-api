@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 81a9c890838e7f0ec50a9bb6b3ecc78e824d4a27
+# Parent 947929b2bd680fc9ebb4b1ec9dd76c04d15f656c
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1383686194 -7200
+# Date 1384288581 -7200
 
 Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -1,18 +1,24 @@
+@@ -1,18 +1,26 @@
  /* vim: set ts=2 et sw=2 tw=80: */
  /* This Source Code Form is subject to the terms of the Mozilla Public
   * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -17,6 +17,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  "use strict";
  
 +const {Cc, Ci, Cu} = require("chrome");
++
++loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
 +
  const Heritage = require("sdk/core/heritage");
  const XHTML_NS = "http://www.w3.org/1999/xhtml";
@@ -33,7 +35,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    // The various categories of messages.
    CATEGORIES: {
      NETWORK: 0,
-@@ -26,16 +32,35 @@ const COMPAT = {
+@@ -26,16 +34,35 @@ const COMPAT = {
  
    // The possible message severities.
    SEVERITIES: {
@@ -69,7 +71,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   *
   * @constructor
   * @param object owner
-@@ -203,16 +228,21 @@ ConsoleOutput.prototype = {
+@@ -203,16 +230,26 @@ ConsoleOutput.prototype = {
    {
      let selection = this.window.getSelection();
      selection.removeAllRanges();
@@ -78,9 +80,14 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      selection.addRange(range);
    },
  
-+  openLink: function(url)
++  openLink: function()
 +  {
-+    this.owner.owner.openLink(url);
++    this.owner.owner.openLink.apply(this.owner.owner, arguments);
++  },
++
++  openVariablesView: function()
++  {
++    this.owner.jsterm.openVariablesView.apply(this.owner.jsterm, arguments);
 +  },
 +
    /**
@@ -91,7 +98,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      this.owner = null;
    },
  }; // ConsoleOutput.prototype
-@@ -227,16 +257,17 @@ let Messages = {};
+@@ -227,16 +264,17 @@ let Messages = {};
   * The BaseMessage object is used for all types of messages. Every kind of
   * message should use this object as its base.
   *
@@ -109,7 +116,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     *
     * @type object|null
     *       This is |null| if the message is not yet initialized.
-@@ -263,16 +294,24 @@ Messages.BaseMessage.prototype = {
+@@ -263,16 +301,24 @@ Messages.BaseMessage.prototype = {
     * Tells if this message is visible or not.
     * @type boolean
     */
@@ -134,7 +141,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
     * Set of widgets included in this message.
     * @type Set
-@@ -314,17 +353,17 @@ Messages.BaseMessage.prototype = {
+@@ -314,17 +360,17 @@ Messages.BaseMessage.prototype = {
        this.element = this._renderCompat();
      }
      return this;
@@ -153,7 +160,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      container.id = "console-msg-" + gSequenceId();
      container.className = "message";
      container.category = this._categoryCompat;
-@@ -333,33 +372,48 @@ Messages.BaseMessage.prototype = {
+@@ -333,33 +379,79 @@ Messages.BaseMessage.prototype = {
      container.setAttribute("severity", this._severityNameCompat);
      container.setAttribute("filter", this._filterKeyCompat);
      container.clipboardText = this.textContent;
@@ -162,6 +169,16 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
      return container;
    },
++
++  onRemoveFromQueue: function()
++  {
++    return this;
++  },
++
++  onRemove: function()
++  {
++    return this;
++  },
 +
 +  _anchorClickHandler: function(event)
 +  {
@@ -176,6 +193,27 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    // TODO: move _addMessageLinkCallback() into ConsoleOutput once bug 778766
 +    // is fixed.
 +    this.output.owner._addMessageLinkCallback(element, callback);
++  },
++
++  /**
++   * The click event handler for objects shown inline.
++   *
++   * @private
++   * @param object aObjectActor
++   *        The object actor grip.
++   * @param nsIDOMNode [aAnchor]
++   *        Optional object inspector anchor element. This is the clickable element
++   *        in the message we display.
++   */
++  _onClickObjectActor: function(objectActor, event)
++  {
++    let label = event && event.target ? event.target.textContent :
++                VariablesView.getString(objectActor);
++    this.output.openVariablesView({
++      label: label,
++      objectActor: objectActor,
++      autofocus: true,
++    });
 +  },
  }; // Messages.BaseMessage.prototype
  
@@ -203,7 +241,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
  {
    /**
-@@ -394,37 +448,286 @@ Messages.NavigationMarker.prototype = He
+@@ -394,37 +486,371 @@ Messages.NavigationMarker.prototype = He
  
      let doc = this.output.document;
      let urlnode = doc.createElementNS(XHTML_NS, "a");
@@ -263,6 +301,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *        - _afterMessageElement: (DOMElement) add this message element after
 + *        the given element.
 + */
++// TODO: fix/update comments
 +Messages.Simple = function(message, options = {})
 +{
 +  Messages.BaseMessage.call(this);
@@ -383,6 +422,77 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  },
 +}); // Messages.Simple.prototype
 +
++/**
++ * The Extended message.
++ *
++ * @constructor
++ * @extends Messages.Simple
++ * @param object result
++ *        The message to display.
++ */
++// TODO update comments
++Messages.Extended = function(message, options = {})
++{
++  Messages.Simple.call(this, message, options);
++};
++
++Messages.Extended.prototype = Heritage.extend(Messages.Simple.prototype,
++{
++  render: function()
++  {
++    let msg = this._message;
++    let result = this.document.createDocumentFragment();
++    for (let piece of message) {
++      result.appendChild(this._renderBodyPiece(piece));
++    }
++    this._message = result;
++    return Messages.Simple.prototype.render.call(this);
++  },
++
++  _renderBodyPiece: function(piece)
++  {
++    if (piece instanceof Ci.nsIDOMElement) {
++      return piece;
++    }
++
++    let result = this.document.createDocumentFragment();
++
++    if (WebConsoleUtils.isActorGrip(piece)) {
++      let str = VariablesView.getString(piece);
++      if (piece.type == "object") {
++        let anchor = this.document.createElementNS(XHTML_NS, "a");
++        anchor.href = "#";
++        anchor.draggable = false;
++        anchor.textContent = str;
++        this._addLinkCallback(anchor, this._onClickObjectActor);
++        result.appendChild(anchor);
++      } else {
++        if (piece.type == "longString") {
++          str += "...";
++        }
++        result.textContent = str;
++      }
++    } else if (this._messageIsHTML) {
++      result.innerHTML = piece;
++    } else {
++      result.textContent = piece;
++    }
++
++    return result;
++  },
++
++  // TODO: release object actors
++  onRemoveFromQueue: function()
++  {
++    Messages.Simple.prototype.onRemoveFromQueue.call(this);
++  },
++
++  onRemove: function()
++  {
++    Messages.Simple.prototype.onRemove.call(this);
++  },
++}); // Messages.JavaScriptEvalOutput.prototype
++
 +
 +
 +/**
@@ -393,8 +503,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + * @param object result
 + *        The message to display.
 + */
-+Messages.JavaScriptEvalOutput = function(evalResponse, {onClickObjectActor,
-+                                                        errorMessage})
++Messages.JavaScriptEvalOutput = function(evalResponse, {errorMessage})
 +{
 +  let severity = "log", msg;
 +
@@ -406,21 +515,35 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  }
 +
 +  let options = {
-+    timestamp: response.timestamp,
++    timestamp: evalResponse.timestamp,
 +    category: "output",
 +    severity: severity,
 +  };
 +  Messages.Simple.call(this, msg, options);
 +
 +  this.evalResponse = evalResponse;
-+  this._onClickObjectActor = onClickObjectActor;
 +};
 +
 +Messages.JavaScriptEvalOutput.prototype = Heritage.extend(Messages.Simple.prototype,
 +{
-+  _renderBody: function()
++  render: function()
 +  {
-+    return Messages.Simple.prototype._renderBody.call(this);
++    let result = this.evalResponse.result;
++    if (result && !VariablesView.isPrimitive({ value: result })) {
++      this._linkCallback = this._onClickObjectActor.bind(this, result);
++    }
++    return Messages.Simple.prototype.render.call(this);
++  },
++
++  // TODO: release object actor
++  onRemoveFromQueue: function()
++  {
++    Messages.Simple.prototype.onRemoveFromQueue.call(this);
++  },
++
++  onRemove: function()
++  {
++    Messages.Simple.prototype.onRemove.call(this);
 +  },
 +}); // Messages.JavaScriptEvalOutput.prototype
 +
@@ -588,7 +711,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // each category. The user can change this number by adjusting the hidden
  // "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
  const DEFAULT_LOG_LIMIT = 200;
-@@ -1462,17 +1458,17 @@ WebConsoleFrame.prototype = {
+@@ -1535,17 +1531,17 @@ WebConsoleFrame.prototype = {
      mixedContentWarningNode.title = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.href = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.className = "learn-more-link";
@@ -607,7 +730,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Adds a more info link node to messages based on the nsIScriptError object
     * that we need to report to the console
-@@ -1523,17 +1519,17 @@ WebConsoleFrame.prototype = {
+@@ -1596,17 +1592,17 @@ WebConsoleFrame.prototype = {
  
      let warningNode = this.document.createElementNS(XHTML_NS, "a");
      warningNode.title = aURL;
@@ -626,7 +749,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2729,17 +2725,17 @@ WebConsoleFrame.prototype = {
+@@ -2802,17 +2798,17 @@ WebConsoleFrame.prototype = {
  
        // If this event started with a mousedown event and it ends at a different
        // location, we consider this text selection.
@@ -641,29 +764,35 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-    * Copies the selected items to the system clipboard.
+    * Handler for the pref-changed event coming from the toolbox.
+    * Currently this function only handles the timestamps preferences.
     *
-    * @param object aOptions
-    *        - linkOnly:
-@@ -2943,16 +2939,17 @@ function JSTerm(aWebConsoleFrame)
-   // This is reset to this.history.length when this.execute() is invoked.
-   this.historyPlaceHolder = 0;
-   this._objectActorsInVariablesViews = new Map();
+    * @private
+@@ -3205,23 +3201,18 @@ JSTerm.prototype = {
+     }
+     if (aResponse.error) {
+       Cu.reportError("Evaluation error " + aResponse.error + ": " +
+                      aResponse.message);
+       return;
+     }
+     let errorMessage = aResponse.exceptionMessage;
+     let result = aResponse.result;
+-    let inspectable = false;
+-    if (result && !VariablesView.isPrimitive({ value: result })) {
+-      inspectable = true;
+-    }
+     let helperResult = aResponse.helperResult;
+     let helperHasRawOutput = !!(helperResult || {}).rawOutput;
+-    let resultString = VariablesView.getString(result);
  
-   this._keyPress = this._keyPress.bind(this);
-   this._inputEventHandler = this._inputEventHandler.bind(this);
-   this._focusEventHandler = this._focusEventHandler.bind(this);
-   this._onKeypressInVariablesView = this._onKeypressInVariablesView.bind(this);
-+  this._onClickObjectActor = this._onClickObjectActor.bind(this);
- 
-   EventEmitter.decorate(this);
- }
- 
- JSTerm.prototype = {
-   SELECTED_FRAME: -1,
- 
-   /**
-@@ -3154,57 +3151,62 @@ JSTerm.prototype = {
+     if (helperResult && helperResult.type) {
+       switch (helperResult.type) {
+         case "clearOutput":
+           this.clearOutput();
+           break;
+         case "inspectObject":
+           if (aAfterNode) {
+@@ -3252,57 +3243,50 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
          result.type == "undefined" &&
@@ -674,15 +803,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
 -    let node;
 -
-+    let msg;
-+    let options = {
-+      onClickObjectActor: this._onClickObjectActor,
-+      errorMessage: errorMessage,
-+      _afterMessageElement: aAfterNode,
-+    };
-+
-+    let msg = new Messages.JavaScriptEvalOutput(aResponse, options);
-     if (errorMessage) {
+-    if (errorMessage) {
 -      node = this.writeOutput(errorMessage, CATEGORY_OUTPUT, SEVERITY_ERROR,
 -                              aAfterNode, aResponse.timestamp);
 -    }
@@ -690,18 +811,17 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      node = this.writeOutputJS(resultString,
 -                                this._evalOutputClick.bind(this, aResponse),
 -                                aAfterNode, aResponse.timestamp);
-+      options.severity = "error";
-     }
-     else {
+-    }
+-    else {
 -      node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
 -                              aAfterNode, aResponse.timestamp);
 -    }
-+      if (inspectable) {
-+        options.onClickObjectActor = this._onClickObjectActor;
-+      }
-+      msg = new Messages.Simple(resultString, options);
-+    }
++    let options = {
++      errorMessage: errorMessage,
++      _afterMessageElement: aAfterNode,
++    };
 +
++    let msg = new Messages.JavaScriptEvalOutput(aResponse, options);
 +    this.hud.output.addMessage(msg);
  
      if (aCallback) {
@@ -741,7 +861,8 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          ellipsis.classList.add("longStringEllipsis");
          ellipsis.textContent = l10n.getStr("longStringEllipsis");
          ellipsis.href = "#";
-@@ -4467,27 +4469,32 @@ JSTerm.prototype = {
+@@ -4567,31 +4551,16 @@ JSTerm.prototype = {
+    */
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
      // completion prefix = input, with non-control chars replaced by spaces
@@ -749,34 +870,26 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      this.completeNode.value = prefix + aSuffix;
    },
  
-   /**
+-  /**
 -   * The click event handler for evaluation results in the output.
-+   * The click event handler for objects shown inline.
-    *
-    * @private
+-   *
+-   * @private
 -   * @param object aResponse
 -   *        The JavaScript evaluation response received from the server.
-+   * @param object aObjectActor
-+   *        The object actor grip.
-+   * @param nsIDOMNode [aAnchor]
-+   *        Optional object inspector anchor element. This is the clickable element
-+   *        in the message we display.
-    */
+-   */
 -  _evalOutputClick: function JST__evalOutputClick(aResponse)
-+  _onClickObjectActor: function JST__onClickObjectActor(aObjectActor, aAnchor)
-   {
-+    let label = aAnchor ? aAnchor.textContent :
-+                VariablesView.getString(aObjectActor);
-     this.openVariablesView({
+-  {
+-    this.openVariablesView({
 -      label: VariablesView.getString(aResponse.result),
 -      objectActor: aResponse.result,
-+      label: label,
-+      objectActor: aObjectActor,
-       autofocus: true,
-     });
-   },
+-      autofocus: true,
+-    });
+-  },
  
    /**
     * Destroy the sidebar.
     * @private
     */
+   _sidebarDestroy: function JST__sidebarDestroy()
+   {
+     if (this._variablesView) {
