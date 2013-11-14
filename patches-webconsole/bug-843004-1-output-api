@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 947929b2bd680fc9ebb4b1ec9dd76c04d15f656c
+# Parent e8dbe7aabcc898f3b8da44a8da692414c276bf0a
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1384288581 -7200
+# Date 1384460772 -7200
 
 Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
 
@@ -35,7 +35,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    // The various categories of messages.
    CATEGORIES: {
      NETWORK: 0,
-@@ -26,16 +34,35 @@ const COMPAT = {
+@@ -26,18 +34,63 @@ const COMPAT = {
  
    // The possible message severities.
    SEVERITIES: {
@@ -61,17 +61,45 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    [ "secerror",   "secwarn",    null,   null,          ],  // Security
 +  ],
 +
++  // The fragment of a CSS class name that identifies each category.
++  CATEGORY_CLASS_FRAGMENTS: [ "network", "cssparser", "exception", "console",
++                              "input", "output", "security" ],
++
++  // The fragment of a CSS class name that identifies each severity.
++  SEVERITY_CLASS_FRAGMENTS: [ "error", "warn", "info", "log" ],
++
 +  // The indent of a console group in pixels.
 +  GROUP_INDENT: 12,
  };
  
++// A map from the console API call levels to the Web Console severities.
++const CONSOLE_API_LEVELS_TO_SEVERITIES = {
++  error: "error",
++  warn: "warning",
++  info: "info",
++  log: "log",
++  trace: "log",
++  debug: "log",
++  dir: "log",
++  group: "log",
++  groupCollapsed: "log",
++  groupEnd: "log",
++  time: "log",
++  timeEnd: "log"
++};
++
++// Array of known message source URLs we need to hide from output.
++const IGNORED_SOURCE_URLS = ["debugger eval code", "self-hosted"];
++
  /**
   * The ConsoleOutput object is used to manage output of messages in the Web
   * Console.
   *
   * @constructor
   * @param object owner
-@@ -203,16 +230,26 @@ ConsoleOutput.prototype = {
+  *        The console output owner. This usually the WebConsoleFrame instance.
+  *        Any other object can be used, as long as it has the following
+@@ -203,16 +256,26 @@ ConsoleOutput.prototype = {
    {
      let selection = this.window.getSelection();
      selection.removeAllRanges();
@@ -98,7 +126,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      this.owner = null;
    },
  }; // ConsoleOutput.prototype
-@@ -227,16 +264,17 @@ let Messages = {};
+@@ -227,16 +290,17 @@ let Messages = {};
   * The BaseMessage object is used for all types of messages. Every kind of
   * message should use this object as its base.
   *
@@ -116,7 +144,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     *
     * @type object|null
     *       This is |null| if the message is not yet initialized.
-@@ -263,16 +301,24 @@ Messages.BaseMessage.prototype = {
+@@ -263,16 +327,24 @@ Messages.BaseMessage.prototype = {
     * Tells if this message is visible or not.
     * @type boolean
     */
@@ -141,7 +169,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
     * Set of widgets included in this message.
     * @type Set
-@@ -314,17 +360,17 @@ Messages.BaseMessage.prototype = {
+@@ -314,17 +386,17 @@ Messages.BaseMessage.prototype = {
        this.element = this._renderCompat();
      }
      return this;
@@ -160,7 +188,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      container.id = "console-msg-" + gSequenceId();
      container.className = "message";
      container.category = this._categoryCompat;
-@@ -333,33 +379,79 @@ Messages.BaseMessage.prototype = {
+@@ -333,33 +405,79 @@ Messages.BaseMessage.prototype = {
      container.setAttribute("severity", this._severityNameCompat);
      container.setAttribute("filter", this._filterKeyCompat);
      container.clipboardText = this.textContent;
@@ -241,7 +269,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
  {
    /**
-@@ -394,37 +486,371 @@ Messages.NavigationMarker.prototype = He
+@@ -394,37 +512,378 @@ Messages.NavigationMarker.prototype = He
  
      let doc = this.output.document;
      let urlnode = doc.createElementNS(XHTML_NS, "a");
@@ -281,8 +309,6 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *        The message to display.
 + * @param object [options]
 + *        Options for this message:
-+ *        - html: (boolean) tells if |message| is an HTML string or not.
-+ *        Defaults to |false|.
 + *        - category: (string) category that this message belongs to. Defaults
 + *        to no category.
 + *        - severity: (string) severity of the message. Defaults to no severity.
@@ -297,6 +323,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *        and lineText.
 + *        - className: (string) additional element class names for styling
 + *        purposes.
++ *        - private: (boolean) mark this as a private message.
 + *        - _groupDepthCompat: (number) group depth.
 + *        - _afterMessageElement: (DOMElement) add this message element after
 + *        the given element.
@@ -310,9 +337,9 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  this.severity = options.severity;
 +  this.location = options.location;
 +  this.timestamp = options.timestamp || Date.now();
++  this.private = !!options.private;
 +
 +  this._message = message;
-+  this._messageIsHTML = options.html;
 +  this._className = options.className;
 +  this._link = options.link;
 +  this._linkCallback = options.linkCallback;
@@ -337,10 +364,12 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +           COMPAT.SEVERITIES[this.severity.toUpperCase()] : null;
 +  },
 +  get _categoryNameCompat() {
-+    return this.category;
++    return this.category ?
++           COMPAT.CATEGORY_CLASS_FRAGMENTS[this._categoryCompat] : null;
 +  },
 +  get _severityNameCompat() {
-+    return this.severity;
++    return this.severity ?
++           COMPAT.SEVERITY_CLASS_FRAGMENTS[this._severityCompat] : null;
 +  },
 +
 +  get _filterKeyCompat() {
@@ -348,6 +377,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +           COMPAT.PREFERENCE_KEYS[this._categoryCompat][this._severityCompat] :
 +           null;
 +  },
++
++  private: false,
 +
 +  /**
 +   * Prepare the DOM element for this message.
@@ -377,6 +408,10 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    }
 +    this.element.appendChild(this.document.createTextNode("\n"));
 +
++    if (this.private) {
++      this.element.setAttribute("private", true);
++    }
++
 +    return this;
 +  },
 +
@@ -397,10 +432,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +      body.appendChild(anchor);
 +    }
 +
-+    if (this._message instanceof Ci.nsIDOMElement) {
++    if (this._message instanceof Ci.nsIDOMNode) {
 +      container.appendChild(this._message);
-+    } else if (this._messageIsHTML) {
-+      container.innerHTML = this._message;
 +    } else {
 +      container.textContent = this._message;
 +    }
@@ -415,12 +448,16 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    }
 +
 +    let {url, line} = this.location;
++    if (IGNORED_SOURCE_URLS.indexOf(url) != -1) {
++      return null;
++    }
 +
 +    // The ConsoleOutput owner is a WebConsoleFrame instance from webconsole.js.
 +    // TODO: move createLocationNode() into this file when bug 778766 is fixed.
 +    return this.output.owner.createLocationNode(url, line);
 +  },
 +}); // Messages.Simple.prototype
++
 +
 +/**
 + * The Extended message.
@@ -440,9 +477,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +{
 +  render: function()
 +  {
-+    let msg = this._message;
 +    let result = this.document.createDocumentFragment();
-+    for (let piece of message) {
++    for (let piece of this._message) {
 +      result.appendChild(this._renderBodyPiece(piece));
 +    }
 +    this._message = result;
@@ -451,29 +487,26 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +  _renderBodyPiece: function(piece)
 +  {
-+    if (piece instanceof Ci.nsIDOMElement) {
++    if (piece instanceof Ci.nsIDOMNode) {
 +      return piece;
 +    }
 +
 +    let result = this.document.createDocumentFragment();
++    let str = VariablesView.getString(piece);
++    let isPrimitive = VariablesView.isPrimitive({ value: piece });
++    let isActorGrip = WebConsoleUtils.isActorGrip(piece);
 +
-+    if (WebConsoleUtils.isActorGrip(piece)) {
-+      let str = VariablesView.getString(piece);
-+      if (piece.type == "object") {
-+        let anchor = this.document.createElementNS(XHTML_NS, "a");
-+        anchor.href = "#";
-+        anchor.draggable = false;
-+        anchor.textContent = str;
-+        this._addLinkCallback(anchor, this._onClickObjectActor);
-+        result.appendChild(anchor);
-+      } else {
-+        if (piece.type == "longString") {
-+          str += "...";
-+        }
-+        result.textContent = str;
++    if (piece && !isPrimitive && isActorGrip) {
++      let anchor = result = this.document.createElementNS(XHTML_NS, "a");
++      anchor.href = "#";
++      anchor.draggable = false;
++      anchor.textContent = str;
++      this._addLinkCallback(anchor, this._onClickObjectActor.bind(this, piece));
++    } else if (isPrimitive) {
++      if (piece.type == "longString") {
++        str += "...";
 +      }
-+    } else if (this._messageIsHTML) {
-+      result.innerHTML = piece;
++      result.textContent = str;
 +    } else {
 +      result.textContent = piece;
 +    }
@@ -491,7 +524,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  {
 +    Messages.Simple.prototype.onRemove.call(this);
 +  },
-+}); // Messages.JavaScriptEvalOutput.prototype
++}); // Messages.Extended.prototype
 +
 +
 +
@@ -499,7 +532,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + * The JavaScriptEvalOutput message.
 + *
 + * @constructor
-+ * @extends Messages.Simple
++ * @extends Messages.Extended
 + * @param object result
 + *        The message to display.
 + */
@@ -511,7 +544,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    severity = "error";
 +    msg = errorMessage;
 +  } else {
-+    msg = VariablesView.getString(evalResponse.result);
++    msg = evalResponse.result;
 +  }
 +
 +  let options = {
@@ -519,33 +552,35 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    category: "output",
 +    severity: severity,
 +  };
-+  Messages.Simple.call(this, msg, options);
-+
-+  this.evalResponse = evalResponse;
++  Messages.Extended.call(this, [msg], options);
 +};
 +
-+Messages.JavaScriptEvalOutput.prototype = Heritage.extend(Messages.Simple.prototype,
++Messages.JavaScriptEvalOutput.prototype = Messages.Extended.prototype;
++
++/**
++ * The ConsoleGeneric message is used for console API calls.
++ *
++ * @constructor
++ * @extends Messages.Extended
++ * @param object result
++ *        The message to display.
++ */
++Messages.ConsoleGeneric = function(packet)
 +{
-+  render: function()
-+  {
-+    let result = this.evalResponse.result;
-+    if (result && !VariablesView.isPrimitive({ value: result })) {
-+      this._linkCallback = this._onClickObjectActor.bind(this, result);
-+    }
-+    return Messages.Simple.prototype.render.call(this);
-+  },
++  let options = {
++    timestamp: packet.timeStamp,
++    category: "webdev",
++    severity: CONSOLE_API_LEVELS_TO_SEVERITIES[packet.level],
++    private: packet.private,
++    location: {
++      url: packet.filename,
++      line: packet.lineNumber,
++    },
++  };
++  Messages.Extended.call(this, packet.arguments, options);
++};
 +
-+  // TODO: release object actor
-+  onRemoveFromQueue: function()
-+  {
-+    Messages.Simple.prototype.onRemoveFromQueue.call(this);
-+  },
-+
-+  onRemove: function()
-+  {
-+    Messages.Simple.prototype.onRemove.call(this);
-+  },
-+}); // Messages.JavaScriptEvalOutput.prototype
++Messages.ConsoleGeneric.prototype = Messages.Extended.prototype;
 +
 +
 +let Widgets = {};
@@ -711,7 +746,30 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // each category. The user can change this number by adjusting the hidden
  // "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
  const DEFAULT_LOG_LIMIT = 200;
-@@ -1535,17 +1531,17 @@ WebConsoleFrame.prototype = {
+@@ -1170,17 +1166,21 @@ WebConsoleFrame.prototype = {
+       }
+     });
+ 
+     switch (level) {
+       case "log":
+       case "info":
+       case "warn":
+       case "error":
+-      case "debug":
++      case "debug": {
++        let msg = new Messages.ConsoleGeneric(aMessage);
++        return msg.init(this.output).render().element;
++        break;
++      }
+       case "dir": {
+         body = { arguments: args };
+         let clipboardArray = [];
+         args.forEach((aValue) => {
+           clipboardArray.push(VariablesView.getString(aValue));
+           if (aValue && typeof aValue == "object" &&
+               aValue.type == "longString") {
+             clipboardArray.push(l10n.getStr("longStringEllipsis"));
+@@ -1535,17 +1535,17 @@ WebConsoleFrame.prototype = {
      mixedContentWarningNode.title = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.href = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.className = "learn-more-link";
@@ -730,7 +788,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Adds a more info link node to messages based on the nsIScriptError object
     * that we need to report to the console
-@@ -1596,17 +1592,17 @@ WebConsoleFrame.prototype = {
+@@ -1596,17 +1596,17 @@ WebConsoleFrame.prototype = {
  
      let warningNode = this.document.createElementNS(XHTML_NS, "a");
      warningNode.title = aURL;
@@ -749,7 +807,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2802,17 +2798,17 @@ WebConsoleFrame.prototype = {
+@@ -2802,17 +2802,17 @@ WebConsoleFrame.prototype = {
  
        // If this event started with a mousedown event and it ends at a different
        // location, we consider this text selection.
@@ -768,7 +826,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Currently this function only handles the timestamps preferences.
     *
     * @private
-@@ -3205,23 +3201,18 @@ JSTerm.prototype = {
+@@ -3205,23 +3205,18 @@ JSTerm.prototype = {
      }
      if (aResponse.error) {
        Cu.reportError("Evaluation error " + aResponse.error + ": " +
@@ -792,7 +850,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            break;
          case "inspectObject":
            if (aAfterNode) {
-@@ -3252,57 +3243,50 @@ JSTerm.prototype = {
+@@ -3252,57 +3247,50 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
          result.type == "undefined" &&
@@ -861,7 +919,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          ellipsis.classList.add("longStringEllipsis");
          ellipsis.textContent = l10n.getStr("longStringEllipsis");
          ellipsis.href = "#";
-@@ -4567,31 +4551,16 @@ JSTerm.prototype = {
+@@ -4567,31 +4555,16 @@ JSTerm.prototype = {
     */
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
