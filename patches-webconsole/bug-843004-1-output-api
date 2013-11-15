@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent e8dbe7aabcc898f3b8da44a8da692414c276bf0a
+# Parent b2fab608772f4d8cc243be416638f54e38e4eb00
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1384460772 -7200
+# Date 1384543530 -7200
 
 Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
 
@@ -35,7 +35,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    // The various categories of messages.
    CATEGORIES: {
      NETWORK: 0,
-@@ -26,18 +34,63 @@ const COMPAT = {
+@@ -26,18 +34,67 @@ const COMPAT = {
  
    // The possible message severities.
    SEVERITIES: {
@@ -91,6 +91,10 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +// Array of known message source URLs we need to hide from output.
 +const IGNORED_SOURCE_URLS = ["debugger eval code", "self-hosted"];
 +
++// The maximum length of strings to be displayed by the Web Console.
++const MAX_LONG_STRING_LENGTH = 200000;
++
++
  /**
   * The ConsoleOutput object is used to manage output of messages in the Web
   * Console.
@@ -99,7 +103,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   * @param object owner
   *        The console output owner. This usually the WebConsoleFrame instance.
   *        Any other object can be used, as long as it has the following
-@@ -203,16 +256,26 @@ ConsoleOutput.prototype = {
+@@ -203,16 +260,43 @@ ConsoleOutput.prototype = {
    {
      let selection = this.window.getSelection();
      selection.removeAllRanges();
@@ -118,6 +122,23 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    this.owner.jsterm.openVariablesView.apply(this.owner.jsterm, arguments);
 +  },
 +
++  /**
++   * Inform user that the string he tries to view is too long.
++   *
++   * @private
++   * @return object
++   *         The new Message object.
++   */
++  _logWarningAboutStringTooLong: function()
++  {
++    let msg = new Messages.Simple(l10n.getStr("longStringTooLong"), {
++      category: "output",
++      severity: "warning",
++    });
++    this.addMessage(msg);
++    return msg;
++  },
++
    /**
     * Destroy this ConsoleOutput instance.
     */
@@ -126,7 +147,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      this.owner = null;
    },
  }; // ConsoleOutput.prototype
-@@ -227,16 +290,17 @@ let Messages = {};
+@@ -227,16 +311,17 @@ let Messages = {};
   * The BaseMessage object is used for all types of messages. Every kind of
   * message should use this object as its base.
   *
@@ -135,7 +156,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  Messages.BaseMessage = function()
  {
    this.widgets = new Set();
-+  this._anchorClickHandler = this._anchorClickHandler.bind(this);
++  this._onClickAnchor = this._onClickAnchor.bind(this);
  };
  
  Messages.BaseMessage.prototype = {
@@ -144,7 +165,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     *
     * @type object|null
     *       This is |null| if the message is not yet initialized.
-@@ -263,16 +327,24 @@ Messages.BaseMessage.prototype = {
+@@ -263,16 +348,24 @@ Messages.BaseMessage.prototype = {
     * Tells if this message is visible or not.
     * @type boolean
     */
@@ -169,7 +190,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
     * Set of widgets included in this message.
     * @type Set
-@@ -314,17 +386,17 @@ Messages.BaseMessage.prototype = {
+@@ -314,17 +407,17 @@ Messages.BaseMessage.prototype = {
        this.element = this._renderCompat();
      }
      return this;
@@ -188,7 +209,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      container.id = "console-msg-" + gSequenceId();
      container.className = "message";
      container.category = this._categoryCompat;
-@@ -333,33 +405,79 @@ Messages.BaseMessage.prototype = {
+@@ -333,33 +426,107 @@ Messages.BaseMessage.prototype = {
      container.setAttribute("severity", this._severityNameCompat);
      container.setAttribute("filter", this._filterKeyCompat);
      container.clipboardText = this.textContent;
@@ -208,12 +229,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return this;
 +  },
 +
-+  _anchorClickHandler: function(event)
-+  {
-+    this.output.openLink(event.target.href);
-+  },
-+
-+  _addLinkCallback: function(element, callback = this._anchorClickHandler)
++  _addLinkCallback: function(element, callback = this._onClickAnchor)
 +  {
 +    // This is going into the WebConsoleFrame object instance that owns
 +    // the ConsoleOutput object. The WebConsoleFrame owner is the WebConsole
@@ -221,6 +237,11 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    // TODO: move _addMessageLinkCallback() into ConsoleOutput once bug 778766
 +    // is fixed.
 +    this.output.owner._addMessageLinkCallback(element, callback);
++  },
++
++  _onClickAnchor: function(event)
++  {
++    this.output.openLink(event.target.href);
 +  },
 +
 +  /**
@@ -241,6 +262,34 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +      label: label,
 +      objectActor: objectActor,
 +      autofocus: true,
++    });
++  },
++
++  _onClickLongString: function(longStringActor, formatter, event)
++  {
++    let ellipsis = event.target;
++    if (!formatter) {
++      formatter = function(s) s;
++    }
++
++    let longString = this.output.owner.webConsoleClient.longString(longStringActor);
++    let toIndex = Math.min(longString.length, MAX_LONG_STRING_LENGTH);
++
++    longString.substring(longString.initial.length, toIndex, (response) => {
++      if (response.error) {
++        Cu.reportError("LongString substring failure: " + response.error);
++        return;
++      }
++
++      let prev = ellipsis.previousSibling;
++      prev.textContent = formatter(longString.initial + response.substring);
++      ellipsis.remove();
++
++      this.output.owner.emit("messages-updated", new Set([this.element]));
++
++      if (toIndex != longString.length) {
++        this.output._logWarningAboutStringTooLong();
++      }
 +    });
 +  },
  }; // Messages.BaseMessage.prototype
@@ -269,7 +318,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
  {
    /**
-@@ -394,37 +512,378 @@ Messages.NavigationMarker.prototype = He
+@@ -394,37 +561,411 @@ Messages.NavigationMarker.prototype = He
  
      let doc = this.output.document;
      let urlnode = doc.createElementNS(XHTML_NS, "a");
@@ -468,9 +517,10 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *        The message to display.
 + */
 +// TODO update comments
-+Messages.Extended = function(message, options = {})
++Messages.Extended = function(messagePieces, options = {})
 +{
-+  Messages.Simple.call(this, message, options);
++  Messages.Simple.call(this, null, options);
++  this._messagePieces = messagePieces;
 +};
 +
 +Messages.Extended.prototype = Heritage.extend(Messages.Simple.prototype,
@@ -478,23 +528,38 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  render: function()
 +  {
 +    let result = this.document.createDocumentFragment();
-+    for (let piece of this._message) {
++
++    for (let i = 0; i < this._messagePieces.length; i++) {
++      let separator = i > 0 ? this._renderBodyPieceSeparator() : null;
++      if (separator) {
++        result.appendChild(separator);
++      }
++
++      let piece = this._messagePieces[i];
 +      result.appendChild(this._renderBodyPiece(piece));
 +    }
++
 +    this._message = result;
++    this._messagePieces = null;
 +    return Messages.Simple.prototype.render.call(this);
 +  },
++
++  _renderBodyPieceSeparator: function() { return null; },
 +
 +  _renderBodyPiece: function(piece)
 +  {
 +    if (piece instanceof Ci.nsIDOMNode) {
 +      return piece;
++    } else if (typeof piece == "function") {
++      return piece(this);
 +    }
 +
 +    let result = this.document.createDocumentFragment();
 +    let str = VariablesView.getString(piece);
 +    let isPrimitive = VariablesView.isPrimitive({ value: piece });
 +    let isActorGrip = WebConsoleUtils.isActorGrip(piece);
++
++    // TODO: split into widgets
 +
 +    if (piece && !isPrimitive && isActorGrip) {
 +      let anchor = result = this.document.createElementNS(XHTML_NS, "a");
@@ -503,10 +568,21 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +      anchor.textContent = str;
 +      this._addLinkCallback(anchor, this._onClickObjectActor.bind(this, piece));
 +    } else if (isPrimitive) {
-+      if (piece.type == "longString") {
-+        str += "...";
-+      }
 +      result.textContent = str;
++
++      if (piece.type == "longString") {
++        let ellipsis = this.document.createElementNS(XHTML_NS, "a");
++        ellipsis.className = "longStringEllipsis";
++        ellipsis.textContent = l10n.getStr("longStringEllipsis");
++        ellipsis.href = "#";
++        ellipsis.draggable = false;
++
++        let formatter = function(s) '"' + s + '"';
++        let onclick = this._onClickLongString.bind(this, piece, formatter);
++        this._addLinkCallback(ellipsis, onclick);
++
++        result.appendChild(ellipsis);
++      }
 +    } else {
 +      result.textContent = piece;
 +    }
@@ -580,7 +656,13 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  Messages.Extended.call(this, packet.arguments, options);
 +};
 +
-+Messages.ConsoleGeneric.prototype = Messages.Extended.prototype;
++Messages.ConsoleGeneric.prototype = Heritage.extend(Messages.Extended.prototype,
++{
++  _renderBodyPieceSeparator: function()
++  {
++    return this.document.createTextNode(" ");
++  },
++}); // Messages.ConsoleGeneric.prototype
 +
 +
 +let Widgets = {};
@@ -746,7 +828,27 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  // each category. The user can change this number by adjusting the hidden
  // "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
  const DEFAULT_LOG_LIMIT = 200;
-@@ -1170,17 +1166,21 @@ WebConsoleFrame.prototype = {
+@@ -161,19 +157,16 @@ const OUTPUT_INTERVAL = 50; // milliseco
+ const THROTTLE_UPDATES = 1000; // milliseconds
+ 
+ // The preference prefix for all of the Web Console filters.
+ const FILTER_PREFS_PREFIX = "devtools.webconsole.filter.";
+ 
+ // The minimum font size.
+ const MIN_FONT_SIZE = 10;
+ 
+-// The maximum length of strings to be displayed by the Web Console.
+-const MAX_LONG_STRING_LENGTH = 200000;
+-
+ const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
+ const PREF_PERSISTLOG = "devtools.webconsole.persistlog";
+ const PREF_MESSAGE_TIMESTAMP = "devtools.webconsole.timestampMessages";
+ 
+ /**
+  * A WebConsoleFrame instance is an interactive console initialized *per target*
+  * that displays console log data as well as provides an interactive terminal to
+  * manipulate the target's document content.
+@@ -1170,17 +1163,21 @@ WebConsoleFrame.prototype = {
        }
      });
  
@@ -769,7 +871,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            if (aValue && typeof aValue == "object" &&
                aValue.type == "longString") {
              clipboardArray.push(l10n.getStr("longStringEllipsis"));
-@@ -1535,17 +1535,17 @@ WebConsoleFrame.prototype = {
+@@ -1535,17 +1532,17 @@ WebConsoleFrame.prototype = {
      mixedContentWarningNode.title = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.href = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.className = "learn-more-link";
@@ -788,7 +890,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Adds a more info link node to messages based on the nsIScriptError object
     * that we need to report to the console
-@@ -1596,17 +1596,17 @@ WebConsoleFrame.prototype = {
+@@ -1596,17 +1593,17 @@ WebConsoleFrame.prototype = {
  
      let warningNode = this.document.createElementNS(XHTML_NS, "a");
      warningNode.title = aURL;
@@ -807,7 +909,144 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -2802,17 +2802,17 @@ WebConsoleFrame.prototype = {
+@@ -1690,26 +1687,16 @@ WebConsoleFrame.prototype = {
+   logWarningAboutReplacedAPI: function WCF_logWarningAboutReplacedAPI()
+   {
+     let node = this.createMessageNode(CATEGORY_JS, SEVERITY_WARNING,
+                                       l10n.getStr("ConsoleAPIDisabled"));
+     this.outputMessage(CATEGORY_JS, node);
+   },
+ 
+   /**
+-   * Inform user that the string he tries to view is too long.
+-   */
+-  logWarningAboutStringTooLong: function WCF_logWarningAboutStringTooLong()
+-  {
+-    let node = this.createMessageNode(CATEGORY_JS, SEVERITY_WARNING,
+-                                      l10n.getStr("longStringTooLong"));
+-    this.outputMessage(CATEGORY_JS, node);
+-  },
+-
+-  /**
+    * Handle the network events coming from the remote Web Console.
+    *
+    * @param object aActor
+    *        The NetworkEventActor grip.
+    */
+   handleNetworkEvent: function WCF_handleNetworkEvent(aActor)
+   {
+     let networkInfo = {
+@@ -2477,20 +2464,16 @@ WebConsoleFrame.prototype = {
+     if (aBody instanceof Ci.nsIDOMNode) {
+       bodyNode.appendChild(aBody);
+     }
+     else {
+       let str = undefined;
+       if (aLevel == "dir") {
+         str = VariablesView.getString(aBody.arguments[0]);
+       }
+-      else if (["log", "info", "warn", "error", "debug"].indexOf(aLevel) > -1 &&
+-               typeof aBody == "object") {
+-        this._makeConsoleLogMessageBody(node, bodyNode, aBody);
+-      }
+       else {
+         str = aBody;
+       }
+ 
+       if (str !== undefined) {
+         aBody = this.document.createTextNode(str);
+         bodyNode.appendChild(aBody);
+       }
+@@ -2570,19 +2553,21 @@ WebConsoleFrame.prototype = {
+    * @param nsIDOMElement aContainer
+    *        The specific element that will hold each part of the console.log
+    *        output.
+    * @param object aBody
+    *        The object given by this.logConsoleAPIMessage(). This object holds
+    *        the call information that we need to display - mainly the arguments
+    *        array of the given API call.
+    */
++  // TODO: remove this method
+   _makeConsoleLogMessageBody:
+   function WCF__makeConsoleLogMessageBody(aMessage, aContainer, aBody)
+   {
++    // TODO: use this in ConsoleOutput
+     Object.defineProperty(aMessage, "_panelOpen", {
+       get: function() {
+         let nodes = aContainer.getElementsByTagName("a");
+         return Array.prototype.some.call(nodes, function(aNode) {
+           return aNode._panelOpen;
+         });
+       },
+       enumerable: true,
+@@ -2627,66 +2612,16 @@ WebConsoleFrame.prototype = {
+       this._addMessageLinkCallback(elem,
+         this._consoleLogClick.bind(this, elem, aItem));
+ 
+       aContainer.appendChild(elem);
+     }, this);
+   },
+ 
+   /**
+-   * Click event handler for the ellipsis shown immediately after a long string.
+-   * This method retrieves the full string and updates the console output to
+-   * show it.
+-   *
+-   * @private
+-   * @param nsIDOMElement aMessage
+-   *        The message element.
+-   * @param object aActor
+-   *        The LongStringActor instance we work with.
+-   * @param [function] aFormatter
+-   *        Optional function you can use to format the string received from the
+-   *        server, before being displayed in the console.
+-   * @param nsIDOMElement aEllipsis
+-   *        The DOM element the user can click on to expand the string.
+-   */
+-  _longStringClick:
+-  function WCF__longStringClick(aMessage, aActor, aFormatter, aEllipsis)
+-  {
+-    if (!aFormatter) {
+-      aFormatter = function(s) s;
+-    }
+-
+-    let longString = this.webConsoleClient.longString(aActor);
+-    let toIndex = Math.min(longString.length, MAX_LONG_STRING_LENGTH);
+-    longString.substring(longString.initial.length, toIndex,
+-      function WCF__onSubstring(aResponse) {
+-        if (aResponse.error) {
+-          Cu.reportError("WCF__longStringClick substring failure: " +
+-                         aResponse.error);
+-          return;
+-        }
+-
+-        let node = aEllipsis.previousSibling;
+-        node.textContent = aFormatter(longString.initial + aResponse.substring);
+-        aEllipsis.parentNode.removeChild(aEllipsis);
+-
+-        if (aMessage.category == CATEGORY_WEBDEV ||
+-            aMessage.category == CATEGORY_OUTPUT) {
+-          aMessage.clipboardText = aMessage.textContent;
+-        }
+-
+-        this.emit("messages-updated", new Set([aMessage]));
+-
+-        if (toIndex != longString.length) {
+-          this.logWarningAboutStringTooLong();
+-        }
+-      }.bind(this));
+-  },
+-
+-  /**
+    * Creates the anchor that displays the textual location of an incoming
+    * message.
+    *
+    * @param string aSourceURL
+    *        The URL of the source file responsible for the error.
+    * @param number aSourceLine [optional]
+    *        The line number on which the error occurred. If zero or omitted,
+    *        there is no line number associated with this message.
+@@ -2802,17 +2737,17 @@ WebConsoleFrame.prototype = {
  
        // If this event started with a mousedown event and it ends at a different
        // location, we consider this text selection.
@@ -826,7 +1065,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Currently this function only handles the timestamps preferences.
     *
     * @private
-@@ -3205,23 +3205,18 @@ JSTerm.prototype = {
+@@ -3205,23 +3140,18 @@ JSTerm.prototype = {
      }
      if (aResponse.error) {
        Cu.reportError("Evaluation error " + aResponse.error + ": " +
@@ -850,7 +1089,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            break;
          case "inspectObject":
            if (aAfterNode) {
-@@ -3252,57 +3247,50 @@ JSTerm.prototype = {
+@@ -3252,76 +3182,47 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
          result.type == "undefined" &&
@@ -907,19 +1146,37 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
  
      if (WebConsoleUtils.isActorGrip(result)) {
 -      node._objectActors.add(result.actor);
-+      msg._objectActors.add(result.actor);
+-
+-      if (result.type == "longString") {
+-        // Add an ellipsis to expand the short string if the object is not
+-        // inspectable.
+-
+-        let body = node.getElementsByClassName("body")[0];
+-        let ellipsis = this.hud.document.createElementNS(XHTML_NS, "a");
+-        ellipsis.classList.add("longStringEllipsis");
+-        ellipsis.textContent = l10n.getStr("longStringEllipsis");
+-        ellipsis.href = "#";
+-        ellipsis.draggable = false;
+-
+-        let formatter = function(s) '"' + s + '"';
+-        let onclick = this.hud._longStringClick.bind(this.hud, node, result,
+-                                                    formatter);
+-        this.hud._addMessageLinkCallback(ellipsis, onclick);
+-
+-        body.appendChild(ellipsis);
+-
+-        node.clipboardText += " " + ellipsis.textContent;
+-      }
++      msg._objectActors.add(result.actor); // FIXME
+     }
+   },
  
-       if (result.type == "longString") {
-+        return; // FIXME
-         // Add an ellipsis to expand the short string if the object is not
-         // inspectable.
- 
-         let body = node.getElementsByClassName("body")[0];
-         let ellipsis = this.hud.document.createElementNS(XHTML_NS, "a");
-         ellipsis.classList.add("longStringEllipsis");
-         ellipsis.textContent = l10n.getStr("longStringEllipsis");
-         ellipsis.href = "#";
-@@ -4567,31 +4555,16 @@ JSTerm.prototype = {
+   /**
+    * Execute a string. Execution happens asynchronously in the content process.
+    *
+    * @param string [aExecuteString]
+    *        The string you want to execute. If this is not provided, the current
+@@ -4567,31 +4468,16 @@ JSTerm.prototype = {
     */
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
