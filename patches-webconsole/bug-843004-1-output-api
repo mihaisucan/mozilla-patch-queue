@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent b2fab608772f4d8cc243be416638f54e38e4eb00
+# Parent 832f4026488097cc08a81933f18a5c6c2481372f
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1384543530 -7200
+# Date 1384896954 -7200
 
 Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
 
@@ -209,7 +209,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      container.id = "console-msg-" + gSequenceId();
      container.className = "message";
      container.category = this._categoryCompat;
-@@ -333,33 +426,107 @@ Messages.BaseMessage.prototype = {
+@@ -333,40 +426,116 @@ Messages.BaseMessage.prototype = {
      container.setAttribute("severity", this._severityNameCompat);
      container.setAttribute("filter", this._filterKeyCompat);
      container.clipboardText = this.textContent;
@@ -317,8 +317,17 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
  Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
  {
++  _url: null,
++
    /**
-@@ -394,37 +561,411 @@ Messages.NavigationMarker.prototype = He
+    * Message timestamp.
+    *
+    * @type number
+    *       Milliseconds elapsed since 1 January 1970 00:00:00 UTC.
+    */
+   timestamp: 0,
+ 
+@@ -394,37 +563,442 @@ Messages.NavigationMarker.prototype = He
  
      let doc = this.output.document;
      let urlnode = doc.createElementNS(XHTML_NS, "a");
@@ -374,8 +383,6 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *        purposes.
 + *        - private: (boolean) mark this as a private message.
 + *        - _groupDepthCompat: (number) group depth.
-+ *        - _afterMessageElement: (DOMElement) add this message element after
-+ *        the given element.
 + */
 +// TODO: fix/update comments
 +Messages.Simple = function(message, options = {})
@@ -396,6 +403,16 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +Messages.Simple.prototype = Heritage.extend(Messages.BaseMessage.prototype,
 +{
++  category: null,
++  severity: null,
++  location: null,
++  _link: null, // TODO _link vs. _url?
++  _linkCallback: null,
++  _afterMessage: null,
++  _objectActors: null,
++
++  private: false,
++
 +  /**
 +   * Message timestamp.
 +   *
@@ -426,8 +443,6 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +           COMPAT.PREFERENCE_KEYS[this._categoryCompat][this._severityCompat] :
 +           null;
 +  },
-+
-+  private: false,
 +
 +  /**
 +   * Prepare the DOM element for this message.
@@ -460,6 +475,16 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    if (this.private) {
 +      this.element.setAttribute("private", true);
 +    }
++
++    if (this._afterMessage) {
++      this.element._outputAfterNode = this._afterMessage.element;
++      this._afterMessage = null;
++    }
++
++    // TODO: handle object releasing in a more elegant way once all console
++    // messages use the new API - bug 778766.
++    this.element._objectActors = this._objectActors;
++    this._objectActors = null;
 +
 +    return this;
 +  },
@@ -520,11 +545,19 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +Messages.Extended = function(messagePieces, options = {})
 +{
 +  Messages.Simple.call(this, null, options);
++
 +  this._messagePieces = messagePieces;
++
++  if ("quoteStrings" in options) {
++    this._quoteStrings = options.quoteStrings;
++  }
 +};
 +
 +Messages.Extended.prototype = Heritage.extend(Messages.Simple.prototype,
 +{
++  _messagePieces: null,
++  _quoteStrings: true,
++
 +  render: function()
 +  {
 +    let result = this.document.createDocumentFragment();
@@ -555,9 +588,14 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    }
 +
 +    let result = this.document.createDocumentFragment();
-+    let str = VariablesView.getString(piece);
 +    let isPrimitive = VariablesView.isPrimitive({ value: piece });
 +    let isActorGrip = WebConsoleUtils.isActorGrip(piece);
++    let str;
++    if (!this._quoteStrings && typeof piece == "string") {
++      str = piece;
++    } else {
++      str = VariablesView.getString(piece);
++    }
 +
 +    // TODO: split into widgets
 +
@@ -614,11 +652,12 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + */
 +Messages.JavaScriptEvalOutput = function(evalResponse, {errorMessage})
 +{
-+  let severity = "log", msg;
++  let severity = "log", msg, quoteStrings = true;
 +
 +  if (errorMessage) {
 +    severity = "error";
 +    msg = errorMessage;
++    quoteStrings = false;
 +  } else {
 +    msg = evalResponse.result;
 +  }
@@ -627,6 +666,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    timestamp: evalResponse.timestamp,
 +    category: "output",
 +    severity: severity,
++    quoteStrings: quoteStrings,
 +  };
 +  Messages.Extended.call(this, [msg], options);
 +};
@@ -848,7 +888,21 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
   * A WebConsoleFrame instance is an interactive console initialized *per target*
   * that displays console log data as well as provides an interactive terminal to
   * manipulate the target's document content.
-@@ -1170,17 +1163,21 @@ WebConsoleFrame.prototype = {
+@@ -1157,30 +1150,35 @@ WebConsoleFrame.prototype = {
+   {
+     let body = null;
+     let clipboardText = null;
+     let sourceURL = aMessage.filename;
+     let sourceLine = aMessage.lineNumber;
+     let level = aMessage.level;
+     let args = aMessage.arguments;
+     let objectActors = new Set();
++    let node = null;
+ 
+     // Gather the actor IDs.
+     args.forEach((aValue) => {
+       if (WebConsoleUtils.isActorGrip(aValue)) {
+         objectActors.add(aValue.actor);
        }
      });
  
@@ -860,7 +914,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      case "debug":
 +      case "debug": {
 +        let msg = new Messages.ConsoleGeneric(aMessage);
-+        return msg.init(this.output).render().element;
++        node = msg.init(this.output).render().element;
 +        break;
 +      }
        case "dir": {
@@ -871,7 +925,83 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            if (aValue && typeof aValue == "object" &&
                aValue.type == "longString") {
              clipboardArray.push(l10n.getStr("longStringEllipsis"));
-@@ -1535,17 +1532,17 @@ WebConsoleFrame.prototype = {
+@@ -1278,28 +1276,31 @@ WebConsoleFrame.prototype = {
+         }
+         objectActors.clear();
+     }
+ 
+     if (level == "groupEnd") {
+       return null; // no need to continue
+     }
+ 
+-    let node = this.createMessageNode(CATEGORY_WEBDEV, LEVELS[level], body,
+-                                      sourceURL, sourceLine, clipboardText,
+-                                      level, aMessage.timeStamp);
+-    if (aMessage.private) {
+-      node.setAttribute("private", true);
++    if (!node) {
++      node = this.createMessageNode(CATEGORY_WEBDEV, LEVELS[level], body,
++                                    sourceURL, sourceLine, clipboardText,
++                                    level, aMessage.timeStamp);
++      if (aMessage.private) {
++        node.setAttribute("private", true);
++      }
+     }
+ 
+     if (objectActors.size > 0) {
+       node._objectActors = objectActors;
+ 
+-      let repeatNode = node.getElementsByClassName("repeats")[0];
+-      repeatNode._uid += [...objectActors].join("-");
++      //TODO
++      //let repeatNode = node.getElementsByClassName("repeats")[0];
++      //repeatNode._uid += [...objectActors].join("-");
+     }
+ 
+     if (level == "trace") {
+       node._stacktrace = aMessage.stacktrace;
+     }
+ 
+     return node;
+   },
+@@ -1312,36 +1313,16 @@ WebConsoleFrame.prototype = {
+    *        The console API message received from the server.
+    */
+   handleConsoleAPICall: function WCF_handleConsoleAPICall(aMessage)
+   {
+     this.outputMessage(CATEGORY_WEBDEV, this.logConsoleAPIMessage, [aMessage]);
+   },
+ 
+   /**
+-   * The click event handler for objects shown inline coming from the
+-   * window.console API.
+-   *
+-   * @private
+-   * @param nsIDOMNode aAnchor
+-   *        The object inspector anchor element. This is the clickable element
+-   *        in the console.log message we display.
+-   * @param object aObjectActor
+-   *        The object actor grip.
+-   */
+-  _consoleLogClick: function WCF__consoleLogClick(aAnchor, aObjectActor)
+-  {
+-    this.jsterm.openVariablesView({
+-      label: aAnchor.textContent,
+-      objectActor: aObjectActor,
+-      autofocus: true,
+-    });
+-  },
+-
+-  /**
+    * Reports an error in the page source, either JavaScript or CSS.
+    *
+    * @param nsIScriptError aScriptError
+    *        The error message to report.
+    * @return nsIDOMElement|undefined
+    *         The message element to display in the Web Console output.
+    */
+   reportPageError: function WCF_reportPageError(aCategory, aScriptError)
+@@ -1535,17 +1516,17 @@ WebConsoleFrame.prototype = {
      mixedContentWarningNode.title = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.href = MIXED_CONTENT_LEARN_MORE;
      mixedContentWarningNode.className = "learn-more-link";
@@ -890,7 +1020,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    /**
     * Adds a more info link node to messages based on the nsIScriptError object
     * that we need to report to the console
-@@ -1596,17 +1593,17 @@ WebConsoleFrame.prototype = {
+@@ -1596,17 +1577,17 @@ WebConsoleFrame.prototype = {
  
      let warningNode = this.document.createElementNS(XHTML_NS, "a");
      warningNode.title = aURL;
@@ -909,7 +1039,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    },
  
    /**
-@@ -1690,26 +1687,16 @@ WebConsoleFrame.prototype = {
+@@ -1690,26 +1671,16 @@ WebConsoleFrame.prototype = {
    logWarningAboutReplacedAPI: function WCF_logWarningAboutReplacedAPI()
    {
      let node = this.createMessageNode(CATEGORY_JS, SEVERITY_WARNING,
@@ -936,7 +1066,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
    handleNetworkEvent: function WCF_handleNetworkEvent(aActor)
    {
      let networkInfo = {
-@@ -2477,20 +2464,16 @@ WebConsoleFrame.prototype = {
+@@ -2477,20 +2448,16 @@ WebConsoleFrame.prototype = {
      if (aBody instanceof Ci.nsIDOMNode) {
        bodyNode.appendChild(aBody);
      }
@@ -957,37 +1087,85 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
          aBody = this.document.createTextNode(str);
          bodyNode.appendChild(aBody);
        }
-@@ -2570,19 +2553,21 @@ WebConsoleFrame.prototype = {
-    * @param nsIDOMElement aContainer
-    *        The specific element that will hold each part of the console.log
-    *        output.
-    * @param object aBody
-    *        The object given by this.logConsoleAPIMessage(). This object holds
-    *        the call information that we need to display - mainly the arguments
-    *        array of the given API call.
-    */
-+  // TODO: remove this method
-   _makeConsoleLogMessageBody:
-   function WCF__makeConsoleLogMessageBody(aMessage, aContainer, aBody)
-   {
-+    // TODO: use this in ConsoleOutput
-     Object.defineProperty(aMessage, "_panelOpen", {
-       get: function() {
-         let nodes = aContainer.getElementsByTagName("a");
-         return Array.prototype.some.call(nodes, function(aNode) {
-           return aNode._panelOpen;
-         });
-       },
-       enumerable: true,
-@@ -2627,66 +2612,16 @@ WebConsoleFrame.prototype = {
-       this._addMessageLinkCallback(elem,
-         this._consoleLogClick.bind(this, elem, aItem));
+@@ -2557,136 +2524,16 @@ WebConsoleFrame.prototype = {
+       node.appendChild(locationNode);
+     }
+     node.appendChild(this.document.createTextNode("\n"));
  
-       aContainer.appendChild(elem);
-     }, this);
+     return node;
    },
  
    /**
+-   * Make the message body for console.log() calls.
+-   *
+-   * @private
+-   * @param nsIDOMElement aMessage
+-   *        The message element that holds the output for the given call.
+-   * @param nsIDOMElement aContainer
+-   *        The specific element that will hold each part of the console.log
+-   *        output.
+-   * @param object aBody
+-   *        The object given by this.logConsoleAPIMessage(). This object holds
+-   *        the call information that we need to display - mainly the arguments
+-   *        array of the given API call.
+-   */
+-  _makeConsoleLogMessageBody:
+-  function WCF__makeConsoleLogMessageBody(aMessage, aContainer, aBody)
+-  {
+-    Object.defineProperty(aMessage, "_panelOpen", {
+-      get: function() {
+-        let nodes = aContainer.getElementsByTagName("a");
+-        return Array.prototype.some.call(nodes, function(aNode) {
+-          return aNode._panelOpen;
+-        });
+-      },
+-      enumerable: true,
+-      configurable: false
+-    });
+-
+-    aBody.arguments.forEach(function(aItem) {
+-      if (aContainer.firstChild) {
+-        aContainer.appendChild(this.document.createTextNode(" "));
+-      }
+-
+-      let text = VariablesView.getString(aItem);
+-      let inspectable = !VariablesView.isPrimitive({ value: aItem });
+-
+-      if (aItem && typeof aItem != "object" || !inspectable) {
+-        aContainer.appendChild(this.document.createTextNode(text));
+-
+-        if (aItem.type && aItem.type == "longString") {
+-          let ellipsis = this.document.createElementNS(XHTML_NS, "a");
+-          ellipsis.classList.add("longStringEllipsis");
+-          ellipsis.textContent = l10n.getStr("longStringEllipsis");
+-          ellipsis.href = "#";
+-          ellipsis.draggable = false;
+-
+-          let formatter = function(s) '"' + s + '"';
+-
+-          this._addMessageLinkCallback(ellipsis,
+-            this._longStringClick.bind(this, aMessage, aItem, formatter));
+-
+-          aContainer.appendChild(ellipsis);
+-        }
+-        return;
+-      }
+-
+-      // For inspectable objects.
+-      let elem = this.document.createElementNS(XHTML_NS, "a");
+-      elem.setAttribute("aria-haspopup", "true");
+-      elem.textContent = text;
+-      elem.href = "#";
+-      elem.draggable = false;
+-
+-      this._addMessageLinkCallback(elem,
+-        this._consoleLogClick.bind(this, elem, aItem));
+-
+-      aContainer.appendChild(elem);
+-    }, this);
+-  },
+-
+-  /**
 -   * Click event handler for the ellipsis shown immediately after a long string.
 -   * This method retrieves the full string and updates the console output to
 -   * show it.
@@ -1046,7 +1224,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param number aSourceLine [optional]
     *        The line number on which the error occurred. If zero or omitted,
     *        there is no line number associated with this message.
-@@ -2802,17 +2737,17 @@ WebConsoleFrame.prototype = {
+@@ -2802,17 +2649,17 @@ WebConsoleFrame.prototype = {
  
        // If this event started with a mousedown event and it ends at a different
        // location, we consider this text selection.
@@ -1065,7 +1243,32 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * Currently this function only handles the timestamps preferences.
     *
     * @private
-@@ -3205,23 +3140,18 @@ JSTerm.prototype = {
+@@ -3183,57 +3030,53 @@ JSTerm.prototype = {
+ 
+     this.lastInputValue && this.setInputValue(this.lastInputValue);
+   },
+ 
+   /**
+    * The JavaScript evaluation response handler.
+    *
+    * @private
+-   * @param nsIDOMElement [aAfterNode]
+-   *        Optional DOM element after which the evaluation result will be
++   * @param object [aAfterMessage]
++   *        Optional message after which the evaluation result will be
+    *        inserted.
+    * @param function [aCallback]
+    *        Optional function to invoke when the evaluation result is added to
+    *        the output.
+    * @param object aResponse
+    *        The message received from the server.
+    */
+   _executeResultCallback:
+-  function JST__executeResultCallback(aAfterNode, aCallback, aResponse)
++  function JST__executeResultCallback(aAfterMessage, aCallback, aResponse)
+   {
+     if (!this.hud) {
+       return;
      }
      if (aResponse.error) {
        Cu.reportError("Evaluation error " + aResponse.error + ": " +
@@ -1088,8 +1291,25 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            this.clearOutput();
            break;
          case "inspectObject":
-           if (aAfterNode) {
-@@ -3252,76 +3182,47 @@ JSTerm.prototype = {
+-          if (aAfterNode) {
+-            if (!aAfterNode._objectActors) {
+-              aAfterNode._objectActors = new Set();
++          if (aAfterMessage) {
++            if (!aAfterMessage._objectActors) {
++              aAfterMessage._objectActors = new Set();
+             }
+-            aAfterNode._objectActors.add(helperResult.object.actor);
++            // TODO: message is probably already rendered.
++            aAfterMessage._objectActors.add(helperResult.object.actor);
+           }
+           this.openVariablesView({
+             label: VariablesView.getString(helperResult.object),
+             objectActor: helperResult.object,
+           });
+           break;
+         case "error":
+           try {
+@@ -3252,76 +3095,43 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
          result.type == "undefined" &&
@@ -1113,18 +1333,15 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
 -                              aAfterNode, aResponse.timestamp);
 -    }
-+    let options = {
-+      errorMessage: errorMessage,
-+      _afterMessageElement: aAfterNode,
-+    };
-+
-+    let msg = new Messages.JavaScriptEvalOutput(aResponse, options);
++    let msg = new Messages.JavaScriptEvalOutput(aResponse,
++                                                { errorMessage: errorMessage });
 +    this.hud.output.addMessage(msg);
  
      if (aCallback) {
        let oldFlushCallback = this.hud._flushCallback;
        this.hud._flushCallback = () => {
-         aCallback(node);
+-        aCallback(node);
++        aCallback(msg.element);
          if (oldFlushCallback) {
            oldFlushCallback();
            this.hud._flushCallback = oldFlushCallback;
@@ -1136,12 +1353,15 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      }
  
 -    node._objectActors = new Set();
-+    msg._objectActors = new Set();
- 
-     let error = aResponse.exception;
-     if (WebConsoleUtils.isActorGrip(error)) {
+-
+-    let error = aResponse.exception;
+-    if (WebConsoleUtils.isActorGrip(error)) {
 -      node._objectActors.add(error.actor);
-+      msg._objectActors.add(error.actor);
++    msg._afterMessage = aAfterMessage;
++    msg._objectActors = new Set();
++
++    if (WebConsoleUtils.isActorGrip(aResponse.exception)) {
++      msg._objectActors.add(aResponse.exception.actor);
      }
  
      if (WebConsoleUtils.isActorGrip(result)) {
@@ -1167,7 +1387,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -
 -        node.clipboardText += " " + ellipsis.textContent;
 -      }
-+      msg._objectActors.add(result.actor); // FIXME
++      msg._objectActors.add(result.actor);
      }
    },
  
@@ -1176,7 +1396,152 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
-@@ -4567,31 +4468,16 @@ JSTerm.prototype = {
+@@ -3332,18 +3142,22 @@ JSTerm.prototype = {
+   execute: function JST_execute(aExecuteString, aCallback)
+   {
+     // attempt to execute the content of the inputNode
+     aExecuteString = aExecuteString || this.inputNode.value;
+     if (!aExecuteString) {
+       return;
+     }
+ 
+-    let node = this.writeOutput(aExecuteString, CATEGORY_INPUT, SEVERITY_LOG);
+-    let onResult = this._executeResultCallback.bind(this, node, aCallback);
++    let message = new Messages.Simple(aExecuteString, {
++      category: "input",
++      severity: "log",
++    });
++    this.hud.output.addMessage(message);
++    let onResult = this._executeResultCallback.bind(this, message, aCallback);
+ 
+     let options = { frame: this.SELECTED_FRAME };
+     this.requestEvaluation(aExecuteString, options).then(onResult, onResult);
+ 
+     // Append a new value in the history of executed code, or overwrite the most
+     // recent entry. The most recent entry may contain the last edited input
+     // value that was not evaluated yet.
+     this.history[this.historyIndex++] = aExecuteString;
+@@ -3769,24 +3583,26 @@ JSTerm.prototype = {
+     if (aResponse.error) {
+       Cu.reportError("Web Console evaluation failed. " + aResponse.error + ":" +
+                      aResponse.message);
+ 
+       aCallback && aCallback(aResponse);
+       return;
+     }
+ 
+-    let exception = aResponse.exception;
+-    if (exception) {
+-      let node = this.writeOutput(aResponse.exceptionMessage,
+-                                  CATEGORY_OUTPUT, SEVERITY_ERROR,
+-                                  null, aResponse.timestamp);
+-      node._objectActors = new Set();
+-      if (WebConsoleUtils.isActorGrip(exception)) {
+-        node._objectActors.add(exception.actor);
++    if (aResponse.exceptionMessage) {
++      let message = new Messages.Simple(aResponse.exceptionMessage, {
++        category: "output",
++        severity: "error",
++        timestamp: aResponse.timestamp,
++      });
++      this.hud.output.addMessage(message);
++      message._objectActors = new Set();
++      if (WebConsoleUtils.isActorGrip(aResponse.exception)) {
++        message._objectActors.add(aResponse.exception.actor);
+       }
+     }
+ 
+     let helper = aResponse.helperResult || { type: null };
+     let helperGrip = null;
+     if (helper.type == "inspectObject") {
+       helperGrip = helper.object;
+     }
+@@ -3797,84 +3613,16 @@ JSTerm.prototype = {
+         this.hud._releaseObject(grip.actor);
+       }
+     }
+ 
+     aCallback && aCallback(aResponse);
+   },
+ 
+ 
+-
+-  /**
+-   * Writes a JS object to the JSTerm outputNode.
+-   *
+-   * @param string aOutputMessage
+-   *        The message to display.
+-   * @param function [aCallback]
+-   *        Optional function to invoke when users click the message.
+-   * @param nsIDOMNode [aNodeAfter]
+-   *        Optional DOM node after which you want to insert the new message.
+-   *        This is used when execution results need to be inserted immediately
+-   *        after the user input.
+-   * @param number [aTimestamp]
+-   *        Optional timestamp to show for the output message (millisconds since
+-   *        the UNIX epoch). If no timestamp is provided then Date.now() is
+-   *        used.
+-   * @return nsIDOMNode
+-   *         The new message node.
+-   */
+-  writeOutputJS:
+-  function JST_writeOutputJS(aOutputMessage, aCallback, aNodeAfter, aTimestamp)
+-  {
+-    let link = null;
+-    if (aCallback) {
+-      link = this.hud.document.createElementNS(XHTML_NS, "a");
+-      link.setAttribute("aria-haspopup", true);
+-      link.textContent = aOutputMessage;
+-      link.href = "#";
+-      link.draggable = false;
+-      this.hud._addMessageLinkCallback(link, aCallback);
+-    }
+-
+-    return this.writeOutput(link || aOutputMessage, CATEGORY_OUTPUT,
+-                            SEVERITY_LOG, aNodeAfter, aTimestamp);
+-  },
+-
+-  /**
+-   * Writes a message to the HUD that originates from the interactive
+-   * JavaScript console.
+-   *
+-   * @param nsIDOMNode|string aOutputMessage
+-   *        The message to display.
+-   * @param number aCategory
+-   *        The category of message: one of the CATEGORY_ constants.
+-   * @param number aSeverity
+-   *        The severity of message: one of the SEVERITY_ constants.
+-   * @param nsIDOMNode [aNodeAfter]
+-   *        Optional DOM node after which you want to insert the new message.
+-   *        This is used when execution results need to be inserted immediately
+-   *        after the user input.
+-   * @param number [aTimestamp]
+-   *        Optional timestamp to show for the output message (millisconds since
+-   *        the UNIX epoch). If no timestamp is provided then Date.now() is
+-   *        used.
+-   * @return nsIDOMNode
+-   *         The new message node.
+-   */
+-  writeOutput:
+-  function JST_writeOutput(aOutputMessage, aCategory, aSeverity, aNodeAfter,
+-                           aTimestamp)
+-  {
+-    let node = this.hud.createMessageNode(aCategory, aSeverity, aOutputMessage,
+-                                          null, null, null, null, aTimestamp);
+-    node._outputAfterNode = aNodeAfter;
+-    this.hud.outputMessage(aCategory, node);
+-    return node;
+-  },
+-
+   /**
+    * Clear the Web Console output.
+    *
+    * This method emits the "messages-cleared" notification.
+    *
+    * @param boolean aClearStorage
+    *        True if you want to clear the console messages storage associated to
+    *        this Web Console.
+@@ -4567,31 +4315,16 @@ JSTerm.prototype = {
     */
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
