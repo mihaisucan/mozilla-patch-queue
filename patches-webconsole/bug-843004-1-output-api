@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent 53627e59f76187a4df6d86750c4538c497a44b1c
+# Parent 7d968603fad1e2a3b8add078639da230f512b115
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1384980395 -7200
+# Date 1385070874 -7200
 
-Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee
+Bug 843004 - Part 1: use the ConsoleOutput API for eval results and for console API messages; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-o,mochitest-bc -t none
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
@@ -103,8 +103,32 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   * @param object owner
   *        The console output owner. This usually the WebConsoleFrame instance.
   *        Any other object can be used, as long as it has the following
-@@ -203,16 +260,43 @@ ConsoleOutput.prototype = {
+@@ -74,16 +131,24 @@ ConsoleOutput.prototype = {
+    * The DOM window that holds the output.
+    * @type Window
+    */
+   get window() {
+     return this.owner.window;
+   },
+ 
+   /**
++   * Getter for the debugger WebConsoleClient.
++   * @type object
++   */
++  get webConsoleClient() {
++    return this.owner.webConsoleClient;
++  },
++
++  /**
+    * Add a message to output.
+    *
+    * @param object ...args
+    *        Any number of Message objects.
+    * @return this
+    */
+   addMessage: function(...args)
    {
+@@ -204,16 +269,34 @@ ConsoleOutput.prototype = {
      let selection = this.window.getSelection();
      selection.removeAllRanges();
      let range = this.document.createRange();
@@ -112,34 +136,25 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      selection.addRange(range);
    },
  
+   /**
++   * Open an URL in a new tab.
++   * @see WebConsole.openLink() in hudservice.js
++   */
 +  openLink: function()
 +  {
 +    this.owner.owner.openLink.apply(this.owner.owner, arguments);
 +  },
 +
++  /**
++   * Open the variables view to inspect an object actor.
++   * @see JSTerm.openVariablesView() in webconsole.js
++   */
 +  openVariablesView: function()
 +  {
 +    this.owner.jsterm.openVariablesView.apply(this.owner.jsterm, arguments);
 +  },
 +
 +  /**
-+   * Inform user that the string he tries to view is too long.
-+   *
-+   * @private
-+   * @return object
-+   *         The new Message object.
-+   */
-+  _logWarningAboutStringTooLong: function()
-+  {
-+    let msg = new Messages.Simple(l10n.getStr("longStringTooLong"), {
-+      category: "output",
-+      severity: "warning",
-+    });
-+    this.addMessage(msg);
-+    return msg;
-+  },
-+
-   /**
     * Destroy this ConsoleOutput instance.
     */
    destroy: function()
@@ -147,7 +162,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      this.owner = null;
    },
  }; // ConsoleOutput.prototype
-@@ -227,16 +311,18 @@ let Messages = {};
+ 
+@@ -227,16 +310,19 @@ let Messages = {};
   * The BaseMessage object is used for all types of messages. Every kind of
   * message should use this object as its base.
   *
@@ -157,7 +173,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  {
    this.widgets = new Set();
 +  this._onClickAnchor = this._onClickAnchor.bind(this);
-+  this._repeatID = gSequenceId();
++  this._repeatID = { uid: gSequenceId() };
++  this.textContent = "";
  };
  
  Messages.BaseMessage.prototype = {
@@ -166,7 +183,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     *
     * @type object|null
     *       This is |null| if the message is not yet initialized.
-@@ -263,16 +349,24 @@ Messages.BaseMessage.prototype = {
+@@ -263,68 +349,99 @@ Messages.BaseMessage.prototype = {
     * Tells if this message is visible or not.
     * @type boolean
     */
@@ -186,12 +203,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     * Holds the text-only representation of the message.
     * @type string
     */
-   textContent: "",
+-  textContent: "",
++  textContent: null,
  
    /**
     * Set of widgets included in this message.
     * @type Set
-@@ -282,16 +376,18 @@ Messages.BaseMessage.prototype = {
+    */
+   widgets: null,
+ 
    // Properties that allow compatibility with the current Web Console output
    // implementation.
    _categoryCompat: null,
@@ -200,9 +220,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    _severityNameCompat: null,
    _filterKeyCompat: null,
  
-+  _repeatID: 0,
-+
    /**
++   * Object that is JSON-ified and used as a non-unique ID for tracking
++   * duplicate messages.
++   * @private
++   * @type object
++   */
++  _repeatID: null,
++
++  /**
     * Initialize the message.
     *
     * @param object output
@@ -210,7 +236,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     * @param object [parent=null]
     *        Optional: a different message object that owns this instance.
     * @return this
-@@ -299,32 +395,42 @@ Messages.BaseMessage.prototype = {
+    */
    init: function(output, parent=null)
    {
      this.output = output;
@@ -221,11 +247,12 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
 +   * Non-unique ID for this message object used for tracking duplicate messages.
 +   * Different message kinds can identify themselves based their own criteria.
-+   * @return string|number
++   *
++   * @return string
 +   */
 +  getRepeatID: function()
 +  {
-+    return this._repeatID;
++    return JSON.stringify(this._repeatID);
 +  },
 +
 +  /**
@@ -246,6 +273,10 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     * compatible with the current implementation.
 -   * TODO: remove this once bug 778766.
 +   * TODO: remove this once bug 778766 is fixed.
++   *
++   * @private
++   * @return Element
++   *         The DOM element that wraps the message.
     */
    _renderCompat: function()
    {
@@ -254,7 +285,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      container.id = "console-msg-" + gSequenceId();
      container.className = "message";
      container.category = this._categoryCompat;
-@@ -333,40 +439,106 @@ Messages.BaseMessage.prototype = {
+@@ -333,41 +450,81 @@ Messages.BaseMessage.prototype = {
      container.setAttribute("severity", this._severityNameCompat);
      container.setAttribute("filter", this._filterKeyCompat);
      container.clipboardText = this.textContent;
@@ -264,6 +295,16 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      return container;
    },
 +
++  /**
++   * Add a click callback to a given DOM element.
++   *
++   * @private
++   * @param Element element
++   *        The DOM element to which you want to add a click event handler.
++   * @param function [callback=this._onClickAnchor]
++   *        Optional click event handler. The default event handler is
++   *        |this._onClickAnchor|.
++   */
 +  _addLinkCallback: function(element, callback = this._onClickAnchor)
 +  {
 +    // This is going into the WebConsoleFrame object instance that owns
@@ -274,58 +315,17 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    this.output.owner._addMessageLinkCallback(element, callback);
 +  },
 +
++  /**
++   * The default |click| event handler for links in the output. This function
++   * opens the anchor's link in a new tab.
++   *
++   * @private
++   * @param Event event
++   *        The DOM event that invoked this function.
++   */
 +  _onClickAnchor: function(event)
 +  {
 +    this.output.openLink(event.target.href);
-+  },
-+
-+  /**
-+   * The click event handler for objects shown inline.
-+   *
-+   * @private
-+   * @param object aObjectActor
-+   *        The object actor grip.
-+   * @param nsIDOMNode [aAnchor]
-+   *        Optional object inspector anchor element. This is the clickable element
-+   *        in the message we display.
-+   */
-+  _onClickObjectActor: function(objectActor, event)
-+  {
-+    let label = event && event.target ? event.target.textContent :
-+                VariablesView.getString(objectActor);
-+    this.output.openVariablesView({
-+      label: label,
-+      objectActor: objectActor,
-+      autofocus: true,
-+    });
-+  },
-+
-+  _onClickLongString: function(longStringActor, formatter, event)
-+  {
-+    let ellipsis = event.target;
-+    if (!formatter) {
-+      formatter = function(s) s;
-+    }
-+
-+    let longString = this.output.owner.webConsoleClient.longString(longStringActor);
-+    let toIndex = Math.min(longString.length, MAX_LONG_STRING_LENGTH);
-+
-+    longString.substring(longString.initial.length, toIndex, (response) => {
-+      if (response.error) {
-+        Cu.reportError("LongString substring failure: " + response.error);
-+        return;
-+      }
-+
-+      let prev = ellipsis.previousSibling;
-+      prev.textContent = formatter(longString.initial + response.substring);
-+      ellipsis.remove();
-+
-+      this.output.owner.emit("messages-updated", new Set([this.element]));
-+
-+      if (toIndex != longString.length) {
-+        this.output._logWarningAboutStringTooLong();
-+      }
-+    });
 +  },
  }; // Messages.BaseMessage.prototype
  
@@ -352,9 +352,14 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
  Messages.NavigationMarker.prototype = Heritage.extend(Messages.BaseMessage.prototype,
  {
+   /**
++   * The address of the loading page.
++   * @private
++   * @type string
++   */
 +  _url: null,
 +
-   /**
++  /**
     * Message timestamp.
     *
     * @type number
@@ -362,7 +367,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     */
    timestamp: 0,
  
-@@ -394,37 +566,488 @@ Messages.NavigationMarker.prototype = He
+   _categoryCompat: COMPAT.CATEGORIES.NETWORK,
+@@ -394,37 +551,812 @@ Messages.NavigationMarker.prototype = He
  
      let doc = this.output.document;
      let urlnode = doc.createElementNS(XHTML_NS, "a");
@@ -398,7 +404,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *
 + * @constructor
 + * @extends Messages.BaseMessage
-+ * @param string|DOMElement message
++ * @param string|Node|function message
 + *        The message to display.
 + * @param object [options]
 + *        Options for this message:
@@ -420,7 +426,6 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *        - filterDuplicates: (boolean) true if you do want this message to be
 + *        filtered as a potential duplicate message, false otherwise.
 + */
-+// TODO: fix/update comments
 +Messages.Simple = function(message, options = {})
 +{
 +  Messages.BaseMessage.call(this);
@@ -431,29 +436,78 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  this.timestamp = options.timestamp || Date.now();
 +  this.private = !!options.private;
 +
-+  this._filterDuplicates = options.filterDuplicates;
-+  if (this._filterDuplicates) {
-+    this._repeatID = "";
-+  }
-+
 +  this._message = message;
 +  this._className = options.className;
 +  this._link = options.link;
 +  this._linkCallback = options.linkCallback;
++  this._filterDuplicates = options.filterDuplicates;
 +};
 +
 +Messages.Simple.prototype = Heritage.extend(Messages.BaseMessage.prototype,
 +{
++  /**
++   * Message category.
++   * @type string
++   */
 +  category: null,
++
++  /**
++   * Message severity.
++   * @type string
++   */
 +  severity: null,
++
++  /**
++   * Message source location. Properties: url, line, column, lineText.
++   * @type object
++   */
 +  location: null,
++
++  /**
++   * Tells if this message comes from a private browsing context.
++   * @type boolean
++   */
 +  private: false,
++
++  /**
++   * Custom class name for the DOM element of the message.
++   * @private
++   * @type string
++   */
++  _className: null,
++
++  /**
++   * Message link - if this message is clicked then this URL opens in a new tab.
++   * @private
++   * @type string
++   */
 +  _link: null,
++
++  /**
++   * Message click event handler.
++   * @private
++   * @type function
++   */
 +  _linkCallback: null,
++
++  /**
++   * Tells if this message should be checked if it is a duplicate of another
++   * message or not.
++   */
++  _filterDuplicates: false,
++
++  /**
++   * The raw message displayed by this Message object. This can be a function,
++   * DOM node or a string.
++   *
++   * @private
++   * @type mixed
++   */
++  _message: null,
++
 +  _afterMessage: null,
 +  _objectActors: null,
 +  _groupDepthCompat: 0,
-+  _filterDuplicates: false,
 +
 +  /**
 +   * Message timestamp.
@@ -490,29 +544,42 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  {
 +    Messages.BaseMessage.prototype.init.apply(this, arguments);
 +    this._groupDepthCompat = this.output.owner.groupDepth;
++    this._initRepeatID();
 +    return this;
++  },
++
++  _initRepeatID: function()
++  {
++    if (!this._filterDuplicates) {
++      return;
++    }
++
++    // Add the properties we care about for identifying duplicate messages.
++    let rid = this._repeatID;
++    delete rid.uid;
++
++    rid.category = this.category;
++    rid.severity = this.severity;
++    rid.private = this.private;
++    rid.location = this.location;
++    rid.link = this._link;
++    rid.linkCallback = this._linkCallback + "";
++    rid.className = this._className;
++    rid.groupDepth = this._groupDepthCompat;
++    rid.textContent = "";
 +  },
 +
 +  getRepeatID: function()
 +  {
-+    if (!this._filterDuplicates) {
-+      return this._repeatID;
++    // No point in returning a string that includes other properties when there
++    // is a unique ID.
++    if (this._repeatID.uid) {
++      return JSON.stringify({ uid: this._repeatID.uid });
 +    }
 +
-+    let uid = [this._repeatID, this.category, this.severity, this._link,
-+               this._className, this._linkCallback, this.private,
-+               this._groupDepthCompat];
-+    if (this.location) {
-+      let {url, line, column, lineText} = this.location;
-+      uid.push(url, line, column, lineText);
-+    }
-+    return uid.join(":");
++    return JSON.stringify(this._repeatID);
 +  },
 +
-+  /**
-+   * Prepare the DOM element for this message.
-+   * @return this
-+   */
 +  render: function()
 +  {
 +    if (this.element) {
@@ -520,18 +587,21 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    }
 +
 +    let timestamp = new Widgets.MessageTimestamp(this, this.timestamp).render();
-+    this.widgets.add(timestamp);
 +
 +    let icon = this.document.createElementNS(XHTML_NS, "span");
 +    icon.className = "icon";
 +
 +    let body = this._renderBody();
-+    this._repeatID += ":" + body.textContent;
++    this._repeatID.textContent += "|" + body.textContent;
 +
 +    let repeatNode = this._renderRepeatNode();
 +    let location = this._renderLocation();
 +
 +    Messages.BaseMessage.prototype.render.call(this);
++    if (this._className) {
++      this.element.className += " " + this._className;
++    }
++
 +    this.element.appendChild(timestamp.element);
 +    this.element.appendChild(icon);
 +    this.element.appendChild(body);
@@ -542,6 +612,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +      this.element.appendChild(location);
 +    }
 +    this.element.appendChild(this.document.createTextNode("\n"));
++
++    this.element.clipboardText = this.element.textContent;
 +
 +    if (this.private) {
 +      this.element.setAttribute("private", true);
@@ -560,13 +632,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return this;
 +  },
 +
++  /**
++   * Render the message body DOM element.
++   * @private
++   * @return Element
++   */
 +  _renderBody: function()
 +  {
 +    let body = this.document.createElementNS(XHTML_NS, "span");
 +    body.className = "body devtools-monospace";
-+    if (this._className) {
-+      body.className += " " + this._className;
-+    }
 +
 +    let anchor, container = body;
 +    if (this._link || this._linkCallback) {
@@ -577,7 +651,9 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +      body.appendChild(anchor);
 +    }
 +
-+    if (this._message instanceof Ci.nsIDOMNode) {
++    if (typeof this._message == "function") {
++      container.appendChild(this._message(this));
++    } else if (this._message instanceof Ci.nsIDOMNode) {
 +      container.appendChild(this._message);
 +    } else {
 +      container.textContent = this._message;
@@ -586,6 +662,11 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return body;
 +  },
 +
++  /**
++   * Render the repeat bubble DOM element part of the message.
++   * @private
++   * @return Element
++   */
 +  _renderRepeatNode: function()
 +  {
 +    if (!this._filterDuplicates) {
@@ -600,6 +681,11 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return repeatNode;
 +  },
 +
++  /**
++   * Render the message source location DOM element.
++   * @private
++   * @return Element
++   */
 +  _renderLocation: function()
 +  {
 +    if (!this.location) {
@@ -623,10 +709,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *
 + * @constructor
 + * @extends Messages.Simple
-+ * @param object result
-+ *        The message to display.
++ * @param array messagePieces
++ *        The message to display given as an array of elements. Each array
++ *        element can be a DOM node, function, ObjectActor, LongString or
++ *        a string.
++ * @param object [options]
++ *        Options for rendering this message:
++ *        - quoteStrings: boolean that tells if you want strings to be wrapped
++ *        in quotes or not.
 + */
-+// TODO update comments
 +Messages.Extended = function(messagePieces, options = {})
 +{
 +  Messages.Simple.call(this, null, options);
@@ -637,13 +728,40 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    this._quoteStrings = options.quoteStrings;
 +  }
 +
-+  this._repeatID += ":" + this._quoteStrings;
++  this._repeatID.quoteStrings = this._quoteStrings;
++  this._repeatID.messagePieces = messagePieces + "";
++  this._repeatID.actors = new Set(); // using a set to avoid duplicates
 +};
 +
 +Messages.Extended.prototype = Heritage.extend(Messages.Simple.prototype,
 +{
++  /**
++   * The message pieces displayed by this message instance.
++   * @private
++   * @type array
++   */
 +  _messagePieces: null,
++
++  /**
++   * Boolean that tells if the strings displayed in this message are wrapped.
++   * @private
++   * @type boolean
++   */
 +  _quoteStrings: true,
++
++  getRepeatID: function()
++  {
++    if (this._repeatID.uid) {
++      return JSON.stringify({ uid: this._repeatID.uid });
++    }
++
++    // Sets are not stringified correctly. Temporarily switching to an array.
++    let actors = this._repeatID.actors;
++    this._repeatID.actors = [...actors];
++    let result = JSON.stringify(this._repeatID);
++    this._repeatID.actors = actors;
++    return result;
++  },
 +
 +  render: function()
 +  {
@@ -664,55 +782,53 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return Messages.Simple.prototype.render.call(this);
 +  },
 +
++  /**
++   * Render the separator between the pieces of the message.
++   *
++   * @private
++   * @return Element
++   */
 +  _renderBodyPieceSeparator: function() { return null; },
 +
++  /**
++   * Render one piece/element of the message array.
++   *
++   * @private
++   * @param mixed piece
++   *        Message element to display - this can be a LongString, ObjectActor,
++   *        DOM node or a function to invoke.
++   * @return Element
++   */
 +  _renderBodyPiece: function(piece)
 +  {
 +    if (piece instanceof Ci.nsIDOMNode) {
 +      return piece;
-+    } else if (typeof piece == "function") {
++    }
++    if (typeof piece == "function") {
 +      return piece(this);
 +    }
 +
-+    let result = this.document.createDocumentFragment();
 +    let isPrimitive = VariablesView.isPrimitive({ value: piece });
 +    let isActorGrip = WebConsoleUtils.isActorGrip(piece);
-+    let str;
-+    if (!this._quoteStrings && typeof piece == "string") {
-+      str = piece;
-+    } else {
-+      str = VariablesView.getString(piece);
++
++    if (isActorGrip) {
++      this._repeatID.actors.add(piece.actor);
++
++      if (!isPrimitive) {
++        let widget = new Widgets.JSObject(this, piece).render();
++        return widget.element;
++      }
++      if (piece.type == "longString") {
++        let widget = new Widgets.LongString(this, piece).render();
++        return widget.element;
++      }
 +    }
 +
-+    // TODO: split into widgets
-+
-+    if (piece && !isPrimitive && isActorGrip) {
-+      let anchor = result = this.document.createElementNS(XHTML_NS, "a");
-+      anchor.href = "#";
-+      anchor.draggable = false;
-+      anchor.textContent = str;
-+      this._addLinkCallback(anchor, this._onClickObjectActor.bind(this, piece));
-+      this._repeatID += ":" + piece.actor;
-+    } else if (isPrimitive) {
-+      result.textContent = str;
-+
-+      if (piece.type == "longString") {
-+        let ellipsis = this.document.createElementNS(XHTML_NS, "a");
-+        ellipsis.className = "longStringEllipsis";
-+        ellipsis.textContent = l10n.getStr("longStringEllipsis");
-+        ellipsis.href = "#";
-+        ellipsis.draggable = false;
-+
-+        let formatter = function(s) '"' + s + '"';
-+        let onclick = this._onClickLongString.bind(this, piece, formatter);
-+        this._addLinkCallback(ellipsis, onclick);
-+
-+        result.appendChild(ellipsis);
-+
-+        this._repeatID += ":" + piece.actor;
-+      }
-+    } else {
++    let result = this.document.createDocumentFragment();
++    if (!isPrimitive || (!this._quoteStrings && typeof piece == "string")) {
 +      result.textContent = piece;
++    } else {
++      result.textContent = VariablesView.getString(piece);
 +    }
 +
 +    return result;
@@ -726,10 +842,12 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *
 + * @constructor
 + * @extends Messages.Extended
-+ * @param object result
-+ *        The message to display.
++ * @param object evalResponse
++ *        The evaluation response packet received from the server.
++ * @param string [errorMessage]
++ *        Optional error message to display.
 + */
-+Messages.JavaScriptEvalOutput = function(evalResponse, {errorMessage})
++Messages.JavaScriptEvalOutput = function(evalResponse, errorMessage)
 +{
 +  let severity = "log", msg, quoteStrings = true;
 +
@@ -757,8 +875,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *
 + * @constructor
 + * @extends Messages.Extended
-+ * @param object result
-+ *        The message to display.
++ * @param object packet
++ *        The Console API call packet received from the server.
 + */
 +Messages.ConsoleGeneric = function(packet)
 +{
@@ -774,7 +892,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    },
 +  };
 +  Messages.Extended.call(this, packet.arguments, options);
-+  this._repeatID += ":" + packet.level;
++  this._repeatID.consoleApiLevel = packet.level;
 +};
 +
 +Messages.ConsoleGeneric.prototype = Heritage.extend(Messages.Extended.prototype,
@@ -801,15 +919,42 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +};
 +
 +Widgets.BaseWidget.prototype = {
++  /**
++   * The owning message object.
++   * @type object
++   */
 +  message: null,
-+  element: null,
-+  textContent: "",
 +
++  /**
++   * The DOM element of the rendered widget.
++   * @type Element
++   */
++  element: null,
++
++  /**
++   * Getter for the DOM document that holds the output.
++   * @type Document
++   */
 +  get document() {
 +    return this.message.document;
 +  },
 +
++  /**
++   * The ConsoleOutput instance that owns this widget instance.
++   */
++  get output() {
++    return this.message.output;
++  },
++
++  /**
++   * Render the widget DOM element.
++   * @return this
++   */
 +  render: function() { },
++
++  /**
++   * Destroy this widget instance.
++   */
 +  destroy: function() { },
 +};
 +
@@ -830,16 +975,21 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +Widgets.MessageTimestamp.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
 +{
++  /**
++   * The UNIX timestamp.
++   * @type number
++   */
++  timestamp: 0,
++
 +  render: function()
 +  {
 +    if (this.element) {
 +      return this;
 +    }
 +
-+    this.textContent = l10n.timestampString(this.timestamp);
 +    this.element = this.document.createElementNS(XHTML_NS, "span");
 +    this.element.className = "timestamp devtools-monospace";
-+    this.element.textContent = this.textContent + " ";
++    this.element.textContent = l10n.timestampString(this.timestamp) + " ";
 +
 +    // Apply the current group by indenting appropriately.
 +    // TODO: remove this once bug 778766 is fixed.
@@ -848,7 +998,187 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    return this;
 +  },
-+});
++}); // Widgets.MessageTimestamp.prototype
++
++
++/**
++ * The JavaScript object widget.
++ *
++ * @constructor
++ * @param object message
++ *        The owning message.
++ * @param object objectActor
++ *        The ObjectActor to display.
++ */
++Widgets.JSObject = function(message, objectActor)
++{
++  Widgets.BaseWidget.call(this, message);
++  this.objectActor = objectActor;
++  this._onClick = this._onClick.bind(this);
++};
++
++Widgets.JSObject.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
++{
++  /**
++   * The ObjectActor displayed by the widget.
++   * @type object
++   */
++  objectActor: null,
++
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let anchor = this.element = this.document.createElementNS(XHTML_NS, "a");
++    anchor.href = "#";
++    anchor.draggable = false;
++    anchor.textContent = VariablesView.getString(this.objectActor);
++    this.message._addLinkCallback(anchor, this._onClick);
++
++    return this;
++  },
++
++  /**
++   * The click event handler for objects shown inline.
++   * @private
++   */
++  _onClick: function()
++  {
++    this.output.openVariablesView({
++      label: this.element.textContent,
++      objectActor: this.objectActor,
++      autofocus: true,
++    });
++  },
++}); // Widgets.JSObject.prototype
++
++/**
++ * The long string widget.
++ *
++ * @constructor
++ * @param object message
++ *        The owning message.
++ * @param object longStringActor
++ *        The LongStringActor to display.
++ */
++Widgets.LongString = function(message, longStringActor)
++{
++  Widgets.BaseWidget.call(this, message);
++  this.longStringActor = longStringActor;
++  this._onClick = this._onClick.bind(this);
++  this._onSubstring = this._onSubstring.bind(this);
++};
++
++Widgets.LongString.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
++{
++  /**
++   * The LongStringActor displayed by the widget.
++   * @type object
++   */
++  longStringActor: null,
++
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let result = this.element = this.document.createElementNS(XHTML_NS, "span");
++    result.className = "longString";
++    this._renderString(this.longStringActor.initial);
++    result.appendChild(this._renderEllipsis());
++
++    return this;
++  },
++
++  /**
++   * Render the long string in the widget element.
++   * @private
++   * @param string str
++   *        The string to display.
++   */
++  _renderString: function(str)
++  {
++    if (this.message._quoteStrings) {
++      this.element.textContent = VariablesView.getString(str);
++    } else {
++      this.element.textContent = str;
++    }
++  },
++
++  /**
++   * Render the anchor ellipsis that allows the user to expand the long string.
++   *
++   * @private
++   * @return Element
++   */
++  _renderEllipsis: function()
++  {
++    let ellipsis = this.document.createElementNS(XHTML_NS, "a");
++    ellipsis.className = "longStringEllipsis";
++    ellipsis.textContent = l10n.getStr("longStringEllipsis");
++    ellipsis.href = "#";
++    ellipsis.draggable = false;
++    this.message._addLinkCallback(ellipsis, this._onClick);
++
++    return ellipsis;
++  },
++
++  /**
++   * The click event handler for the ellipsis shown after the short string. This
++   * function expands the element to show the full string.
++   * @private
++   */
++  _onClick: function()
++  {
++    let longString = this.output.webConsoleClient.longString(this.longStringActor);
++    let toIndex = Math.min(longString.length, MAX_LONG_STRING_LENGTH);
++
++    longString.substring(longString.initial.length, toIndex, this._onSubstring);
++  },
++
++  /**
++   * The longString substring response callback.
++   *
++   * @private
++   * @param object response
++   *        Response packet.
++   */
++  _onSubstring: function(response)
++  {
++    if (response.error) {
++      Cu.reportError("LongString substring failure: " + response.error);
++      return;
++    }
++
++    this.element.lastChild.remove();
++    this.element.classList.remove("longString");
++
++    this._renderString(this.longStringActor.initial + response.substring);
++
++    this.output.owner.emit("messages-updated", new Set([this.message.element]));
++
++    let toIndex = Math.min(this.longStringActor.length, MAX_LONG_STRING_LENGTH);
++    if (toIndex != this.longStringActor.length) {
++      this._logWarningAboutStringTooLong();
++    }
++  },
++
++  /**
++   * Inform user that the string he tries to view is too long.
++   * @private
++   */
++  _logWarningAboutStringTooLong: function()
++  {
++    let msg = new Messages.Simple(l10n.getStr("longStringTooLong"), {
++      category: "output",
++      severity: "warning",
++    });
++    this.output.addMessage(msg);
++  },
++}); // Widgets.LongString.prototype
 +
 +
  function gSequenceId()
@@ -889,6 +1219,121 @@ diff --git a/browser/devtools/webconsole/hudservice.js b/browser/devtools/webcon
  
  // The preference prefix for all of the Browser Console filters.
  const BROWSER_CONSOLE_FILTER_PREFS_PREFIX = "devtools.browserconsole.filter.";
+@@ -103,16 +103,17 @@ HUD_SERVICE.prototype =
+    *        The window of the browser console owner.
+    * @return object
+    *         A promise object for the opening of the new BrowserConsole instance.
+    */
+   openBrowserConsole:
+   function HS_openBrowserConsole(aTarget, aIframeWindow, aChromeWindow)
+   {
+     let hud = new BrowserConsole(aTarget, aIframeWindow, aChromeWindow);
++    this._browserConsoleID = hud.hudId;
+     this.consoles.set(hud.hudId, hud);
+     return hud.init();
+   },
+ 
+   /**
+    * Returns the Web Console object associated to a content window.
+    *
+    * @param nsIDOMWindow aContentWindow
+@@ -252,17 +253,16 @@ HUD_SERVICE.prototype =
+       });
+ 
+       return deferred.promise;
+     }
+ 
+     connect().then(getTarget).then(openWindow).then((aWindow) => {
+       this.openBrowserConsole(target, aWindow, aWindow)
+         .then((aBrowserConsole) => {
+-          this._browserConsoleID = aBrowserConsole.hudId;
+           this._browserConsoleDefer.resolve(aBrowserConsole);
+           this._browserConsoleDefer = null;
+         })
+     }, console.error);
+ 
+     return this._browserConsoleDefer.promise;
+   },
+ 
+diff --git a/browser/devtools/webconsole/panel.js b/browser/devtools/webconsole/panel.js
+--- a/browser/devtools/webconsole/panel.js
++++ b/browser/devtools/webconsole/panel.js
+@@ -1,17 +1,17 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+ const {Cc, Ci, Cu} = require("chrome");
+ 
+-loader.lazyGetter(this, "promise", () => require("sdk/core/promise"));
++loader.lazyImporter(this, "promise", "resource://gre/modules/Promise.jsm", "Promise");
+ loader.lazyGetter(this, "HUDService", () => require("devtools/webconsole/hudservice"));
+ loader.lazyGetter(this, "EventEmitter", () => require("devtools/shared/event-emitter"));
+ 
+ /**
+  * A DevToolPanel that controls the Web Console.
+  */
+ function WebConsolePanel(iframeWindow, toolbox)
+ {
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -3,17 +3,17 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ let WebConsoleUtils, gDevTools, TargetFactory, console, promise, require;
+ 
+ (() => {
+   gDevTools = Cu.import("resource:///modules/devtools/gDevTools.jsm", {}).gDevTools;
+   console = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).console;
+-  promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
++  promise = Cu.import("resource://gre/modules/Promise.jsm", {}).Promise;
+ 
+   let tools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
+   let utils = tools.require("devtools/toolkit/webconsole/utils");
+   TargetFactory = tools.TargetFactory;
+   WebConsoleUtils = utils.Utils;
+   require = tools.require;
+ })();
+ // promise._reportErrors = true; // please never leave me.
+@@ -1067,30 +1067,20 @@ function waitForMessages(aOptions)
+     if (aRule.consoleGroup && !checkConsoleGroup(aRule, aElement)) {
+       return false;
+     }
+ 
+     if (aRule.source && !checkSource(aRule, aElement)) {
+       return false;
+     }
+ 
+-    if (aRule.type) {
+-      // The rule tries to match the newer types of messages, based on their
+-      // object constructor.
+-      if (!aElement._messageObject ||
+-          !(aElement._messageObject instanceof aRule.type)) {
+-        return false;
+-      }
+-    }
+-    else if (aElement._messageObject) {
+-      // If the message element holds a reference to its object, it means this
+-      // is a newer message type. All of the older waitForMessages() rules do
+-      // not expect this kind of messages. We return false here.
+-      // TODO: we keep this behavior until bug 778766 is fixed. After that we
+-      // will not require |type| to match newer types of messages.
++    // The rule tries to match the newer types of messages, based on their
++    // object constructor.
++    if (aRule.type && (!aElement._messageObject ||
++                       !(aElement._messageObject instanceof aRule.type))) {
+       return false;
+     }
+ 
+     let partialMatch = !!(aRule.consoleTrace || aRule.consoleTime ||
+                           aRule.consoleTimeEnd || aRule.type);
+ 
+     if ("category" in aRule && aElement.category != aRule.category) {
+       if (partialMatch) {
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -1431,7 +1876,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
            break;
          case "error":
            try {
-@@ -3252,76 +3111,43 @@ JSTerm.prototype = {
+@@ -3252,76 +3111,42 @@ JSTerm.prototype = {
      // Hide undefined results coming from JSTerm helper functions.
      if (!errorMessage && result && typeof result == "object" &&
          result.type == "undefined" &&
@@ -1455,8 +1900,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
 -      node = this.writeOutput(resultString, CATEGORY_OUTPUT, SEVERITY_LOG,
 -                              aAfterNode, aResponse.timestamp);
 -    }
-+    let msg = new Messages.JavaScriptEvalOutput(aResponse,
-+                                                { errorMessage: errorMessage });
++    let msg = new Messages.JavaScriptEvalOutput(aResponse, errorMessage);
 +    this.hud.output.addMessage(msg);
  
      if (aCallback) {
@@ -1518,7 +1962,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     *
     * @param string [aExecuteString]
     *        The string you want to execute. If this is not provided, the current
-@@ -3332,18 +3158,22 @@ JSTerm.prototype = {
+@@ -3332,18 +3157,22 @@ JSTerm.prototype = {
    execute: function JST_execute(aExecuteString, aCallback)
    {
      // attempt to execute the content of the inputNode
@@ -1543,7 +1987,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      // recent entry. The most recent entry may contain the last edited input
      // value that was not evaluated yet.
      this.history[this.historyIndex++] = aExecuteString;
-@@ -3769,24 +3599,26 @@ JSTerm.prototype = {
+@@ -3769,24 +3598,26 @@ JSTerm.prototype = {
      if (aResponse.error) {
        Cu.reportError("Web Console evaluation failed. " + aResponse.error + ":" +
                       aResponse.message);
@@ -1578,7 +2022,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      if (helper.type == "inspectObject") {
        helperGrip = helper.object;
      }
-@@ -3797,84 +3629,16 @@ JSTerm.prototype = {
+@@ -3797,84 +3628,16 @@ JSTerm.prototype = {
          this.hud._releaseObject(grip.actor);
        }
      }
@@ -1663,7 +2107,7 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
     * @param boolean aClearStorage
     *        True if you want to clear the console messages storage associated to
     *        this Web Console.
-@@ -4567,31 +4331,16 @@ JSTerm.prototype = {
+@@ -4567,31 +4330,16 @@ JSTerm.prototype = {
     */
    updateCompleteNode: function JSTF_updateCompleteNode(aSuffix)
    {
