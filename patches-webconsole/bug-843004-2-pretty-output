@@ -1,0 +1,71 @@
+# HG changeset patch
+# Parent d558b882d048d4279647599f3d643a8f1d8e6d60
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1385150267 -7200
+
+diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
+--- a/browser/devtools/shared/widgets/VariablesView.jsm
++++ b/browser/devtools/shared/widgets/VariablesView.jsm
+@@ -3183,16 +3183,25 @@ VariablesView.getString = function(aGrip
+       case "NaN":
+       case "Infinity":
+       case "-Infinity":
+       case "-0":
+         return aGrip.type;
+       case "longString":
+         return "\"" + aGrip.initial + "\"";
+       default:
++        if (aGrip.type == "object" && aGrip.class == "Function") {
++          let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name;
++          let params = aGrip.parameterNames;
++          //let params = aGrip.;
++          if (!aConciseFlag) {
++            return "function " + name + "(" + params + ")";
++          }
++          return name + "(" + params + ")";
++        }
+         if (!aConciseFlag) {
+           return "[" + aGrip.type + " " + aGrip.class + "]";
+         }
+         return aGrip.class;
+     }
+   }
+   switch (typeof aGrip) {
+     case "string":
+diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
+--- a/toolkit/devtools/server/actors/script.js
++++ b/toolkit/devtools/server/actors/script.js
+@@ -2878,16 +2878,33 @@ ObjectActor.prototype = {
+         if (desc && desc.value && typeof desc.value == "string") {
+           g.userDisplayName = this.threadActor.createValueGrip(desc.value);
+         }
+       } catch (e) {
+         // Calling getOwnPropertyDescriptor with displayName might throw
+         // with "permission denied" errors for some functions.
+         dumpn(e);
+       }
++
++      g.parameterNames = this.obj.parameterNames;
++      dump("lolz " + g.parameterNames + "\n");
++    }
++
++    if (this.obj.class == "Arraaaay") {
++      g.preview = { };
++      let len = this.obj.getProperty("length");
++      if (typeof len == "number") {
++        g.preview.length = len;
++
++        let elements = g.preview.elements = new Array(Math.min(5, len));
++        for (let i = 0; i < elements.length; i++) {
++          let prop = this.obj.getProperty(i);
++          elements[i] = this.threadActor.createValueGrip(prop.value);
++        }
++      }
+     }
+ 
+     return g;
+   },
+ 
+   /**
+    * Releases this actor from the pool.
+    */
