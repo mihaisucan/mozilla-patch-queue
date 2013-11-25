@@ -1,12 +1,12 @@
 # HG changeset patch
-# Parent d558b882d048d4279647599f3d643a8f1d8e6d60
+# Parent 5262742edb9b6a6d1c79bc473d9545626f024c60
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1385150267 -7200
+# Date 1385417323 -7200
 
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -3183,16 +3183,25 @@ VariablesView.getString = function(aGrip
+@@ -3183,16 +3183,88 @@ VariablesView.getString = function(aGrip
        case "NaN":
        case "Infinity":
        case "-Infinity":
@@ -16,14 +16,77 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
          return "\"" + aGrip.initial + "\"";
        default:
 +        if (aGrip.type == "object" && aGrip.class == "Function") {
-+          let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name;
-+          let params = aGrip.parameterNames;
-+          //let params = aGrip.;
++          let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name || "";
++          let params = aGrip.parameterNames || "";
 +          if (!aConciseFlag) {
 +            return "function " + name + "(" + params + ")";
 +          }
-+          return name + "(" + params + ")";
++          return (name || "function") + "(" + params + ")";
 +        }
++
++        if (aGrip.type == "object" && aGrip.class == "Array" && aGrip.preview) {
++          let arrayLength = aGrip.preview.arrayLength;
++          let preview = [];
++          if (!aConciseFlag) {
++            for (let elem of aGrip.preview.elements) {
++              preview.push(VariablesView.getString(elem));
++            }
++            if (preview.length < arrayLength) {
++              preview.push("\u2026"); // ellipsis
++            }
++            return "[" + preview.join(", ") + "]";
++          }
++          return "Array(" + arrayLength + ")";
++        }
++
++        if (aGrip.type == "object" && aGrip.displayString &&
++            ["RegExp", "Date"].indexOf(aGrip.class) != -1) {
++          // TODO: handle longStrings
++          return aGrip.displayString;
++        }
++
++        if (aGrip.type == "object" && aGrip.preview &&
++            ["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError",
++             "TypeError", "URIError"].indexOf(aGrip.class) != -1) {
++          if (aConciseFlag) {
++            return aGrip.class;
++          }
++
++          // TODO: handle non-string properties, including longStrings.
++          let msg = aGrip.preview.name + ": " + aGrip.preview.message;
++          let stack = aGrip.preview.stack;
++          if (!VariablesView.isFalsy({ value: stack })) {
++            msg += "\nStack trace:\n" + stack;
++          }
++          return msg;
++        }
++
++        if (aGrip.type == "object" && aGrip.preview && aGrip.preview.names) {
++          if (aConciseFlag) {
++            return aGrip.class;
++          }
++
++          let nrNames = aGrip.preview.names;
++          let props = [];
++          for (let key in aGrip.preview.ownProperties) {
++            let value = aGrip.preview.ownProperties[key];
++            let valueString = "";
++            if (value.get) {
++              valueString = "Getter";
++            } else if (value.set) {
++              valueString = "Setter";
++            } else {
++              valueString = VariablesView.getString(value.value);
++            }
++            props.push(key + ": " + valueString);
++          }
++          if (nrNames > props.length) {
++            props.push("\u2026");
++          }
++          let klass = aGrip.class != "Object " ? aGrip.class : "";
++          return klass + "{" + props.join(", ") + "}";
++        }
++
          if (!aConciseFlag) {
            return "[" + aGrip.type + " " + aGrip.class + "]";
          }
@@ -35,7 +98,67 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
 --- a/toolkit/devtools/server/actors/script.js
 +++ b/toolkit/devtools/server/actors/script.js
-@@ -2878,16 +2878,33 @@ ObjectActor.prototype = {
+@@ -2768,16 +2768,17 @@ let stringifiers = {
+   Error: errorStringify,
+   EvalError: errorStringify,
+   RangeError: errorStringify,
+   ReferenceError: errorStringify,
+   SyntaxError: errorStringify,
+   TypeError: errorStringify,
+   URIError: errorStringify,
+   Boolean: createBuiltinStringifier(Boolean),
++  Date: createBuiltinStringifier(Date),
+   Function: createBuiltinStringifier(Function),
+   Number: createBuiltinStringifier(Number),
+   RegExp: createBuiltinStringifier(RegExp),
+   String: createBuiltinStringifier(String),
+   Object: obj => "[object " + obj.class + "]",
+   Array: obj => {
+     // If we're at the top level then we need to create the Set for tracking
+     // previously stringified arrays.
+@@ -2837,27 +2838,41 @@ let stringifiers = {
+  *        The debuggee object.
+  * @param aThreadActor ThreadActor
+  *        The parent thread actor for this object.
+  */
+ function ObjectActor(aObj, aThreadActor)
+ {
+   this.obj = aObj;
+   this.threadActor = aThreadActor;
++
++  if (!("_gripDepth" in this.threadActor)) {
++    this.threadActor._gripDepth = 0;
++  }
+ }
+ 
+ ObjectActor.prototype = {
+   actorPrefix: "obj",
+ 
+   _forcedMagicProps: false,
+ 
+   /**
+    * Returns a grip for this actor for returning in a protocol message.
+    */
+   grip: function () {
++    let doPreview = this.threadActor._gripDepth++ == 0;
++    dump("doPreview " + doPreview + " _gripDepth " + this.threadActor._gripDepth + "\n");
++    //XXX: no previews in browser debugger, for testing only
++    //if (!this.threadActor || !this.threadActor.parentActor || this.threadActor.actorPrefix != "console") {
++    //  doPreview = false;
++    //}
++    //if (this.threadActor && this.threadActor.parentActor && this.threadActor.parentActor.isRootActor) {
++    //  doPreview = false;
++    //}
++
+     let g = {
+       "type": "object",
+       "class": this.obj.class,
+       "actor": this.actorID,
+       "extensible": this.obj.isExtensible(),
+       "frozen": this.obj.isFrozen(),
+       "sealed": this.obj.isSealed()
+     };
+@@ -2878,18 +2893,69 @@ ObjectActor.prototype = {
          if (desc && desc.value && typeof desc.value == "string") {
            g.userDisplayName = this.threadActor.createValueGrip(desc.value);
          }
@@ -46,26 +169,62 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        }
 +
 +      g.parameterNames = this.obj.parameterNames;
-+      dump("lolz " + g.parameterNames + "\n");
-+    }
-+
-+    if (this.obj.class == "Arraaaay") {
-+      g.preview = { };
-+      let len = this.obj.getProperty("length");
+     }
+ 
++    if (this.obj.class == "Array" && doPreview) {
++      let len = getProperty(this.obj, "length");
 +      if (typeof len == "number") {
-+        g.preview.length = len;
++        g.preview = { arrayLength: len };
 +
 +        let elements = g.preview.elements = new Array(Math.min(5, len));
 +        for (let i = 0; i < elements.length; i++) {
-+          let prop = this.obj.getProperty(i);
-+          elements[i] = this.threadActor.createValueGrip(prop.value);
++          let prop = getProperty(this.obj, i);
++          elements[i] = this.threadActor.createValueGrip(prop);
 +        }
 +      }
-     }
- 
++    }
++
++    if (["RegExp", "Date"].indexOf(this.obj.class) != -1) {
++      let str = stringifiers[this.obj.class](this.obj);
++      g.displayString = this.threadActor.createValueGrip(str);
++    }
++
++    if (["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError",
++         "TypeError", "URIError"].indexOf(this.obj.class) != -1) {
++      g.preview = {
++        name: this.threadActor.createValueGrip(getProperty(this.obj, "name")),
++        message: this.threadActor.createValueGrip(getProperty(this.obj, "message")),
++        stack: this.threadActor.createValueGrip(getProperty(this.obj, "stack")),
++      };
++    }
++
++    if (Cu.isDeadWrapper(this.obj)) {
++      g.displayString = "<dead object>"; // TODO maybe localize
++      g.dead = true;
++    }
++
++    if (!g.preview && !g.displayString && doPreview) {
++      let i = 0, names = this.obj.getOwnPropertyNames();
++      g.preview = { names: names.length, ownProperties: Object.create(null) };
++
++      for (let name of names) {
++        g.preview.ownProperties[name] = this._propertyDescriptor(name);
++        if (++i == 3) {
++          break;
++        }
++      }
++    }
++
++    // TODO: do not do recursive previews
++    // TODO: do not do previews for __proto__
++
++    this.threadActor._gripDepth--;
++
      return g;
    },
  
    /**
     * Releases this actor from the pool.
     */
+   release: function () {
+     if (this.registeredPool.objectActors) {
