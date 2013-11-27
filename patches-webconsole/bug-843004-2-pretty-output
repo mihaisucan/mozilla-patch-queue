@@ -1,12 +1,13 @@
 # HG changeset patch
-# Parent 5262742edb9b6a6d1c79bc473d9545626f024c60
+# Parent 965482620c147047494b2ddf133a0057963cf431
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1385417323 -7200
+# Date 1385586757 -7200
+Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output.
 
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -3183,16 +3183,88 @@ VariablesView.getString = function(aGrip
+@@ -3183,20 +3183,121 @@ VariablesView.getString = function(aGrip
        case "NaN":
        case "Infinity":
        case "-Infinity":
@@ -15,6 +16,8 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
        case "longString":
          return "\"" + aGrip.initial + "\"";
        default:
+-        if (!aConciseFlag) {
+-          return "[" + aGrip.type + " " + aGrip.class + "]";
 +        if (aGrip.type == "object" && aGrip.class == "Function") {
 +          let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name || "";
 +          let params = aGrip.parameterNames || "";
@@ -22,17 +25,18 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +            return "function " + name + "(" + params + ")";
 +          }
 +          return (name || "function") + "(" + params + ")";
-+        }
+         }
+-        return aGrip.class;
 +
 +        if (aGrip.type == "object" && aGrip.class == "Array" && aGrip.preview) {
 +          let arrayLength = aGrip.preview.arrayLength;
 +          let preview = [];
-+          if (!aConciseFlag) {
++          if (!aConciseFlag && aGrip.preview.elements) {
 +            for (let elem of aGrip.preview.elements) {
-+              preview.push(VariablesView.getString(elem));
++              preview.push(VariablesView.getString(elem, true));
 +            }
 +            if (preview.length < arrayLength) {
-+              preview.push("\u2026"); // ellipsis
++              preview.push((arrayLength - preview.length) + " more\u2026"); // TODO: localize
 +            }
 +            return "[" + preview.join(", ") + "]";
 +          }
@@ -40,9 +44,41 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +        }
 +
 +        if (aGrip.type == "object" && aGrip.displayString &&
-+            ["RegExp", "Date"].indexOf(aGrip.class) != -1) {
++            aGrip.class == "RegExp") {
 +          // TODO: handle longStrings
 +          return aGrip.displayString;
++        }
++
++        if (aGrip.type == "object" && aGrip.class == "Date" &&
++            aGrip.dateTimestamp) {
++          return new Date(aGrip.dateTimestamp).toLocaleString();
++        }
++
++        if (!aConciseFlag && aGrip.type == "object" && aGrip.preview &&
++            ["DOMWindow", "DOMDocument"].indexOf(aGrip.preview.kind) != -1) {
++          let location = WebConsoleUtils.abbreviateSourceURL(aGrip.preview.location);
++          return aGrip.class + " {" + location + "}";
++        }
++
++        if (aGrip.type == "object" && aGrip.preview &&
++            aGrip.preview.kind == "DOMElement") {
++          let preview = aGrip.preview;
++          if (!aConciseFlag) {
++            let result = "<" + preview.tagName;
++            if (preview.id) {
++              result += ' id="' + preview.id + '"';
++            }
++            if (preview.className) {
++              result += ' class="' + preview.className + '"';
++            }
++            return result + ">";
++          }
++
++          let result = "<" + preview.tagName;
++          if (preview.id) {
++            result += "#" + preview.id;
++          }
++          return result + ">";
 +        }
 +
 +        if (aGrip.type == "object" && aGrip.preview &&
@@ -61,11 +97,11 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +          return msg;
 +        }
 +
-+        if (aGrip.type == "object" && aGrip.preview && aGrip.preview.names) {
-+          if (aConciseFlag) {
-+            return aGrip.class;
-+          }
++        if (aGrip.type == "object" && aConciseFlag) {
++          return aGrip.class;
++        }
 +
++        if (aGrip.type == "object" && aGrip.preview && aGrip.preview.names) {
 +          let nrNames = aGrip.preview.names;
 +          let props = [];
 +          for (let key in aGrip.preview.ownProperties) {
@@ -76,28 +112,55 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +            } else if (value.set) {
 +              valueString = "Setter";
 +            } else {
-+              valueString = VariablesView.getString(value.value);
++              valueString = VariablesView.getString(value.value, true);
 +            }
 +            props.push(key + ": " + valueString);
 +          }
 +          if (nrNames > props.length) {
-+            props.push("\u2026");
++            props.push("more\u2026");
 +          }
-+          let klass = aGrip.class != "Object " ? aGrip.class : "";
++          let klass = aGrip.class != "Object" ? aGrip.class + " " : "";
 +          return klass + "{" + props.join(", ") + "}";
 +        }
 +
-         if (!aConciseFlag) {
-           return "[" + aGrip.type + " " + aGrip.class + "]";
-         }
-         return aGrip.class;
++        return "[" + aGrip.type + " " + aGrip.class + "]";
      }
    }
    switch (typeof aGrip) {
      case "string":
+       return "\"" + aGrip + "\"";
+     case "boolean":
+       return aGrip ? "true" : "false";
+     case "number":
 diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
 --- a/toolkit/devtools/server/actors/script.js
 +++ b/toolkit/devtools/server/actors/script.js
+@@ -2681,23 +2681,23 @@ function hasSafeGetter(aDesc) {
+  *        The Debugger.Object to get the value from.
+  * @param String aKey
+  *        The key to look for.
+  * @return Any
+  */
+ function getProperty(aObj, aKey) {
+   try {
+     do {
+-      const desc = aObj.getOwnPropertyDescriptor(aKey);
++      let desc = aObj.getOwnPropertyDescriptor(aKey);
+       if (desc) {
+         if ("value" in desc) {
+           return desc.value
+         }
+         // Call the getter if it's safe.
+-        return hasSafeGetter(desc) ? desc.get.call(aObj) : undefined;
++        return hasSafeGetter(desc) ? desc.get.call(aObj).return : null;
+       }
+       aObj = aObj.proto;
+     } while (aObj);
+   } catch (e) {
+     // If anything goes wrong report the error and return undefined.
+     DevToolsUtils.reportException("getProperty", e);
+   }
+   return undefined;
 @@ -2768,16 +2768,17 @@ let stringifiers = {
    Error: errorStringify,
    EvalError: errorStringify,
@@ -158,7 +221,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        "frozen": this.obj.isFrozen(),
        "sealed": this.obj.isSealed()
      };
-@@ -2878,18 +2893,69 @@ ObjectActor.prototype = {
+@@ -2878,18 +2893,114 @@ ObjectActor.prototype = {
          if (desc && desc.value && typeof desc.value == "string") {
            g.userDisplayName = this.threadActor.createValueGrip(desc.value);
          }
@@ -169,24 +232,34 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        }
 +
 +      g.parameterNames = this.obj.parameterNames;
++      doPreview = false;
      }
  
-+    if (this.obj.class == "Array" && doPreview) {
++    if (this.obj.class == "Array") {
 +      let len = getProperty(this.obj, "length");
 +      if (typeof len == "number") {
 +        g.preview = { arrayLength: len };
 +
-+        let elements = g.preview.elements = new Array(Math.min(5, len));
-+        for (let i = 0; i < elements.length; i++) {
-+          let prop = getProperty(this.obj, i);
-+          elements[i] = this.threadActor.createValueGrip(prop);
++        if (doPreview) {
++          let elements = g.preview.elements = new Array(Math.min(5, len));
++          for (let i = 0; i < elements.length; i++) {
++            let prop = getProperty(this.obj, i);
++            elements[i] = this.threadActor.createValueGrip(prop);
++          }
 +        }
 +      }
 +    }
 +
-+    if (["RegExp", "Date"].indexOf(this.obj.class) != -1) {
++    if (this.obj.class == "RegExp") {
 +      let str = stringifiers[this.obj.class](this.obj);
 +      g.displayString = this.threadActor.createValueGrip(str);
++    }
++
++    if (this.obj.class == "Date") {
++      // TODO: better way without unsafeDereference?
++      let timestamp = Date.prototype.getTime.call(this.obj.unsafeDereference());
++      g.dateTimestamp = this.threadActor.createValueGrip(timestamp);
++      doPreview = false;
 +    }
 +
 +    if (["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError",
@@ -198,24 +271,59 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      };
 +    }
 +
-+    if (Cu.isDeadWrapper(this.obj)) {
++    let raw = this.obj.unsafeDereference();
++    if (Cu.isDeadWrapper(raw)) {
++      // TODO: check if isDeadWrapper() supports D.O
 +      g.displayString = "<dead object>"; // TODO maybe localize
 +      g.dead = true;
 +    }
 +
-+    if (!g.preview && !g.displayString && doPreview) {
++    if (raw instanceof Ci.nsIDOMWindow) {
++      let location = raw.location.href;
++      g.preview = {
++        kind: "DOMWindow",
++        location: this.threadActor.createValueGrip(location),
++      };
++    }
++
++    if (raw instanceof Ci.nsIDOMElement) {
++      g.preview = {
++        kind: "DOMElement",
++        tagName: this.threadActor.createValueGrip(raw.tagName),
++        id: this.threadActor.createValueGrip(raw.id),
++        className: this.threadActor.createValueGrip(raw.className),
++      };
++    }
++
++    if (raw instanceof Ci.nsIDOMDocument) {
++      let location = raw.location.href;
++      g.preview = {
++        kind: "DOMDocument",
++        location: this.threadActor.createValueGrip(location),
++      };
++    }
++
++    if (this.obj.class == "Object" && !g.preview && !g.displayString && doPreview) {
 +      let i = 0, names = this.obj.getOwnPropertyNames();
-+      g.preview = { names: names.length, ownProperties: Object.create(null) };
++      g.preview = {
++        names: names.length,
++        ownProperties: Object.create(null),
++      };
++      // XXX not sure if it makes sense to use the number of own properties. we
++      // need it to determine if an object preview should show an ellipsis or
++      // not. thoughts?
 +
 +      for (let name of names) {
++        if (+name == +name) { // skip numbers
++          continue;
++        }
 +        g.preview.ownProperties[name] = this._propertyDescriptor(name);
-+        if (++i == 3) {
++        if (++i == 5) {
 +          break;
 +        }
 +      }
 +    }
 +
-+    // TODO: do not do recursive previews
 +    // TODO: do not do previews for __proto__
 +
 +    this.threadActor._gripDepth--;
