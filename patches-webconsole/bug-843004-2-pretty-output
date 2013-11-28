@@ -1,13 +1,13 @@
 # HG changeset patch
-# Parent 965482620c147047494b2ddf133a0057963cf431
+# Parent aebdf773efa825e65fdc5a3a08ccbb0e3848176e
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1385586757 -7200
-Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output.
+# Date 1385673584 -7200
+Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output
 
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -3183,20 +3183,121 @@ VariablesView.getString = function(aGrip
+@@ -3183,20 +3183,188 @@ VariablesView.getString = function(aGrip
        case "NaN":
        case "Infinity":
        case "-Infinity":
@@ -17,95 +17,161 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
          return "\"" + aGrip.initial + "\"";
        default:
 -        if (!aConciseFlag) {
--          return "[" + aGrip.type + " " + aGrip.class + "]";
-+        if (aGrip.type == "object" && aGrip.class == "Function") {
++        if (aGrip.type != "object") {
+           return "[" + aGrip.type + " " + aGrip.class + "]";
+         }
+-        return aGrip.class;
++
++        if (aGrip.class == "Function") {
 +          let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name || "";
 +          let params = aGrip.parameterNames || "";
 +          if (!aConciseFlag) {
 +            return "function " + name + "(" + params + ")";
 +          }
 +          return (name || "function") + "(" + params + ")";
-         }
--        return aGrip.class;
-+
-+        if (aGrip.type == "object" && aGrip.class == "Array" && aGrip.preview) {
-+          let arrayLength = aGrip.preview.arrayLength;
-+          let preview = [];
-+          if (!aConciseFlag && aGrip.preview.elements) {
-+            for (let elem of aGrip.preview.elements) {
-+              preview.push(VariablesView.getString(elem, true));
-+            }
-+            if (preview.length < arrayLength) {
-+              preview.push((arrayLength - preview.length) + " more\u2026"); // TODO: localize
-+            }
-+            return "[" + preview.join(", ") + "]";
-+          }
-+          return "Array(" + arrayLength + ")";
 +        }
 +
-+        if (aGrip.type == "object" && aGrip.displayString &&
-+            aGrip.class == "RegExp") {
++        if (aGrip.displayString && aGrip.class == "RegExp") {
 +          // TODO: handle longStrings
 +          return aGrip.displayString;
 +        }
 +
-+        if (aGrip.type == "object" && aGrip.class == "Date" &&
-+            aGrip.dateTimestamp) {
-+          return new Date(aGrip.dateTimestamp).toLocaleString();
++        let preview = aGrip.preview;
++        if (!preview) {
++          if (aConciseFlag) {
++            return aGrip.class;
++          }
++          return "[" + aGrip.type + " " + aGrip.class + "]";
 +        }
 +
-+        if (!aConciseFlag && aGrip.type == "object" && aGrip.preview &&
-+            ["DOMWindow", "DOMDocument"].indexOf(aGrip.preview.kind) != -1) {
-+          let location = WebConsoleUtils.abbreviateSourceURL(aGrip.preview.location);
-+          return aGrip.class + " {" + location + "}";
-+        }
-+
-+        if (aGrip.type == "object" && aGrip.preview &&
-+            aGrip.preview.kind == "DOMElement") {
-+          let preview = aGrip.preview;
-+          if (!aConciseFlag) {
-+            let result = "<" + preview.tagName;
-+            if (preview.id) {
-+              result += ' id="' + preview.id + '"';
++        if (preview.kind == "ArrayLike") {
++          if (!aConciseFlag && preview.items) {
++            let result = [];
++            for (let item of preview.items) {
++              result.push(VariablesView.getString(item, true));
 +            }
-+            if (preview.className) {
-+              result += ' class="' + preview.className + '"';
++            if (result.length < preview.length) {
++              result.push((preview.length - result.length) + " more\u2026"); // TODO: localize
++            }
++
++            let prefix = aGrip.class == "Array" ? "" : aGrip.class + " ";
++            return prefix + "[" + result.join(", ") + "]";
++          }
++
++          if (aGrip.class == "Array") {
++            return "Array(" + preview.length + ")";
++          }
++          return aGrip.class + "[" + preview.length + "]";
++        }
++
++        if (preview.kind == "MapLike" && preview.items) {
++          if (aConciseFlag) {
++            let length = typeof preview.length == "number" ?
++                         "[" + preview.length + "]" : "";
++            return aGrip.class + length;
++          }
++
++          let items = [];
++          for (let key in preview.items) {
++            let value = preview.items[key];
++            items.push(key + ": " + VariablesView.getString(value, true));
++          }
++          if (typeof preview.length == "number" && preview.length > items.length) {
++            items.push((preview.length - items.length) + " more\u2026");
++          }
++          return aGrip.class + " {" + items.join(", ") + "}";
++        }
++
++        if (aGrip.class == "Date" && preview.timestamp) {
++          return new Date(preview.timestamp).toLocaleString();
++        }
++
++        if (aGrip.class == "CSSStyleSheet" || aGrip.class == "Location" ||
++            aGrip.class == "CSSImportRule") {
++          let result = aGrip.class;
++          if (preview.href) {
++            result += " " + WebConsoleUtils.abbreviateSourceURL(preview.href,
++                                                                { onlyCropQuery: !aConciseFlag });
++          }
++          return result;
++        }
++
++        if (aGrip.class == "CSSStyleRule") {
++          return aGrip.class + " " + VariablesView.getString(preview.selectorText);
++        }
++
++        if (aGrip.class == "CSSMediaRule") {
++          return aGrip.class + " " + VariablesView.getString(preview.conditionText);
++        }
++
++        if (preview.kind == "DOMWindow" ||
++            (preview.kind == "DOMNode" &&
++             preview.nodeType == Ci.nsIDOMNode.DOCUMENT_NODE)) {
++          let location = WebConsoleUtils.abbreviateSourceURL(preview.location,
++                                                             { onlyCropQuery: !aConciseFlag });
++          return aGrip.class + " " + location;
++        }
++
++        if (preview.kind == "DOMNode" &&
++            preview.nodeType == Ci.nsIDOMNode.ELEMENT_NODE) {
++          let attrs = preview.attributes;
++          if (!aConciseFlag) {
++            let n = 0, result = "<" + preview.nodeName;
++            for (let name in attrs) {
++              result += " " + name + "=" + VariablesView.getString(attrs[name], true);
++              n++;
++            }
++            if (preview.attributesLength > n) {
++              result += " \u2026";
 +            }
 +            return result + ">";
 +          }
 +
-+          let result = "<" + preview.tagName;
-+          if (preview.id) {
-+            result += "#" + preview.id;
++          let result = "<" + preview.nodeName;
++          if (attrs.id) {
++            result += "#" + attrs.id;
 +          }
 +          return result + ">";
 +        }
 +
-+        if (aGrip.type == "object" && aGrip.preview &&
-+            ["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError",
++        if (preview.kind == "DOMNode" &&
++            preview.nodeType == Ci.nsIDOMNode.ATTRIBUTE_NODE) {
++          return preview.nodeName + "=" + VariablesView.getString(preview.value, true);
++        }
++
++        if (preview.kind == "DOMNode" &&
++            preview.nodeType == Ci.nsIDOMNode.TEXT_NODE) {
++          return preview.nodeName + " " + VariablesView.getString(preview.textContent, true);
++        }
++
++        if (preview.kind == "DOMNode" &&
++            preview.nodeType == Ci.nsIDOMNode.COMMENT_NODE) {
++          return "<!--" + preview.textContent + "-->";
++        }
++
++        if (["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError",
 +             "TypeError", "URIError"].indexOf(aGrip.class) != -1) {
 +          if (aConciseFlag) {
 +            return aGrip.class;
 +          }
 +
 +          // TODO: handle non-string properties, including longStrings.
-+          let msg = aGrip.preview.name + ": " + aGrip.preview.message;
-+          let stack = aGrip.preview.stack;
-+          if (!VariablesView.isFalsy({ value: stack })) {
-+            msg += "\nStack trace:\n" + stack;
++          let msg = preview.name + ": " + preview.message;
++          if (!VariablesView.isFalsy({ value: preview.stack })) {
++            msg += "\nStack trace:\n" + preview.stack;
 +          }
 +          return msg;
 +        }
 +
-+        if (aGrip.type == "object" && aConciseFlag) {
++        if (aConciseFlag) {
 +          return aGrip.class;
 +        }
 +
-+        if (aGrip.type == "object" && aGrip.preview && aGrip.preview.names) {
-+          let nrNames = aGrip.preview.names;
++        // generic object preview
++        if (preview.names && preview.ownProperties) {
 +          let props = [];
-+          for (let key in aGrip.preview.ownProperties) {
-+            let value = aGrip.preview.ownProperties[key];
++          for (let key in preview.ownProperties) {
++            let value = preview.ownProperties[key];
 +            let valueString = "";
 +            if (value.get) {
 +              valueString = "Getter";
@@ -116,7 +182,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +            }
 +            props.push(key + ": " + valueString);
 +          }
-+          if (nrNames > props.length) {
++          if (preview.names > props.length) {
 +            props.push("more\u2026");
 +          }
 +          let klass = aGrip.class != "Object" ? aGrip.class + " " : "";
@@ -152,7 +218,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
          }
          // Call the getter if it's safe.
 -        return hasSafeGetter(desc) ? desc.get.call(aObj) : undefined;
-+        return hasSafeGetter(desc) ? desc.get.call(aObj).return : null;
++        return hasSafeGetter(desc) ? desc.get.call(aObj).return : undefined;
        }
        aObj = aObj.proto;
      } while (aObj);
@@ -179,7 +245,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
    Array: obj => {
      // If we're at the top level then we need to create the Set for tracking
      // previously stringified arrays.
-@@ -2837,27 +2838,41 @@ let stringifiers = {
+@@ -2837,27 +2838,40 @@ let stringifiers = {
   *        The debuggee object.
   * @param aThreadActor ThreadActor
   *        The parent thread actor for this object.
@@ -204,7 +270,6 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
     */
    grip: function () {
 +    let doPreview = this.threadActor._gripDepth++ == 0;
-+    dump("doPreview " + doPreview + " _gripDepth " + this.threadActor._gripDepth + "\n");
 +    //XXX: no previews in browser debugger, for testing only
 +    //if (!this.threadActor || !this.threadActor.parentActor || this.threadActor.actorPrefix != "console") {
 +    //  doPreview = false;
@@ -221,7 +286,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        "frozen": this.obj.isFrozen(),
        "sealed": this.obj.isSealed()
      };
-@@ -2878,18 +2893,114 @@ ObjectActor.prototype = {
+@@ -2878,18 +2892,205 @@ ObjectActor.prototype = {
          if (desc && desc.value && typeof desc.value == "string") {
            g.userDisplayName = this.threadActor.createValueGrip(desc.value);
          }
@@ -235,47 +300,60 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      doPreview = false;
      }
  
-+    if (this.obj.class == "Array") {
-+      let len = getProperty(this.obj, "length");
-+      if (typeof len == "number") {
-+        g.preview = { arrayLength: len };
++    let raw = this.obj.unsafeDereference();
++    // TODO: check xray wrapper for |raw|
 +
-+        if (doPreview) {
-+          let elements = g.preview.elements = new Array(Math.min(5, len));
-+          for (let i = 0; i < elements.length; i++) {
-+            let prop = getProperty(this.obj, i);
-+            elements[i] = this.threadActor.createValueGrip(prop);
-+          }
-+        }
-+      }
++    if (Cu.isDeadWrapper(raw)) {
++      // TODO: check if isDeadWrapper() supports D.O
++      g.displayString = "<dead object>"; // TODO maybe localize
++      g.dead = true;
 +    }
 +
++    // Number of items to preview in an array.
++    const MAX_ARRAY_ITEMS = 10;
++
 +    if (this.obj.class == "RegExp") {
-+      let str = stringifiers[this.obj.class](this.obj);
-+      g.displayString = this.threadActor.createValueGrip(str);
++      g.displayString = this.threadActor.createValueGrip(raw.toString());
++    }
++
++    if (this.obj.class == "CSSStyleRule") {
++      g.preview = {
++        selectorText: this.threadActor.createValueGrip(raw.selectorText),
++      };
++    }
++
++    if (this.obj.class == "CSSImportRule") {
++      g.preview = {
++        href: this.threadActor.createValueGrip(raw.href),
++      };
++    }
++
++    if (this.obj.class == "CSSMediaRule") {
++      g.preview = {
++        conditionText: this.threadActor.createValueGrip(raw.conditionText),
++      };
 +    }
 +
 +    if (this.obj.class == "Date") {
-+      // TODO: better way without unsafeDereference?
-+      let timestamp = Date.prototype.getTime.call(this.obj.unsafeDereference());
-+      g.dateTimestamp = this.threadActor.createValueGrip(timestamp);
-+      doPreview = false;
++      g.preview = {
++        timestamp: this.threadActor.createValueGrip(raw.getTime()),
++      };
 +    }
 +
 +    if (["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError",
 +         "TypeError", "URIError"].indexOf(this.obj.class) != -1) {
 +      g.preview = {
-+        name: this.threadActor.createValueGrip(getProperty(this.obj, "name")),
-+        message: this.threadActor.createValueGrip(getProperty(this.obj, "message")),
-+        stack: this.threadActor.createValueGrip(getProperty(this.obj, "stack")),
++        name: this.threadActor.createValueGrip(raw.name),
++        message: this.threadActor.createValueGrip(raw.message),
++        stack: this.threadActor.createValueGrip(raw.stack),
 +      };
 +    }
 +
-+    let raw = this.obj.unsafeDereference();
-+    if (Cu.isDeadWrapper(raw)) {
-+      // TODO: check if isDeadWrapper() supports D.O
-+      g.displayString = "<dead object>"; // TODO maybe localize
-+      g.dead = true;
++    if ((this.obj.class == "CSSStyleSheet" ||
++         this.obj.class == "Location") && raw.href) {
++      g.preview = {
++        href: raw.href,
++      };
 +    }
 +
 +    if (raw instanceof Ci.nsIDOMWindow) {
@@ -286,24 +364,106 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      };
 +    }
 +
-+    if (raw instanceof Ci.nsIDOMElement) {
-+      g.preview = {
-+        kind: "DOMElement",
-+        tagName: this.threadActor.createValueGrip(raw.tagName),
-+        id: this.threadActor.createValueGrip(raw.id),
-+        className: this.threadActor.createValueGrip(raw.className),
-+      };
++    if (this.obj.class == "Array" ||
++        this.obj.class == "DOMTokenList" ||
++        raw instanceof Ci.nsIDOMMozNamedAttrMap ||
++        raw instanceof Ci.nsIDOMCSSRuleList ||
++        raw instanceof Ci.nsIDOMCSSValueList ||
++        raw instanceof Ci.nsIDOMDOMStringList ||
++        raw instanceof Ci.nsIDOMFileList ||
++        raw instanceof Ci.nsIDOMFontFaceList ||
++        raw instanceof Ci.nsIDOMMediaList ||
++        raw instanceof Ci.nsIDOMMediaQueryList ||
++        raw instanceof Ci.nsIDOMNodeList ||
++        raw instanceof Ci.nsIDOMStyleSheetList) {
++      // TODO: add Set support
++      let len = raw.length;
++      if (typeof len == "number") {
++        g.preview = {
++          kind: "ArrayLike",
++          length: len,
++        };
++
++        if (doPreview) {
++          let items = g.preview.items = new Array(Math.min(MAX_ARRAY_ITEMS, len));
++          for (let i = 0; i < items.length; i++) {
++            let prop = raw[i];
++            if (typeof prop == "object") {
++              prop = this.obj.makeDebuggeeValue(prop);
++            }
++            items[i] = this.threadActor.createValueGrip(prop);
++          }
++        }
++      }
 +    }
 +
-+    if (raw instanceof Ci.nsIDOMDocument) {
-+      let location = raw.location.href;
++    // TODO: add Map support
++    if (raw instanceof Ci.nsIDOMCSSStyleDeclaration) {
 +      g.preview = {
-+        kind: "DOMDocument",
-+        location: this.threadActor.createValueGrip(location),
++        kind: "MapLike",
++        items: {},
++        length: raw.length,
 +      };
++      let n = Math.min(MAX_ARRAY_ITEMS, raw.length);
++      for (let i = 0; i < n; i++) {
++        let prop = raw[i];
++        let value = raw.getPropertyValue(prop);
++        g.preview.items[prop] = this.threadActor.createValueGrip(value);
++      }
 +    }
 +
-+    if (this.obj.class == "Object" && !g.preview && !g.displayString && doPreview) {
++    if (this.obj.class == "DOMStringMap") {
++      g.preview = {
++        kind: "MapLike",
++        items: {},
++      };
++      let i = 0;
++      for (let key in raw) {
++        let value = raw[key];
++        if (typeof prop == "object") {
++          value = this.obj.makeDebuggeeValue(value);
++        }
++        g.preview.items[key] = this.threadActor.createValueGrip(value);
++        if (++i == MAX_ARRAY_ITEMS) {
++          break;
++        }
++      }
++    }
++
++    if (raw instanceof Ci.nsIDOMNode) {
++      g.preview = {
++        kind: "DOMNode",
++        nodeType: raw.nodeType,
++        nodeName: raw.nodeName,
++      };
++
++      if (raw instanceof Ci.nsIDOMDocument) {
++        g.preview.location = this.threadActor.createValueGrip(raw.location.href);
++      }
++
++      if (raw instanceof Ci.nsIDOMElement) {
++        // TODO: use getProperty() or getAttribute()
++        let i = 0, attrs = g.preview.attributes = { };
++        g.preview.attributesLength = raw.attributes.length;
++        for (let attr of raw.attributes) {
++          attrs[attr.nodeName] = this.threadActor.createValueGrip(attr.value);
++          if (++i == MAX_ARRAY_ITEMS) {
++            break;
++          }
++        }
++      }
++
++      if (raw instanceof Ci.nsIDOMAttr) {
++        g.preview.value = this.threadActor.createValueGrip(raw.value);
++      }
++
++      if (raw instanceof Ci.nsIDOMText ||
++          raw instanceof Ci.nsIDOMComment) {
++        g.preview.textContent = this.threadActor.createValueGrip(raw.textContent);
++      }
++    }
++
++    if (!g.preview && !g.displayString && doPreview) {
 +      let i = 0, names = this.obj.getOwnPropertyNames();
 +      g.preview = {
 +        names: names.length,
@@ -314,11 +474,8 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      // not. thoughts?
 +
 +      for (let name of names) {
-+        if (+name == +name) { // skip numbers
-+          continue;
-+        }
 +        g.preview.ownProperties[name] = this._propertyDescriptor(name);
-+        if (++i == 5) {
++        if (++i == MAX_ARRAY_ITEMS) {
 +          break;
 +        }
 +      }
@@ -327,7 +484,6 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    // TODO: do not do previews for __proto__
 +
 +    this.threadActor._gripDepth--;
-+
      return g;
    },
  
@@ -336,3 +492,56 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
     */
    release: function () {
      if (this.registeredPool.objectActors) {
+diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
+--- a/toolkit/devtools/webconsole/utils.js
++++ b/toolkit/devtools/webconsole/utils.js
+@@ -185,17 +185,18 @@ let WebConsoleUtils = {
+    * Abbreviates the given source URL so that it can be displayed flush-right
+    * without being too distracting.
+    *
+    * @param string aSourceURL
+    *        The source URL to shorten.
+    * @return string
+    *         The abbreviated form of the source URL.
+    */
+-  abbreviateSourceURL: function WCU_abbreviateSourceURL(aSourceURL)
++  abbreviateSourceURL:
++  function WCU_abbreviateSourceURL(aSourceURL, aOptions = {})
+   {
+     if (aSourceURL.substr(0, 5) == "data:") {
+       let commaIndex = aSourceURL.indexOf(",");
+       if (commaIndex > -1) {
+         aSourceURL = "data:" + aSourceURL.substring(commaIndex + 1);
+       }
+     }
+ 
+@@ -208,23 +209,25 @@ let WebConsoleUtils = {
+     // Remove any hash fragments.
+     let hashIndex = aSourceURL.indexOf("#");
+     if (hashIndex > -1) {
+       aSourceURL = aSourceURL.substring(0, hashIndex);
+     }
+ 
+     // Remove a trailing "/".
+     if (aSourceURL[aSourceURL.length - 1] == "/") {
+-      aSourceURL = aSourceURL.substring(0, aSourceURL.length - 1);
++      aSourceURL = aSourceURL.replace(/\/+$/, "");
+     }
+ 
+     // Remove all but the last path component.
+-    let slashIndex = aSourceURL.lastIndexOf("/");
+-    if (slashIndex > -1) {
+-      aSourceURL = aSourceURL.substring(slashIndex + 1);
++    if (!aOptions.onlyCropQuery) {
++      let slashIndex = aSourceURL.lastIndexOf("/");
++      if (slashIndex > -1) {
++        aSourceURL = aSourceURL.substring(slashIndex + 1);
++      }
+     }
+ 
+     return aSourceURL;
+   },
+ 
+   /**
+    * Tells if the given function is native or not.
+    *
