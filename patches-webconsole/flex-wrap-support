@@ -1,0 +1,1210 @@
+# HG changeset patch
+# Parent 289e53773ff89c84539fdb9c2466d443f635b409
+# User Daniel Holbert <dholbert@cs.stanford.edu>
+Bug 702508 part 1: Support parsing/computing the CSS property "flex-wrap". r=dbaron
+* * *
+Bug 702508 part 2: Support parsing/computing the CSS property "align-content". r=dbaron
+
+diff --git a/layout/generic/nsFlexContainerFrame.cpp b/layout/generic/nsFlexContainerFrame.cpp
+--- a/layout/generic/nsFlexContainerFrame.cpp
++++ b/layout/generic/nsFlexContainerFrame.cpp
+@@ -1160,26 +1160,34 @@ private:
+ };
+ 
+ // Utility class for managing our position along the cross axis along
+ // the whole flex container (at a higher level than a single line).
+ // The "0" position represents the cross-start edge of the flex container's
+ // content-box.
+ class MOZ_STACK_CLASS CrossAxisPositionTracker : public PositionTracker {
+ public:
+-  CrossAxisPositionTracker(nsFlexContainerFrame* aFlexContainerFrame,
+-                           const FlexboxAxisTracker& aAxisTracker,
+-                           const nsHTMLReflowState& aReflowState)
+-    : PositionTracker(aAxisTracker.GetCrossAxis()) {}
+-
+-  // XXXdholbert This probably needs a ResolveStretchedLines() method,
+-  // (which takes an array of SingleLineCrossAxisPositionTracker objects
+-  // and distributes an equal amount of space to each one).
+-  // For now, we just have Reflow directly call
+-  // SingleLineCrossAxisPositionTracker::SetLineCrossSize().
++  CrossAxisPositionTracker(nsTArray<FlexLine>& aLines,
++                           uint8_t aAlignContent,
++                           nscoord aContentBoxCrossSize,
++                           bool aIsCrossSizeDefinite,
++                           const FlexboxAxisTracker& aAxisTracker);
++
++  // Advances past the packing space (if any) between two flex lines
++  void TraversePackingSpace();
++
++  // Advances past the given FlexLine
++  void TraverseLine(FlexLine& aLine) { mPosition += aLine.GetLineCrossSize(); }
++
++private:
++  // XXXdholbert Maybe redeclare all the inherited frame/FlexItem-specific
++  // functions here, to make sure they're hidden and uncallable?
++  nscoord  mPackingSpaceRemaining;
++  uint32_t mNumPackingSpacesRemaining;
++  uint8_t  mAlignContent;
+ };
+ 
+ // Utility class for managing our position along the cross axis, *within* a
+ // single flex line.
+ class MOZ_STACK_CLASS SingleLineCrossAxisPositionTracker : public PositionTracker {
+ public:
+   SingleLineCrossAxisPositionTracker(const FlexboxAxisTracker& aAxisTracker);
+ 
+@@ -1707,16 +1715,150 @@ MainAxisPositionTracker::TraversePacking
+       mPackingSpaceRemaining / mNumPackingSpacesRemaining;
+ 
+     mPosition += curPackingSpace;
+     mNumPackingSpacesRemaining--;
+     mPackingSpaceRemaining -= curPackingSpace;
+   }
+ }
+ 
++CrossAxisPositionTracker::
++  CrossAxisPositionTracker(nsTArray<FlexLine>& aLines,
++                           uint8_t aAlignContent,
++                           nscoord aContentBoxCrossSize,
++                           bool aIsCrossSizeDefinite,
++                           const FlexboxAxisTracker& aAxisTracker)
++  : PositionTracker(aAxisTracker.GetCrossAxis()),
++    mPackingSpaceRemaining(aContentBoxCrossSize), // we chip away at this below
++    mNumPackingSpacesRemaining(0),
++    mAlignContent(aAlignContent)
++{
++  if (aIsCrossSizeDefinite && aLines.Length() == 1) {
++    // "If the flex container has only a single line (even if it's a
++    // multi-line flex container) and has a definite cross size, the cross
++    // size of the flex line is the flex container's inner cross size."
++    aLines[0].SetLineCrossSize(aContentBoxCrossSize);
++  }
++
++  // NOTE: The logic here should essentially match MainAxisPositionTracker's
++  // constructor, though with FlexLines instead of FlexItems.
++
++  // mPackingSpaceRemaining is initialized to the container's cross size.  Now
++  // we'll subtract out the cross sizes of our flex lines, so that it ends up
++  // with the *actual* amount of packing space.
++  for (uint32_t i = 0; i < aLines.Length(); i++) {
++    const FlexLine& line = aLines[i];
++    mPackingSpaceRemaining -= line.GetLineCrossSize();
++  }
++
++  // If packing space is negative, 'space-between' and 'stretch' behave like
++  // 'flex-start', and 'space-around' behaves like 'center'. In those cases,
++  // it's simplest to just pretend we have a different 'align-content' value
++  // and share code.
++  if (mPackingSpaceRemaining < 0) {
++    if (mAlignContent == NS_STYLE_ALIGN_CONTENT_SPACE_BETWEEN ||
++        mAlignContent == NS_STYLE_ALIGN_CONTENT_STRETCH) {
++      mAlignContent = NS_STYLE_ALIGN_CONTENT_FLEX_START;
++    } else if (mAlignContent == NS_STYLE_ALIGN_CONTENT_SPACE_AROUND) {
++      mAlignContent = NS_STYLE_ALIGN_CONTENT_CENTER;
++    }
++  }
++
++  // Figure out how much space we'll set aside for packing spaces, and advance
++  // past any leading packing-space.
++  if (mPackingSpaceRemaining != 0) {
++    switch (mAlignContent) {
++      case NS_STYLE_ALIGN_CONTENT_FLEX_START:
++        // All packing space should go at the end --> nothing to do here.
++        break;
++      case NS_STYLE_ALIGN_CONTENT_FLEX_END:
++        // All packing space goes at the beginning
++        mPosition += mPackingSpaceRemaining;
++        break;
++      case NS_STYLE_ALIGN_CONTENT_CENTER:
++        // Half the packing space goes at the beginning
++        mPosition += mPackingSpaceRemaining / 2;
++        break;
++      case NS_STYLE_ALIGN_CONTENT_SPACE_BETWEEN:
++        MOZ_ASSERT(mPackingSpaceRemaining >= 0,
++                   "negative packing space should make us use 'flex-start' "
++                   "instead of 'space-between'");
++        // 1 packing space between each flex line, no packing space at ends.
++        mNumPackingSpacesRemaining = aLines.Length() - 1;
++        break;
++      case NS_STYLE_ALIGN_CONTENT_SPACE_AROUND: {
++        MOZ_ASSERT(mPackingSpaceRemaining >= 0,
++                   "negative packing space should make us use 'center' "
++                   "instead of 'space-around'");
++        // 1 packing space between each flex line, plus half a packing space
++        // at beginning & end.  So our number of full packing-spaces is equal
++        // to the number of flex lines.
++        MOZ_ASSERT(!aLines.IsEmpty(), "We should have at least 1 line");
++        mNumPackingSpacesRemaining = aLines.Length();
++        // The edges (start/end) share one full packing space
++        nscoord totalEdgePackingSpace =
++          mPackingSpaceRemaining / mNumPackingSpacesRemaining;
++
++        // ...and we'll use half of that right now, at the start
++        mPosition += totalEdgePackingSpace / 2;
++        // ...but we need to subtract all of it right away, so that we won't
++        // hand out any of it to intermediate packing spaces.
++        mPackingSpaceRemaining -= totalEdgePackingSpace;
++        mNumPackingSpacesRemaining--;
++        break;
++      }
++      case NS_STYLE_ALIGN_CONTENT_STRETCH:
++        // Split space equally between the lines:
++        MOZ_ASSERT(mPackingSpaceRemaining >= 0,
++                   "negative packing space should make us use 'flex-start' "
++                   "instead of 'stretch'");
++        if (mPackingSpaceRemaining == 0) {
++          break; // bail early; no space to distribute
++        }
++
++        for (uint32_t i = 0; i < aLines.Length(); i++) {
++          FlexLine& line = aLines[i];
++          // Our share is the amount of space remaining, divided by the number
++          // of lines remainig. 
++          nscoord shareOfExtraSpace =
++            mPackingSpaceRemaining / (aLines.Length() - i);
++          nscoord newSize = line.GetLineCrossSize() + shareOfExtraSpace;
++          line.SetLineCrossSize(newSize);
++          mPackingSpaceRemaining -= shareOfExtraSpace;
++        }
++        break;
++      default:
++        MOZ_CRASH("Unexpected align-content value");
++    }
++  }
++}
++
++void
++CrossAxisPositionTracker::TraversePackingSpace()
++{
++  if (mNumPackingSpacesRemaining) {
++    MOZ_ASSERT(mAlignContent == NS_STYLE_ALIGN_CONTENT_SPACE_BETWEEN ||
++               mAlignContent == NS_STYLE_ALIGN_CONTENT_SPACE_AROUND,
++               "mNumPackingSpacesRemaining only applies for "
++               "space-between/space-around");
++
++    MOZ_ASSERT(mPackingSpaceRemaining >= 0,
++               "ran out of packing space earlier than we expected");
++
++    // NOTE: This integer math will skew the distribution of remainder
++    // app-units towards the end, which is fine.
++    nscoord curPackingSpace =
++      mPackingSpaceRemaining / mNumPackingSpacesRemaining;
++
++    mPosition += curPackingSpace;
++    mNumPackingSpacesRemaining--;
++    mPackingSpaceRemaining -= curPackingSpace;
++  }
++}
++
+ SingleLineCrossAxisPositionTracker::
+   SingleLineCrossAxisPositionTracker(const FlexboxAxisTracker& aAxisTracker)
+   : PositionTracker(aAxisTracker.GetCrossAxis())
+ {
+ }
+ 
+ void
+ FlexLine::ComputeCrossSizeAndBaseline(const FlexboxAxisTracker& aAxisTracker)
+@@ -1726,23 +1868,18 @@ FlexLine::ComputeCrossSizeAndBaseline(co
+   nscoord largestOuterCrossSize = 0;
+   for (uint32_t i = 0; i < mItems.Length(); ++i) {
+     const FlexItem& curItem = mItems[i];
+     nscoord curOuterCrossSize = curItem.GetCrossSize() +
+       curItem.GetMarginBorderPaddingSizeInAxis(aAxisTracker.GetCrossAxis());
+ 
+     if (curItem.GetAlignSelf() == NS_STYLE_ALIGN_ITEMS_BASELINE &&
+         curItem.GetNumAutoMarginsInAxis(aAxisTracker.GetCrossAxis()) == 0) {
+-      // FIXME: Once we support multi-line flexbox with "wrap-reverse", that'll
+-      // give us bottom-to-top cross axes. (But for now, we assume eAxis_TB.)
+       // FIXME: Once we support "writing-mode", we'll have to do baseline
+       // alignment in vertical flex containers here (w/ horizontal cross-axes).
+-      MOZ_ASSERT(aAxisTracker.GetCrossAxis() == eAxis_TB,
+-                 "Only expecting to do baseline-alignment in horizontal "
+-                 "flex containers, with top-to-bottom cross axis");
+ 
+       // Find distance from our item's cross-start and cross-end margin-box
+       // edges to its baseline.
+       //
+       // Here's a diagram of a flex-item that we might be doing this on.
+       // "mmm" is the margin-box, "bbb" is the border-box. The bottom of
+       // the text "BASE" is the baseline.
+       //
+@@ -1914,18 +2051,18 @@ SingleLineCrossAxisPositionTracker::
+     default:
+       NS_NOTREACHED("Unexpected align-self value");
+       break;
+   }
+ }
+ 
+ FlexboxAxisTracker::FlexboxAxisTracker(nsFlexContainerFrame* aFlexContainerFrame)
+ {
+-  uint32_t flexDirection =
+-    aFlexContainerFrame->StylePosition()->mFlexDirection;
++  const nsStylePosition* pos = aFlexContainerFrame->StylePosition();
++  uint32_t flexDirection = pos->mFlexDirection;
+   uint32_t cssDirection =
+     aFlexContainerFrame->StyleVisibility()->mDirection;
+ 
+   MOZ_ASSERT(cssDirection == NS_STYLE_DIRECTION_LTR ||
+              cssDirection == NS_STYLE_DIRECTION_RTL,
+              "Unexpected computed value for 'direction' property");
+   // (Not asserting for flexDirection here; it's checked by the switch below.)
+ 
+@@ -1969,60 +2106,90 @@ FlexboxAxisTracker::FlexboxAxisTracker(n
+   // give us blockDimension.
+   if (flexDirection == NS_STYLE_FLEX_DIRECTION_COLUMN ||
+       flexDirection == NS_STYLE_FLEX_DIRECTION_COLUMN_REVERSE) {
+     mCrossAxis = inlineDimension;
+   } else {
+     mCrossAxis = blockDimension;
+   }
+ 
+-  // FIXME: Once we support "flex-wrap", check if it's "wrap-reverse"
+-  // here to determine whether we should reverse mCrossAxis.
++  // "flex-wrap: wrap-reverse" reverses our cross axis.
++  if (pos->mFlexWrap == NS_STYLE_FLEX_WRAP_WRAP_REVERSE) {
++    mCrossAxis = GetReverseAxis(mCrossAxis);
++  }
++
+   MOZ_ASSERT(IsAxisHorizontal(mMainAxis) != IsAxisHorizontal(mCrossAxis),
+              "main & cross axes should be in different dimensions");
+-
+-
+-  // NOTE: Right now, cross axis is never bottom-to-top.
+-  // The only way for it to be different would be if we used a vertical
+-  // "writing-mode" or if we had "flex-wrap: wrap-reverse" -- but we don't
+-  // support either of those yet, so that can't happen right now.
+-  // (When we add support for either of those properties, this assert will
+-  // no longer hold.)
+-  MOZ_ASSERT(mCrossAxis != eAxis_BT, "Not expecting bottom-to-top cross axis");
+ }
+ 
+ nsresult
+-nsFlexContainerFrame::GenerateFlexItems(
++nsFlexContainerFrame::GenerateFlexLines(
+   nsPresContext* aPresContext,
+   const nsHTMLReflowState& aReflowState,
+   const FlexboxAxisTracker& aAxisTracker,
+-  FlexLine& aFlexLine)
++  nsTArray<FlexLine>& aLines)
+ {
+-  MOZ_ASSERT(aFlexLine.mItems.IsEmpty(),
+-             "Expecting outparam to start out empty");
+-
+-  aFlexLine.mItems.SetCapacity(mFrames.GetLength());
++  MOZ_ASSERT(aLines.IsEmpty(), "Expecting outparam to start out empty");
++
++  // We have at least one FlexLine. Even an empty flex container has a single
++  // (empty) flex line.
++  FlexLine* curLine = aLines.AppendElement();
++
++  nscoord wrapThreshold;
++  if (NS_STYLE_FLEX_WRAP_NOWRAP ==
++      aReflowState.mStylePosition->mFlexWrap) {
++    wrapThreshold = NS_UNCONSTRAINEDSIZE;
++    // Optimization: if we're single line, pre-allocate space for all of our
++    // FlexItems in our single FlexLine.
++    curLine->mItems.SetCapacity(mFrames.GetLength());
++  } else {
++    // XXXdholbert Probably should be calling a simplified (non-child-dependent)
++    // version of ComputeFlexContainerMainSize before this point and using that
++    // value here:
++    wrapThreshold =
++      GET_MAIN_COMPONENT(aAxisTracker,
++                         aReflowState.ComputedWidth(),
++                         GetEffectiveComputedHeight(aReflowState));
++  }
++
+   for (nsFrameList::Enumerator e(mFrames); !e.AtEnd(); e.Next()) {
+-    FlexItem* item = aFlexLine.mItems.AppendElement(
++    FlexItem* item = curLine->mItems.AppendElement(
+                        GenerateFlexItemForChild(aPresContext, e.get(),
+                                                 aReflowState, aAxisTracker));
+ 
+     nsresult rv = ResolveFlexItemMaxContentSizing(aPresContext, *item,
+                                                   aReflowState, aAxisTracker);
+     NS_ENSURE_SUCCESS(rv,rv);
+     nscoord itemInnerHypotheticalMainSize = item->GetMainSize();
+     nscoord itemOuterHypotheticalMainSize = item->GetMainSize() +
+       item->GetMarginBorderPaddingSizeInAxis(aAxisTracker.GetMainAxis());
+ 
+-    // XXXdholbert When we support multi-line, we'll check here if this item's
+-    // outerHypotheticalMainSize takes us past the end of our line's available
+-    // space. If so, we'll create a new FlexLine and shift the item there.
+-
+-    aFlexLine.AddToMainSizeTotals(itemInnerHypotheticalMainSize,
+-                                  itemOuterHypotheticalMainSize);
++    if (wrapThreshold != NS_UNCONSTRAINEDSIZE &&
++        curLine->mItems.Length() > 1 && // (Don't wrap if this is our only item)
++        wrapThreshold < (curLine->GetTotalOuterHypotheticalMainSize() +
++                         itemOuterHypotheticalMainSize)) {
++      // Need to wrap to a new line! Create a new line, create a copy of the
++      // newest FlexItem there, and clear that FlexItem out of the prev. line.
++      curLine = aLines.AppendElement();
++      // NOTE: if AppendElement had to realloc, then |item| may now point to
++      // bogus memory. Null out our pointer and use a freshly-obtained
++      // reference, to be on the safe side.
++      item = nullptr;
++
++      FlexLine& prevLine = aLines[aLines.Length() - 2]; // second-to-last line
++      uint32_t itemIdxInPrevLine = prevLine.mItems.Length() - 1;
++      FlexItem& itemToCopy = prevLine.mItems[itemIdxInPrevLine];
++
++      // Copy item into cur line:
++      curLine->mItems.AppendElement(itemToCopy);
++      // ...and remove the old copy in prev line:
++      prevLine.mItems.RemoveElementAt(itemIdxInPrevLine);
++    }
++    curLine->AddToMainSizeTotals(itemInnerHypotheticalMainSize,
++                                 itemOuterHypotheticalMainSize);
+   }
+ 
+   return NS_OK;
+ }
+ 
+ // Computes the content-box main-size of our flex container.
+ nscoord
+ nsFlexContainerFrame::ComputeFlexContainerMainSize(
+@@ -2072,20 +2239,30 @@ nsFlexContainerFrame::ComputeFlexContain
+   // XXXdholbert Handle constrained-aAvailableHeightForContent case here.
+   nscoord sumOfChildHeights = aLine.GetTotalOuterHypotheticalMainSize();
+   return NS_CSS_MINMAX(sumOfChildHeights,
+                        aReflowState.mComputedMinHeight,
+                        aReflowState.mComputedMaxHeight);
+ }
+ 
+ nscoord
++SumLineCrossSizes(const nsTArray<FlexLine>& aLines)
++{
++  nscoord sum = 0;
++  for (uint32_t lineIdx = 0; lineIdx < aLines.Length(); lineIdx++) {
++    sum += aLines[lineIdx].GetLineCrossSize();
++  }
++  return sum;
++}
++
++nscoord
+ nsFlexContainerFrame::ComputeFlexContainerCrossSize(
+   const nsHTMLReflowState& aReflowState,
+   const FlexboxAxisTracker& aAxisTracker,
+-  nscoord aLineCrossSize,
++  const nsTArray<FlexLine>& aLines,
+   nscoord aAvailableHeightForContent,
+   bool* aIsDefinite,
+   nsReflowStatus& aStatus)
+ {
+   MOZ_ASSERT(aIsDefinite, "outparam pointer must be non-null"); 
+ 
+   if (IsAxisHorizontal(aAxisTracker.GetCrossAxis())) {
+     // Cross axis is horizontal: our cross size is our computed width
+@@ -2110,27 +2287,28 @@ nsFlexContainerFrame::ComputeFlexContain
+     // Fragmenting *and* our fixed height is too tall for available height:
+     // Mark incomplete so we get a next-in-flow, and take up all of the
+     // available height (or the amount of height required by our children, if
+     // that's larger; but of course not more than our own computed height).
+     // XXXdholbert For now, we don't support pushing children to our next
+     // continuation or splitting children, so "amount of height required by
+     // our children" is just our line-height.
+     NS_FRAME_SET_INCOMPLETE(aStatus);
+-    if (aLineCrossSize <= aAvailableHeightForContent) {
++    nscoord sumOfLineCrossSizes = SumLineCrossSizes(aLines);
++    if (sumOfLineCrossSizes <= aAvailableHeightForContent) {
+       return aAvailableHeightForContent;
+     }
+-    return std::min(effectiveComputedHeight, aLineCrossSize);
++    return std::min(effectiveComputedHeight, sumOfLineCrossSizes);
+   }
+ 
+   // Cross axis is vertical and we have auto-height: shrink-wrap our line(s),
+   // subject to our min-size / max-size constraints in that (vertical) axis.
+   // XXXdholbert Handle constrained-aAvailableHeightForContent case here.
+   *aIsDefinite = false;
+-  return NS_CSS_MINMAX(aLineCrossSize,
++  return NS_CSS_MINMAX(SumLineCrossSizes(aLines),
+                        aReflowState.mComputedMinHeight,
+                        aReflowState.mComputedMaxHeight);
+ }
+ 
+ void
+ FlexLine::PositionItemsInMainAxis(uint8_t aJustifyContent,
+                                   nscoord aContentBoxMainSize,
+                                   const FlexboxAxisTracker& aAxisTracker)
+@@ -2343,42 +2521,49 @@ nsFlexContainerFrame::Reflow(nsPresConte
+       SortChildrenIfNeeded<IsOrderLEQ>();
+   } else {
+     SortChildrenIfNeeded<IsOrderLEQWithDOMFallback>();
+   }
+ 
+   const FlexboxAxisTracker axisTracker(this);
+ 
+   // Generate an array of our flex items (already sorted), in a FlexLine.
+-  FlexLine line;
+-  nsresult rv = GenerateFlexItems(aPresContext, aReflowState,
+-                                  axisTracker, line);
++  nsTArray<FlexLine> lines;
++  nsresult rv = GenerateFlexLines(aPresContext, aReflowState,
++                                  axisTracker, lines);
+   NS_ENSURE_SUCCESS(rv, rv);
+ 
+   // If we're being fragmented into a constrained height, subtract off
+   // borderpadding-top from it, to get the available height for our
+   // content box. (Don't subtract if we're skipping top border/padding,
+   // though.)
+   nscoord availableHeightForContent = aReflowState.availableHeight;
+   if (availableHeightForContent != NS_UNCONSTRAINEDSIZE &&
+       !(GetSkipSides() & (1 << NS_SIDE_TOP))) {
+     availableHeightForContent -= aReflowState.mComputedBorderPadding.top;
+     // (Don't let that push availableHeightForContent below zero, though):
+     availableHeightForContent = std::max(availableHeightForContent, 0);
+   }
+ 
++  // XXXdholbert This only depends on |line| in the case where we're
++  // shrinkwrapping, in which case we only have a single line (?).
++  // So passing lines[0] is semi-reasonable here, albeit hacky.
+   const nscoord contentBoxMainSize =
+-    ComputeFlexContainerMainSize(aReflowState, axisTracker, line,
++    ComputeFlexContainerMainSize(aReflowState, axisTracker, lines[0],
+                                  availableHeightForContent, aStatus);
+ 
+-  line.ResolveFlexibleLengths(contentBoxMainSize);
++  for (uint32_t i = 0; i < lines.Length(); i++) {
++    lines[i].ResolveFlexibleLengths(contentBoxMainSize);
++  }
+ 
+   // Cross Size Determination - Flexbox spec section 9.4
+   // ===================================================
+   // Calculate the hypothetical cross size of each item:
++  for (uint32_t lineIdx = 0; lineIdx < lines.Length(); ++lineIdx) { // XXXdholbert indent me
++  FlexLine& line = lines[lineIdx];
+   for (uint32_t i = 0; i < line.mItems.Length(); ++i) {
+     FlexItem& curItem = line.mItems[i];
+ 
+     // (If the item's already been stretched, then it already knows its
+     // cross size.  Don't bother trying to recalculate it.)
+     if (!curItem.IsStretched()) {
+       nsHTMLReflowState childReflowState(aPresContext, aReflowState,
+                                          curItem.Frame(),
+@@ -2391,79 +2576,77 @@ nsFlexContainerFrame::Reflow(nsPresConte
+         childReflowState.SetComputedHeight(curItem.GetMainSize());
+       }
+ 
+       nsresult rv = SizeItemInCrossAxis(aPresContext, axisTracker,
+                                         childReflowState, curItem);
+       NS_ENSURE_SUCCESS(rv, rv);
+     }
+   }
++  }
+ 
+   // Calculate the cross size and (if necessary) baseline-alignment position
+   // for our (single) flex line:
+-  line.ComputeCrossSizeAndBaseline(axisTracker);
++  for (uint32_t lineIdx = 0; lineIdx < lines.Length(); ++lineIdx) {
++    lines[lineIdx].ComputeCrossSizeAndBaseline(axisTracker);
++  }
++
++  bool isCrossSizeDefinite;
++  const nscoord contentBoxCrossSize =
++    ComputeFlexContainerCrossSize(aReflowState, axisTracker,
++                                  lines,
++                                  availableHeightForContent,
++                                  &isCrossSizeDefinite, aStatus);
+ 
+   // Set up state for cross-axis alignment, at a high level (outside the
+   // scope of a particular flex line)
+   CrossAxisPositionTracker
+-    crossAxisPosnTracker(this, axisTracker, aReflowState);
+-
+-  // XXXdholbert Once we've got multi-line flexbox support: here, after we've
+-  // computed the cross size of all lines, we need to check if if
+-  // 'align-content' is 'stretch' -- if it is, we need to give each line an
+-  // additional share of our flex container's desired cross-size. (if it's
+-  // not NS_AUTOHEIGHT and there's any cross-size left over to distribute)
+-  bool isCrossSizeDefinite;
+-  const nscoord contentBoxCrossSize =
+-    ComputeFlexContainerCrossSize(aReflowState, axisTracker,
+-                                  line.GetLineCrossSize(), // XXXdholbert this should take |lines|
+-                                  availableHeightForContent,
+-                                  &isCrossSizeDefinite, aStatus);
+-
+-  if (isCrossSizeDefinite) {
+-    // XXXdholbert When we support multi-line flex containers, we should
+-    // distribute any extra space among or between our lines here according
+-    // to 'align-content'. For now, we do the single-line special behavior:
+-    // "If the flex container has only a single line (even if it's a multi-line
+-    // flex container) and has a definite cross size, the cross size of the
+-    // flex line is the flex container's inner cross size."
+-    line.SetLineCrossSize(contentBoxCrossSize);
+-  }
+-
+-  // Set the flex container's baseline, from its baseline-aligned items.
++    crossAxisPosnTracker(lines,
++                         aReflowState.mStylePosition->mAlignContent,
++                         contentBoxCrossSize, isCrossSizeDefinite, axisTracker);
++
++  // Set the flex container's baseline, from its first line's baseline-aligned items.
+   // (This might give us nscoord_MIN if we don't have any baseline-aligned
+   // flex items.  That's OK, we'll update it below.)
+   nscoord flexContainerAscent =
+-    line.GetBaselineOffsetFromCrossStart();
++    lines[0].GetBaselineOffsetFromCrossStart();
+   if (flexContainerAscent != nscoord_MIN) {
+     // Add top borderpadding, so our ascent is w.r.t. border-box
+     flexContainerAscent += aReflowState.mComputedBorderPadding.top;
+   }
+ 
++  for (uint32_t lineIdx = 0; lineIdx < lines.Length(); ++lineIdx) { // XXXdholbert indent me
++  FlexLine& line = lines[lineIdx];
++
+   // Main-Axis Alignment - Flexbox spec section 9.5
+   // ==============================================
+   line.PositionItemsInMainAxis(aReflowState.mStylePosition->mJustifyContent,
+                                contentBoxMainSize,
+                                axisTracker);
+ 
+   // Cross-Axis Alignment - Flexbox spec section 9.6
+   // ===============================================
+   line.PositionItemsInCrossAxis(crossAxisPosnTracker.GetPosition(),
+                                 axisTracker);
++  crossAxisPosnTracker.TraverseLine(line);
++  crossAxisPosnTracker.TraversePackingSpace();
++  }
+ 
+   // Before giving each child a final reflow, calculate the origin of the
+   // flex container's content box (with respect to its border-box), so that
+   // we can compute our flex item's final positions.
+   nsMargin containerBorderPadding(aReflowState.mComputedBorderPadding);
+   ApplySkipSides(containerBorderPadding, &aReflowState);
+   const nsPoint containerContentBoxOrigin(containerBorderPadding.left,
+                                           containerBorderPadding.top);
+ 
+   // FINAL REFLOW: Give each child frame another chance to reflow, now that
+   // we know its final size and position.
++  for (uint32_t lineIdx = 0; lineIdx < lines.Length(); ++lineIdx) { // XXXdholbert indent me
++  FlexLine& line = lines[lineIdx];
+   for (uint32_t i = 0; i < line.mItems.Length(); ++i) {
+     FlexItem& curItem = line.mItems[i];
+ 
+     nsPoint physicalPosn = axisTracker.PhysicalPositionFromLogicalPosition(
+                              curItem.GetMainPosition(),
+                              curItem.GetCrossPosition(),
+                              contentBoxMainSize,
+                              contentBoxCrossSize);
+@@ -2559,33 +2742,34 @@ nsFlexContainerFrame::Reflow(nsPresConte
+ 
+       // (We use GetNormalPosition() instead of physicalPosn because we don't
+       // want relative positioning on the child to affect the baseline that we
+       // read from it).
+       flexContainerAscent = curItem.Frame()->GetNormalPosition().y +
+         childDesiredSize.ascent;
+     }
+   }
++  }
+ 
+   nsSize desiredContentBoxSize =
+     axisTracker.PhysicalSizeFromLogicalSizes(contentBoxMainSize,
+                                              contentBoxCrossSize);
+ 
+   aDesiredSize.width = desiredContentBoxSize.width +
+     containerBorderPadding.LeftRight();
+   // Does *NOT* include bottom border/padding yet (we add that a bit lower down)
+   aDesiredSize.height = desiredContentBoxSize.height +
+     containerBorderPadding.top;
+ 
+   if (flexContainerAscent == nscoord_MIN) {
+     // Still don't have our baseline set -- this happens if we have no
+     // children (or if our children are huge enough that they have nscoord_MIN
+     // as their baseline... in which case, we'll use the wrong baseline, but no
+     // big deal)
+-    NS_WARN_IF_FALSE(line.mItems.IsEmpty(),
++    NS_WARN_IF_FALSE(lines[0].mItems.IsEmpty(),
+                      "Have flex items but didn't get an ascent - that's odd "
+                      "(or there are just gigantic sizes involved)");
+     // Per spec, just use the bottom of content-box.
+     flexContainerAscent = aDesiredSize.height;
+   }
+   aDesiredSize.ascent = flexContainerAscent;
+ 
+   // Now: If we're complete, add bottom border/padding to desired height
+diff --git a/layout/generic/nsFlexContainerFrame.h b/layout/generic/nsFlexContainerFrame.h
+--- a/layout/generic/nsFlexContainerFrame.h
++++ b/layout/generic/nsFlexContainerFrame.h
+@@ -89,30 +89,30 @@ protected:
+   // Returns nsresult because we might have to reflow aFlexItem.Frame() (to
+   // get its vertical intrinsic size in a vertical flexbox), and if that
+   // reflow fails (returns a failure nsresult), we want to bail out.
+   nsresult ResolveFlexItemMaxContentSizing(nsPresContext* aPresContext,
+                                            FlexItem& aFlexItem,
+                                            const nsHTMLReflowState& aParentReflowState,
+                                            const FlexboxAxisTracker& aAxisTracker);
+ 
+-  nsresult GenerateFlexItems(nsPresContext* aPresContext,
++  nsresult GenerateFlexLines(nsPresContext* aPresContext,
+                              const nsHTMLReflowState& aReflowState,
+                              const FlexboxAxisTracker& aAxisTracker,
+-                             FlexLine& aLine);
++                             nsTArray<FlexLine>& aLines);
+ 
+   nscoord ComputeFlexContainerMainSize(const nsHTMLReflowState& aReflowState,
+                                        const FlexboxAxisTracker& aAxisTracker,
+                                        const FlexLine& aLine,
+                                        nscoord aAvailableHeightForContent,
+                                        nsReflowStatus& aStatus);
+ 
+   nscoord ComputeFlexContainerCrossSize(const nsHTMLReflowState& aReflowState,
+                                         const FlexboxAxisTracker& aAxisTracker,
+-                                        nscoord aLineCrossSize,
++                                        const nsTArray<FlexLine>& aLines,
+                                         nscoord aAvailableHeightForContent,
+                                         bool* aIsDefinite,
+                                         nsReflowStatus& aStatus);
+ 
+   nsresult SizeItemInCrossAxis(nsPresContext* aPresContext,
+                                const FlexboxAxisTracker& aAxisTracker,
+                                nsHTMLReflowState& aChildReflowState,
+                                FlexItem& aItem);
+diff --git a/layout/style/nsCSSKeywordList.h b/layout/style/nsCSSKeywordList.h
+--- a/layout/style/nsCSSKeywordList.h
++++ b/layout/style/nsCSSKeywordList.h
+@@ -552,16 +552,18 @@ CSS_KEY(visiblestroke, visiblestroke)
+ CSS_KEY(w-resize, w_resize)
+ CSS_KEY(wait, wait)
+ CSS_KEY(wavy, wavy)
+ CSS_KEY(weight, weight)
+ CSS_KEY(wider, wider)
+ CSS_KEY(window, window)
+ CSS_KEY(windowframe, windowframe)
+ CSS_KEY(windowtext, windowtext)
++CSS_KEY(wrap, wrap)
++CSS_KEY(wrap-reverse, wrap_reverse)
+ CSS_KEY(write-only, write_only)
+ CSS_KEY(x-large, x_large)
+ CSS_KEY(x-small, x_small)
+ CSS_KEY(xx-large, xx_large)
+ CSS_KEY(xx-small, xx_small)
+ CSS_KEY(zoom-in, zoom_in)
+ CSS_KEY(zoom-out, zoom_out)
+ 
+diff --git a/layout/style/nsCSSPropList.h b/layout/style/nsCSSPropList.h
+--- a/layout/style/nsCSSPropList.h
++++ b/layout/style/nsCSSPropList.h
+@@ -1594,16 +1594,26 @@ CSS_PROP_TABLEBORDER(
+     EmptyCells,
+     CSS_PROPERTY_PARSE_VALUE,
+     "",
+     VARIANT_HK,
+     kEmptyCellsKTable,
+     CSS_PROP_NO_OFFSET,
+     eStyleAnimType_None)
+ CSS_PROP_POSITION(
++    align-content,
++    align_content,
++    AlignContent,
++    CSS_PROPERTY_PARSE_VALUE,
++    "",
++    VARIANT_HK,
++    kAlignContentKTable,
++    offsetof(nsStylePosition, mAlignContent),
++    eStyleAnimType_EnumU8)
++CSS_PROP_POSITION(
+     align-items,
+     align_items,
+     AlignItems,
+     CSS_PROPERTY_PARSE_VALUE,
+     "",
+     VARIANT_HK,
+     kAlignItemsKTable,
+     offsetof(nsStylePosition, mAlignItems),
+@@ -1673,16 +1683,26 @@ CSS_PROP_POSITION(
+     // NOTE: The parsing implementation for the 'flex' shorthand property has
+     // its own code to parse each subproperty. It does not depend on the
+     // longhand parsing defined here.
+     VARIANT_HN,
+     nullptr,
+     offsetof(nsStylePosition, mFlexShrink),
+     eStyleAnimType_float) // float, except animations to/from 0 shouldn't work
+ CSS_PROP_POSITION(
++    flex-wrap,
++    flex_wrap,
++    FlexWrap,
++    CSS_PROPERTY_PARSE_VALUE,
++    "",
++    VARIANT_HK,
++    kFlexWrapKTable,
++    offsetof(nsStylePosition, mFlexWrap),
++    eStyleAnimType_EnumU8)
++CSS_PROP_POSITION(
+     order,
+     order,
+     Order,
+     CSS_PROPERTY_PARSE_VALUE,
+     "",
+     VARIANT_HI,
+     nullptr,
+     offsetof(nsStylePosition, mOrder),
+diff --git a/layout/style/nsCSSProps.cpp b/layout/style/nsCSSProps.cpp
+--- a/layout/style/nsCSSProps.cpp
++++ b/layout/style/nsCSSProps.cpp
+@@ -968,16 +968,26 @@ const int32_t nsCSSProps::kDisplayKTable
+ 
+ const int32_t nsCSSProps::kEmptyCellsKTable[] = {
+   eCSSKeyword_show,                 NS_STYLE_TABLE_EMPTY_CELLS_SHOW,
+   eCSSKeyword_hide,                 NS_STYLE_TABLE_EMPTY_CELLS_HIDE,
+   eCSSKeyword__moz_show_background, NS_STYLE_TABLE_EMPTY_CELLS_SHOW_BACKGROUND,
+   eCSSKeyword_UNKNOWN,-1
+ };
+ 
++const int32_t nsCSSProps::kAlignContentKTable[] = {
++  eCSSKeyword_flex_start,    NS_STYLE_ALIGN_CONTENT_FLEX_START,
++  eCSSKeyword_flex_end,      NS_STYLE_ALIGN_CONTENT_FLEX_END,
++  eCSSKeyword_center,        NS_STYLE_ALIGN_CONTENT_CENTER,
++  eCSSKeyword_space_between, NS_STYLE_ALIGN_CONTENT_SPACE_BETWEEN,
++  eCSSKeyword_space_around,  NS_STYLE_ALIGN_CONTENT_SPACE_AROUND,
++  eCSSKeyword_stretch,       NS_STYLE_ALIGN_CONTENT_STRETCH,
++  eCSSKeyword_UNKNOWN,-1
++};
++
+ const int32_t nsCSSProps::kAlignItemsKTable[] = {
+   eCSSKeyword_flex_start, NS_STYLE_ALIGN_ITEMS_FLEX_START,
+   eCSSKeyword_flex_end,   NS_STYLE_ALIGN_ITEMS_FLEX_END,
+   eCSSKeyword_center,     NS_STYLE_ALIGN_ITEMS_CENTER,
+   eCSSKeyword_baseline,   NS_STYLE_ALIGN_ITEMS_BASELINE,
+   eCSSKeyword_stretch,    NS_STYLE_ALIGN_ITEMS_STRETCH,
+   eCSSKeyword_UNKNOWN,-1
+ };
+@@ -996,16 +1006,23 @@ const int32_t nsCSSProps::kAlignSelfKTab
+ const int32_t nsCSSProps::kFlexDirectionKTable[] = {
+   eCSSKeyword_row,            NS_STYLE_FLEX_DIRECTION_ROW,
+   eCSSKeyword_row_reverse,    NS_STYLE_FLEX_DIRECTION_ROW_REVERSE,
+   eCSSKeyword_column,         NS_STYLE_FLEX_DIRECTION_COLUMN,
+   eCSSKeyword_column_reverse, NS_STYLE_FLEX_DIRECTION_COLUMN_REVERSE,
+   eCSSKeyword_UNKNOWN,-1
+ };
+ 
++const int32_t nsCSSProps::kFlexWrapKTable[] = {
++  eCSSKeyword_nowrap,       NS_STYLE_FLEX_WRAP_NOWRAP,
++  eCSSKeyword_wrap,         NS_STYLE_FLEX_WRAP_WRAP,
++  eCSSKeyword_wrap_reverse, NS_STYLE_FLEX_WRAP_WRAP_REVERSE,
++  eCSSKeyword_UNKNOWN,-1
++};
++
+ const int32_t nsCSSProps::kJustifyContentKTable[] = {
+   eCSSKeyword_flex_start,    NS_STYLE_JUSTIFY_CONTENT_FLEX_START,
+   eCSSKeyword_flex_end,      NS_STYLE_JUSTIFY_CONTENT_FLEX_END,
+   eCSSKeyword_center,        NS_STYLE_JUSTIFY_CONTENT_CENTER,
+   eCSSKeyword_space_between, NS_STYLE_JUSTIFY_CONTENT_SPACE_BETWEEN,
+   eCSSKeyword_space_around,  NS_STYLE_JUSTIFY_CONTENT_SPACE_AROUND,
+   eCSSKeyword_UNKNOWN,-1
+ };
+diff --git a/layout/style/nsCSSProps.h b/layout/style/nsCSSProps.h
+--- a/layout/style/nsCSSProps.h
++++ b/layout/style/nsCSSProps.h
+@@ -474,19 +474,21 @@ public:
+   static const int32_t kClearKTable[];
+   static const int32_t kColorKTable[];
+   static const int32_t kContentKTable[];
+   static const int32_t kCursorKTable[];
+   static const int32_t kDirectionKTable[];
+   static const int32_t kDisplayKTable[];
+   static const int32_t kElevationKTable[];
+   static const int32_t kEmptyCellsKTable[];
++  static const int32_t kAlignContentKTable[];
+   static const int32_t kAlignItemsKTable[];
+   static const int32_t kAlignSelfKTable[];
+   static const int32_t kFlexDirectionKTable[];
++  static const int32_t kFlexWrapKTable[];
+   static const int32_t kJustifyContentKTable[];
+   static const int32_t kFloatKTable[];
+   static const int32_t kFloatEdgeKTable[];
+   static const int32_t kFontKTable[];
+   static const int32_t kFontKerningKTable[];
+   static const int32_t kFontSizeKTable[];
+   static const int32_t kFontSmoothingKTable[];
+   static const int32_t kFontStretchKTable[];
+diff --git a/layout/style/nsComputedDOMStyle.cpp b/layout/style/nsComputedDOMStyle.cpp
+--- a/layout/style/nsComputedDOMStyle.cpp
++++ b/layout/style/nsComputedDOMStyle.cpp
+@@ -3349,16 +3349,26 @@ nsComputedDOMStyle::DoGetBorderImageRepe
+   valueList->AppendCSSValue(valY);
+   valY->SetIdent(
+     nsCSSProps::ValueToKeywordEnum(border->mBorderImageRepeatV,
+                                    nsCSSProps::kBorderImageRepeatKTable));
+   return valueList;
+ }
+ 
+ CSSValue*
++nsComputedDOMStyle::DoGetAlignContent()
++{
++  nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
++  val->SetIdent(
++    nsCSSProps::ValueToKeywordEnum(StylePosition()->mAlignContent,
++                                   nsCSSProps::kAlignContentKTable));
++  return val;
++}
++
++CSSValue*
+ nsComputedDOMStyle::DoGetAlignItems()
+ {
+   nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
+   val->SetIdent(
+     nsCSSProps::ValueToKeywordEnum(StylePosition()->mAlignItems,
+                                    nsCSSProps::kAlignItemsKTable));
+   return val;
+ }
+@@ -3432,16 +3442,26 @@ CSSValue*
+ nsComputedDOMStyle::DoGetFlexShrink()
+ {
+   nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
+   val->SetNumber(StylePosition()->mFlexShrink);
+   return val;
+ }
+ 
+ CSSValue*
++nsComputedDOMStyle::DoGetFlexWrap()
++{
++  nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
++  val->SetIdent(
++    nsCSSProps::ValueToKeywordEnum(StylePosition()->mFlexWrap,
++                                   nsCSSProps::kFlexWrapKTable));
++  return val;
++}
++
++CSSValue*
+ nsComputedDOMStyle::DoGetOrder()
+ {
+   nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
+   val->SetNumber(StylePosition()->mOrder);
+   return val;
+ }
+ 
+ CSSValue*
+diff --git a/layout/style/nsComputedDOMStyle.h b/layout/style/nsComputedDOMStyle.h
+--- a/layout/style/nsComputedDOMStyle.h
++++ b/layout/style/nsComputedDOMStyle.h
+@@ -434,22 +434,24 @@ private:
+   mozilla::dom::CSSValue* DoGetAnimationDelay();
+   mozilla::dom::CSSValue* DoGetAnimationTimingFunction();
+   mozilla::dom::CSSValue* DoGetAnimationDirection();
+   mozilla::dom::CSSValue* DoGetAnimationFillMode();
+   mozilla::dom::CSSValue* DoGetAnimationIterationCount();
+   mozilla::dom::CSSValue* DoGetAnimationPlayState();
+ 
+   /* CSS Flexbox properties */
++  mozilla::dom::CSSValue* DoGetAlignContent();
+   mozilla::dom::CSSValue* DoGetAlignItems();
+   mozilla::dom::CSSValue* DoGetAlignSelf();
+   mozilla::dom::CSSValue* DoGetFlexBasis();
+   mozilla::dom::CSSValue* DoGetFlexDirection();
+   mozilla::dom::CSSValue* DoGetFlexGrow();
+   mozilla::dom::CSSValue* DoGetFlexShrink();
++  mozilla::dom::CSSValue* DoGetFlexWrap();
+   mozilla::dom::CSSValue* DoGetOrder();
+   mozilla::dom::CSSValue* DoGetJustifyContent();
+ 
+   /* SVG properties */
+   mozilla::dom::CSSValue* DoGetFill();
+   mozilla::dom::CSSValue* DoGetStroke();
+   mozilla::dom::CSSValue* DoGetMarkerEnd();
+   mozilla::dom::CSSValue* DoGetMarkerMid();
+diff --git a/layout/style/nsComputedDOMStylePropertyList.h b/layout/style/nsComputedDOMStylePropertyList.h
+--- a/layout/style/nsComputedDOMStylePropertyList.h
++++ b/layout/style/nsComputedDOMStylePropertyList.h
+@@ -34,16 +34,17 @@
+  * Properties commented out with // are not yet implemented            *
+  * Properties commented out with //// are shorthands and not queryable *
+ \* ******************************************************************* */
+ 
+ /* ***************************** *\
+  * Implementations of CSS styles *
+ \* ***************************** */
+ 
++COMPUTED_STYLE_PROP(align_content,                   AlignContent)
+ COMPUTED_STYLE_PROP(align_items,                   AlignItems)
+ COMPUTED_STYLE_PROP(align_self,                    AlignSelf)
+ //// COMPUTED_STYLE_PROP(animation,                Animation)
+ COMPUTED_STYLE_PROP(animation_delay,               AnimationDelay)
+ COMPUTED_STYLE_PROP(animation_direction,           AnimationDirection)
+ COMPUTED_STYLE_PROP(animation_duration,            AnimationDuration)
+ COMPUTED_STYLE_PROP(animation_fill_mode,           AnimationFillMode)
+ COMPUTED_STYLE_PROP(animation_iteration_count,     AnimationIterationCount)
+@@ -105,16 +106,17 @@ COMPUTED_STYLE_PROP(counter_reset,      
+ COMPUTED_STYLE_PROP(cursor,                        Cursor)
+ COMPUTED_STYLE_PROP(direction,                     Direction)
+ COMPUTED_STYLE_PROP(display,                       Display)
+ COMPUTED_STYLE_PROP(empty_cells,                   EmptyCells)
+ COMPUTED_STYLE_PROP(flex_basis,                    FlexBasis)
+ COMPUTED_STYLE_PROP(flex_direction,                FlexDirection)
+ COMPUTED_STYLE_PROP(flex_grow,                     FlexGrow)
+ COMPUTED_STYLE_PROP(flex_shrink,                   FlexShrink)
++COMPUTED_STYLE_PROP(flex_wrap,                     FlexWrap)
+ COMPUTED_STYLE_PROP(float,                         Float)
+ //// COMPUTED_STYLE_PROP(font,                     Font)
+ COMPUTED_STYLE_PROP(font_family,                   FontFamily)
+ COMPUTED_STYLE_PROP(font_kerning,                  FontKerning)
+ COMPUTED_STYLE_PROP(font_size,                     FontSize)
+ COMPUTED_STYLE_PROP(font_size_adjust,              FontSizeAdjust)
+ COMPUTED_STYLE_PROP(font_stretch,                  FontStretch)
+ COMPUTED_STYLE_PROP(font_style,                    FontStyle)
+diff --git a/layout/style/nsRuleNode.cpp b/layout/style/nsRuleNode.cpp
+--- a/layout/style/nsRuleNode.cpp
++++ b/layout/style/nsRuleNode.cpp
+@@ -6937,16 +6937,23 @@ nsRuleNode::ComputePositionData(void* aS
+ 
+   // box-sizing: enum, inherit, initial
+   SetDiscrete(*aRuleData->ValueForBoxSizing(),
+               pos->mBoxSizing, canStoreInRuleTree,
+               SETDSC_ENUMERATED | SETDSC_UNSET_INITIAL,
+               parentPos->mBoxSizing,
+               NS_STYLE_BOX_SIZING_CONTENT, 0, 0, 0, 0);
+ 
++  // align-content: enum, inherit, initial
++  SetDiscrete(*aRuleData->ValueForAlignContent(),
++              pos->mAlignContent, canStoreInRuleTree,
++              SETDSC_ENUMERATED | SETDSC_UNSET_INITIAL,
++              parentPos->mAlignContent,
++              NS_STYLE_ALIGN_CONTENT_STRETCH, 0, 0, 0, 0);
++
+   // align-items: enum, inherit, initial
+   SetDiscrete(*aRuleData->ValueForAlignItems(),
+               pos->mAlignItems, canStoreInRuleTree,
+               SETDSC_ENUMERATED | SETDSC_UNSET_INITIAL,
+               parentPos->mAlignItems,
+               NS_STYLE_ALIGN_ITEMS_INITIAL_VALUE, 0, 0, 0, 0);
+ 
+   // align-self: enum, inherit, initial
+@@ -7020,16 +7027,23 @@ nsRuleNode::ComputePositionData(void* aS
+             SETFCT_UNSET_INITIAL);
+ 
+   // flex-shrink: float, inherit, initial
+   SetFactor(*aRuleData->ValueForFlexShrink(),
+             pos->mFlexShrink, canStoreInRuleTree,
+             parentPos->mFlexShrink, 1.0f,
+             SETFCT_UNSET_INITIAL);
+ 
++  // flex-wrap: enum, inherit, initial
++  SetDiscrete(*aRuleData->ValueForFlexWrap(),
++              pos->mFlexWrap, canStoreInRuleTree,
++              SETDSC_ENUMERATED | SETDSC_UNSET_INITIAL,
++              parentPos->mFlexWrap,
++              NS_STYLE_FLEX_WRAP_NOWRAP, 0, 0, 0, 0);
++
+   // order: integer, inherit, initial
+   SetDiscrete(*aRuleData->ValueForOrder(),
+               pos->mOrder, canStoreInRuleTree,
+               SETDSC_INTEGER | SETDSC_UNSET_INITIAL,
+               parentPos->mOrder,
+               NS_STYLE_ORDER_INITIAL, 0, 0, 0, 0);
+ 
+   // justify-content: enum, inherit, initial
+diff --git a/layout/style/nsStyleConsts.h b/layout/style/nsStyleConsts.h
+--- a/layout/style/nsStyleConsts.h
++++ b/layout/style/nsStyleConsts.h
+@@ -398,16 +398,24 @@ static inline mozilla::css::Side operato
+ #define NS_STYLE_DISPLAY_DECK                   26
+ #define NS_STYLE_DISPLAY_POPUP                  27
+ #define NS_STYLE_DISPLAY_GROUPBOX               28
+ #endif
+ #define NS_STYLE_DISPLAY_FLEX                   29
+ #define NS_STYLE_DISPLAY_INLINE_FLEX            30
+ 
+ // See nsStylePosition
++#define NS_STYLE_ALIGN_CONTENT_FLEX_START       0
++#define NS_STYLE_ALIGN_CONTENT_FLEX_END         1
++#define NS_STYLE_ALIGN_CONTENT_CENTER           2
++#define NS_STYLE_ALIGN_CONTENT_SPACE_BETWEEN    3
++#define NS_STYLE_ALIGN_CONTENT_SPACE_AROUND     4
++#define NS_STYLE_ALIGN_CONTENT_STRETCH          5
++
++// See nsStylePosition
+ #define NS_STYLE_ALIGN_ITEMS_FLEX_START         0
+ #define NS_STYLE_ALIGN_ITEMS_FLEX_END           1
+ #define NS_STYLE_ALIGN_ITEMS_CENTER             2
+ #define NS_STYLE_ALIGN_ITEMS_BASELINE           3
+ #define NS_STYLE_ALIGN_ITEMS_STRETCH            4
+ 
+ // For convenience/clarity (since we use this default value in multiple places)
+ #define NS_STYLE_ALIGN_ITEMS_INITIAL_VALUE      NS_STYLE_ALIGN_ITEMS_STRETCH
+@@ -420,16 +428,21 @@ static inline mozilla::css::Side operato
+ 
+ // See nsStylePosition
+ #define NS_STYLE_FLEX_DIRECTION_ROW             0
+ #define NS_STYLE_FLEX_DIRECTION_ROW_REVERSE     1
+ #define NS_STYLE_FLEX_DIRECTION_COLUMN          2
+ #define NS_STYLE_FLEX_DIRECTION_COLUMN_REVERSE  3
+ 
+ // See nsStylePosition
++#define NS_STYLE_FLEX_WRAP_NOWRAP               0
++#define NS_STYLE_FLEX_WRAP_WRAP                 1
++#define NS_STYLE_FLEX_WRAP_WRAP_REVERSE         2
++
++// See nsStylePosition
+ // NOTE: This is the initial value of the integer-valued 'order' property
+ // (rather than an internal numerical representation of some keyword).
+ #define NS_STYLE_ORDER_INITIAL                  0
+ 
+ // See nsStylePosition
+ #define NS_STYLE_JUSTIFY_CONTENT_FLEX_START     0
+ #define NS_STYLE_JUSTIFY_CONTENT_FLEX_END       1
+ #define NS_STYLE_JUSTIFY_CONTENT_CENTER         2
+diff --git a/layout/style/nsStyleStruct.cpp b/layout/style/nsStyleStruct.cpp
+--- a/layout/style/nsStyleStruct.cpp
++++ b/layout/style/nsStyleStruct.cpp
+@@ -1264,19 +1264,21 @@ nsStylePosition::nsStylePosition(void)
+   mWidth.SetAutoValue();
+   mMinWidth.SetCoordValue(0);
+   mMaxWidth.SetNoneValue();
+   mHeight.SetAutoValue();
+   mMinHeight.SetCoordValue(0);
+   mMaxHeight.SetNoneValue();
+   mFlexBasis.SetAutoValue();
+   mBoxSizing = NS_STYLE_BOX_SIZING_CONTENT;
++  mAlignContent = NS_STYLE_ALIGN_CONTENT_STRETCH;
+   mAlignItems = NS_STYLE_ALIGN_ITEMS_INITIAL_VALUE;
+   mAlignSelf = NS_STYLE_ALIGN_SELF_AUTO;
+   mFlexDirection = NS_STYLE_FLEX_DIRECTION_ROW;
++  mFlexWrap = NS_STYLE_FLEX_WRAP_NOWRAP;
+   mJustifyContent = NS_STYLE_JUSTIFY_CONTENT_FLEX_START;
+   mOrder = NS_STYLE_ORDER_INITIAL;
+   mFlexGrow = 0.0f;
+   mFlexShrink = 1.0f;
+   mZIndex.SetAutoValue();
+ }
+ 
+ nsStylePosition::~nsStylePosition(void) 
+@@ -1319,32 +1321,48 @@ nsChangeHint nsStylePosition::CalcDiffer
+   if (mAlignSelf != aOther.mAlignSelf ||
+       mFlexBasis != aOther.mFlexBasis ||
+       mFlexGrow != aOther.mFlexGrow ||
+       mFlexShrink != aOther.mFlexShrink ||
+       mOrder != aOther.mOrder) {
+     return NS_CombineHint(hint, nsChangeHint_AllReflowHints);
+   }
+ 
+-  // Properties that apply to flexbox containers:
+-
+-  // flex-direction can swap a flexbox between vertical & horizontal.
+-  // align-items can change the sizing of a flexbox & the positioning
+-  // of its children.
++  // Properties that apply to flex containers:
++  // - flex-direction can swap a flex container between vertical & horizontal.
++  // - align-items can change the sizing of a flex container & the positioning
++  //   of its children.
++  // - flex-wrap changes whether a flex container's children are wrapped, which
++  //   impacts their sizing/positioning and hence impacts the container's size.
+   if (mAlignItems != aOther.mAlignItems ||
+-      mFlexDirection != aOther.mFlexDirection) {
++      mFlexDirection != aOther.mFlexDirection ||
++      mFlexWrap != aOther.mFlexWrap) {
+     return NS_CombineHint(hint, nsChangeHint_AllReflowHints);
+   }
+ 
++
+   // Changing justify-content on a flexbox might affect the positioning of its
+   // children, but it won't affect any sizing.
+   if (mJustifyContent != aOther.mJustifyContent) {
+     NS_UpdateHint(hint, nsChangeHint_NeedReflow);
+   }
+ 
++  // Properties that apply only to multi-line flex containers:
++  // 'align-content' can change the positioning & sizing of a multi-line flex
++  // container's children when there's extra space in the cross axis, but it
++  // shouldn't affect the container's own sizing.
++  //
++  // NOTE: If we get here, we know that mFlexWrap == aOther.mFlexWrap
++  // (otherwise, we would've returned earlier). So it doesn't matter which one
++  // of those we check to see if we're multi-line.
++  if (mFlexWrap != NS_STYLE_FLEX_WRAP_NOWRAP &&
++      mAlignContent != aOther.mAlignContent) {
++    NS_UpdateHint(hint, nsChangeHint_NeedReflow);
++  }
++
+   if (mHeight != aOther.mHeight ||
+       mMinHeight != aOther.mMinHeight ||
+       mMaxHeight != aOther.mMaxHeight) {
+     // Height changes can affect descendant intrinsic sizes due to replaced
+     // elements with percentage heights in descendants which also have
+     // percentage heights.  And due to our not-so-great computation of mVResize
+     // in nsHTMLReflowState, they do need to force reflow of the whole subtree.
+     // XXXbz due to XUL caching heights as well, height changes also need to
+diff --git a/layout/style/nsStyleStruct.h b/layout/style/nsStyleStruct.h
+--- a/layout/style/nsStyleStruct.h
++++ b/layout/style/nsStyleStruct.h
+@@ -1122,19 +1122,21 @@ struct nsStylePosition {
+   nsStyleCoord  mWidth;                 // [reset] coord, percent, enum, calc, auto
+   nsStyleCoord  mMinWidth;              // [reset] coord, percent, enum, calc
+   nsStyleCoord  mMaxWidth;              // [reset] coord, percent, enum, calc, none
+   nsStyleCoord  mHeight;                // [reset] coord, percent, calc, auto
+   nsStyleCoord  mMinHeight;             // [reset] coord, percent, calc
+   nsStyleCoord  mMaxHeight;             // [reset] coord, percent, calc, none
+   nsStyleCoord  mFlexBasis;             // [reset] coord, percent, enum, calc, auto
+   uint8_t       mBoxSizing;             // [reset] see nsStyleConsts.h
++  uint8_t       mAlignContent;          // [reset] see nsStyleConsts.h
+   uint8_t       mAlignItems;            // [reset] see nsStyleConsts.h
+   uint8_t       mAlignSelf;             // [reset] see nsStyleConsts.h
+   uint8_t       mFlexDirection;         // [reset] see nsStyleConsts.h
++  uint8_t       mFlexWrap;              // [reset] see nsStyleConsts.h
+   uint8_t       mJustifyContent;        // [reset] see nsStyleConsts.h
+   int32_t       mOrder;                 // [reset] integer
+   float         mFlexGrow;              // [reset] float
+   float         mFlexShrink;            // [reset] float
+   nsStyleCoord  mZIndex;                // [reset] integer, auto
+ 
+   bool WidthDependsOnContainer() const
+     { return WidthCoordDependsOnContainer(mWidth); }
+diff --git a/layout/style/test/property_database.js b/layout/style/test/property_database.js
+--- a/layout/style/test/property_database.js
++++ b/layout/style/test/property_database.js
+@@ -3691,16 +3691,30 @@ var gCSSProperties = {
+ 	"vector-effect": {
+ 		domProp: "vectorEffect",
+ 		inherited: false,
+ 		type: CSS_TYPE_LONGHAND,
+ 		initial_values: [ "none" ],
+ 		other_values: [ "non-scaling-stroke" ],
+ 		invalid_values: []
+ 	},
++	"align-content": {
++		domProp: "alignContent",
++		inherited: false,
++		type: CSS_TYPE_LONGHAND,
++		initial_values: [ "stretch" ],
++		other_values: [
++			"flex-start",
++			"flex-end",
++			"center",
++			"space-between",
++			"space-around"
++		],
++		invalid_values: [ "abc", "30px", "0", "auto" ]
++	},
+ 	"align-items": {
+ 		domProp: "alignItems",
+ 		inherited: false,
+ 		type: CSS_TYPE_LONGHAND,
+ 		initial_values: [ "stretch" ],
+ 		other_values: [ "flex-start", "flex-end", "center", "baseline" ],
+ 		invalid_values: [ "space-between", "abc", "30px" ]
+ 	},
+@@ -3839,16 +3853,24 @@ var gCSSProperties = {
+ 	"flex-shrink": {
+ 		domProp: "flexShrink",
+ 		inherited: false,
+ 		type: CSS_TYPE_LONGHAND,
+ 		initial_values: [ "1" ],
+ 		other_values: [ "3", "0", "0.0", "2.5", "123" ],
+ 		invalid_values: [ "0px", "-5", "1%", "3em", "stretch", "auto" ]
+ 	},
++	"flex-wrap": {
++		domProp: "flexWrap",
++		inherited: false,
++		type: CSS_TYPE_LONGHAND,
++		initial_values: [ "nowrap" ],
++		other_values: [ "wrap", "wrap-reverse" ],
++		invalid_values: [ "10px", "30%", "justify", "column wrap", "auto" ]
++	},
+ 	"order": {
+ 		domProp: "order",
+ 		inherited: false,
+ 		type: CSS_TYPE_LONGHAND,
+ 		initial_values: [ "0" ],
+ 		other_values: [ "1", "99999", "-1", "-50" ],
+ 		invalid_values: [ "0px", "1.0", "1.", "1%", "0.2", "3em", "stretch" ]
+ 	},
