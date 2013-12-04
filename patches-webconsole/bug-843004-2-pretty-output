@@ -1,13 +1,13 @@
 # HG changeset patch
-# Parent 2a44c4e95d2c84bc45cfaa24106a6b4f6e5764d4
+# Parent f3f8f27131807410440af922f6741d5cbbbe541f
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1386019287 -7200
+# Date 1386193808 -7200
 Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output
 
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -3187,20 +3187,197 @@ VariablesView.getString = function(aGrip
+@@ -3101,20 +3101,201 @@ VariablesView.getString = function(aGrip
        case "NaN":
        case "Infinity":
        case "-Infinity":
@@ -58,9 +58,6 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +            return prefix + "[" + result.join(", ") + "]";
 +          }
 +
-+          if (aGrip.class == "Array") {
-+            return "Array(" + preview.length + ")";
-+          }
 +          return aGrip.class + "[" + preview.length + "]";
 +        }
 +
@@ -194,6 +191,13 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +        }
 +
 +        if (props.length > 0) {
++          if (preview.ownPropertiesLength) {
++            let previewLength = Object.keys(preview.ownProperties).length;
++            let diff = preview.ownPropertiesLength - previewLength;
++            if (diff > 0) {
++              props.push(diff + " more\u2026");
++            }
++          }
 +          let klass = aGrip.class != "Object" ? aGrip.class + " " : "";
 +          return klass + "{" + props.join(", ") + "}";
 +        }
@@ -210,36 +214,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
 --- a/toolkit/devtools/server/actors/script.js
 +++ b/toolkit/devtools/server/actors/script.js
-@@ -2679,25 +2679,26 @@ function hasSafeGetter(aDesc) {
-  *
-  * @param Debugger.Object aObject
-  *        The Debugger.Object to get the value from.
-  * @param String aKey
-  *        The key to look for.
-  * @return Any
-  */
- function getProperty(aObj, aKey) {
-+  let root = aObj;
-   try {
-     do {
--      const desc = aObj.getOwnPropertyDescriptor(aKey);
-+      let desc = aObj.getOwnPropertyDescriptor(aKey);
-       if (desc) {
-         if ("value" in desc) {
-           return desc.value
-         }
-         // Call the getter if it's safe.
--        return hasSafeGetter(desc) ? desc.get.call(aObj) : undefined;
-+        return hasSafeGetter(desc) ? desc.get.call(root).return : undefined;
-       }
-       aObj = aObj.proto;
-     } while (aObj);
-   } catch (e) {
-     // If anything goes wrong report the error and return undefined.
-     DevToolsUtils.reportException("getProperty", e);
-   }
-   return undefined;
-@@ -2747,17 +2748,17 @@ function errorStringify(aObj) {
+@@ -2704,17 +2704,17 @@ function errorStringify(aObj) {
   * Stringify a Debugger.Object based on its class.
   *
   * @param Debugger.Object aObj
@@ -258,7 +233,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
    return stringifier(aObj);
  }
  
-@@ -2837,59 +2838,61 @@ let stringifiers = {
+@@ -2794,59 +2794,60 @@ let stringifiers = {
   *        The debuggee object.
   * @param aThreadActor ThreadActor
   *        The parent thread actor for this object.
@@ -298,22 +273,20 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 -      if (this.obj.name) {
 -        g.name = this.obj.name;
 +    if (this.obj.class != "DeadObject") {
-+      //let raw = this.obj.unsafeDereference();
-+      //let wrap = new XPCNativeWrapper(raw);
-+      //console.log('xray test', raw.lolz, wrap.lolz, Cu.isXrayWrapper(raw), Cu.isXrayWrapper(wrap));
-+      // XXX: |raw| is not an xray wrapper. not even |wrap| after calling
-+      // XPCNativeWrapper()... why??
++      let raw = this.obj.unsafeDereference();
++      if (!Cu.isXrayWrapper(raw)) {
++        raw = null;
+       }
+-      if (this.obj.displayName) {
+-        g.displayName = this.obj.displayName;
 +
 +      let previewers = DebuggerServer.ObjectActorPreviewers[this.obj.class] ||
 +                       DebuggerServer.ObjectActorPreviewers.Object;
 +      for (let fn of previewers) {
-+        if (fn(this, g)) {
++        if (fn(this, g, raw)) {
 +          break;
 +        }
        }
--      if (this.obj.displayName) {
--        g.displayName = this.obj.displayName;
--      }
 -
 -      // Check if the developer has added a de-facto standard displayName
 -      // property for us to use.
@@ -342,7 +315,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
     */
    release: function () {
      if (this.registeredPool.objectActors) {
-@@ -3006,25 +3009,27 @@ ObjectActor.prototype = {
+@@ -2963,25 +2964,27 @@ ObjectActor.prototype = {
  
    /**
     * Find the safe getter values for the current Debugger.Object, |this.obj|.
@@ -372,7 +345,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
          // avoid providing safeGetterValues from prototypes if property |name|
          // is already defined as an own property.
          if (name in safeGetterValues ||
-@@ -3056,19 +3061,25 @@ ObjectActor.prototype = {
+@@ -3013,19 +3016,25 @@ ObjectActor.prototype = {
            // return undefined and should be ignored.
            if (getterValue !== undefined) {
              safeGetterValues[name] = {
@@ -398,7 +371,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
      return safeGetterValues;
    },
  
-@@ -3085,17 +3096,25 @@ ObjectActor.prototype = {
+@@ -3042,17 +3051,25 @@ ObjectActor.prototype = {
     */
    _findSafeGetters: function (aObject)
    {
@@ -425,7 +398,43 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
          // allowed (bug 560072).
        }
        if (!desc || desc.value !== undefined || !("get" in desc)) {
-@@ -3273,16 +3292,426 @@ ObjectActor.prototype.requestTypes = {
+@@ -3110,33 +3127,33 @@ ObjectActor.prototype = {
+ 
+   /**
+    * A helper method that creates a property descriptor for the provided object,
+    * properly formatted for sending in a protocol response.
+    *
+    * @param string aName
+    *        The property that the descriptor is generated for.
+    */
+-  _propertyDescriptor: function (aName) {
++  _propertyDescriptor: function (aName, aOnlyEnumerable) {
+     let desc;
+     try {
+       desc = this.obj.getOwnPropertyDescriptor(aName);
+     } catch (e) {
+       // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
+       // allowed (bug 560072). Inform the user with a bogus, but hopefully
+       // explanatory, descriptor.
+       return {
+         configurable: false,
+         writable: false,
+         enumerable: false,
+         value: e.name
+       };
+     }
+ 
+-    if (!desc) {
++    if (!desc || aOnlyEnumerable && !desc.enumerable) {
+       return undefined;
+     }
+ 
+     let retval = {
+       configurable: desc.configurable,
+       enumerable: desc.enumerable
+     };
+ 
+@@ -3230,16 +3247,487 @@ ObjectActor.prototype.requestTypes = {
    "property": ObjectActor.prototype.onProperty,
    "displayString": ObjectActor.prototype.onDisplayString,
    "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
@@ -434,8 +443,9 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
    "scope": ObjectActor.prototype.onScope,
  };
  
-+// Number of items to preview in an array.
-+const OBJECT_PREVIEW_MAX_ARRAY_ITEMS = 10;
++// Number of items to preview in objects, arrays, maps, sets, lists,
++// collections, etc.
++const OBJECT_PREVIEW_MAX_ITEMS = 10;
 +
 +/**
 + * Functions for adding information to ObjectActor grips for the purpose of
@@ -445,7 +455,6 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 + * the client. Functions must return false if they cannot provide preview
 + * information for the debugger object, or true otherwise.
 + */
-+// XXX: should we just flatten this structure into an array?
 +DebuggerServer.ObjectActorPreviewers = {
 +  Function: [function({obj, threadActor}, aGrip) {
 +    if (obj.name) {
@@ -477,43 +486,54 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +  }], // Function
 +
 +  RegExp: [function({obj, threadActor}, aGrip) {
-+    let src = getProperty(obj, "source");
-+    if (typeof src != "string") {
-+      return false;
-+    }
-+
-+    let flags = [];
-+    let flagsMap = {
-+      global: "g",
-+      ignoreCase: "i",
-+      multiline: "m",
-+      sticky: "y",
-+    };
-+
-+    for (let [prop, flag] of Iterator(flagsMap)) {
-+      let value = getProperty(obj, prop);
-+      console.log(prop, value);
-+      if (typeof value == "boolean" && value) {
-+        flags.push(flag);
-+      }
-+    }
-+
-+    let str = "/" + src + "/" + flags.join("");
++    let str = RegExp.prototype.toString.call(obj.unsafeDereference());
 +    aGrip.displayString = threadActor.createValueGrip(str);
 +    return true;
 +  }],
 +
 +  // TODO: fix exception when trying expand proto
 +  Date: [function({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
++    let time = Date.prototype.getTime.call(obj.unsafeDereference());
 +    aGrip.preview = {
-+      timestamp: threadActor.createValueGrip(Date.prototype.getTime.call(raw)),
++      timestamp: threadActor.createValueGrip(time),
 +    };
 +    return true;
 +  }],
 +
++  Array: [function({obj, threadActor}, aGrip) {
++    let length = DevToolsUtils.getProperty(obj, "length");
++    if (typeof length != "number") {
++      return false;
++    }
++
++    aGrip.preview = {
++      kind: "ArrayLike",
++      length: length,
++    };
++
++    if (threadActor._gripDepth > 1) {
++      return true;
++    }
++
++    let raw = obj.unsafeDereference();
++    let items = aGrip.preview.items = [];
++
++    Array.some(raw, (item) => {
++      let value = item;
++      if (value && typeof value == "object") {
++        value = obj.makeDebuggeeValue(item);
++      }
++      items.push(threadActor.createValueGrip(value));
++
++      // Stop iterating the array once we have enough items.
++      return items.length == OBJECT_PREVIEW_MAX_ITEMS;
++    });
++
++    return true;
++  }], // Array
++
 +  Set: [function({obj, threadActor}, aGrip) {
-+    let size = getProperty(obj, "size");
++    let size = DevToolsUtils.getProperty(obj, "size");
 +    if (typeof size != "number") {
 +      return false;
 +    }
@@ -531,11 +551,11 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    let raw = obj.unsafeDereference();
 +    let items = aGrip.preview.items = [];
 +    for (let item of Set.prototype.values.call(raw)) {
-+      if (typeof item == "object") {
++      if (item && typeof item == "object") {
 +        item = obj.makeDebuggeeValue(item);
 +      }
 +      items.push(threadActor.createValueGrip(item));
-+      if (items.length == OBJECT_PREVIEW_MAX_ARRAY_ITEMS) {
++      if (items.length == OBJECT_PREVIEW_MAX_ITEMS) {
 +        break;
 +      }
 +    }
@@ -544,7 +564,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +  }], // Set
 +
 +  Map: [function({obj, threadActor}, aGrip) {
-+    let size = getProperty(obj, "size");
++    let size = DevToolsUtils.getProperty(obj, "size");
 +    if (typeof size != "number") {
 +      return false;
 +    }
@@ -561,15 +581,15 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    let raw = obj.unsafeDereference();
 +    let entries = aGrip.preview.entries = [];
 +    for (let [key, value] of Map.prototype.entries.call(raw)) {
-+      if (typeof key == "object") {
++      if (key && typeof key == "object") {
 +        key = obj.makeDebuggeeValue(key);
 +      }
-+      if (typeof value == "object") {
++      if (value && typeof value == "object") {
 +        value = obj.makeDebuggeeValue(value);
 +      }
 +      entries.push([threadActor.createValueGrip(key),
 +                    threadActor.createValueGrip(value)]);
-+      if (entries.length == OBJECT_PREVIEW_MAX_ARRAY_ITEMS) {
++      if (entries.length == OBJECT_PREVIEW_MAX_ITEMS) {
 +        break;
 +      }
 +    }
@@ -577,14 +597,17 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    return true;
 +  }], // Map
 +
-+  DOMStringMap: [function({obj, threadActor}, aGrip) {
++  DOMStringMap: [function({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj) {
++      return false;
++    }
++
++    let keys = obj.getOwnPropertyNames();
 +    aGrip.preview = {
 +      kind: "MapLike",
 +      entries: [],
++      size: keys.length,
 +    };
-+
-+    let keys = obj.getOwnPropertyNames();
-+    aGrip.preview.size = keys.length;
 +
 +    if (threadActor._gripDepth > 1) {
 +      return false;
@@ -592,12 +615,12 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    let entries = aGrip.preview.entries;
 +    for (let key of keys) {
-+      let value = getProperty(obj, key);
-+      if (typeof value == "object") {
-+        value = this.obj.makeDebuggeeValue(value);
++      let value = aRawObj[key];
++      if (value && typeof value == "object") {
++        value = obj.makeDebuggeeValue(value);
 +      }
 +      entries.push([key, threadActor.createValueGrip(value)]);
-+      if (entries.length == OBJECT_PREVIEW_MAX_ARRAY_ITEMS) {
++      if (entries.length == OBJECT_PREVIEW_MAX_ITEMS) {
 +        break;
 +      }
 +    }
@@ -607,7 +630,6 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +}; // DebuggerServer.ObjectActorPreviewers
 +
 +// Preview functions that do not rely on the object class.
-+// TODO: try to avoid the use of unsafeDereference
 +DebuggerServer.ObjectActorPreviewers.Object = [
 +  function Error({obj, threadActor}, aGrip) {
 +    switch (obj.class) {
@@ -618,12 +640,14 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      case "SyntaxError":
 +      case "TypeError":
 +      case "URIError":
-+        let raw = obj.unsafeDereference();
++        let name = DevToolsUtils.getProperty(obj, "name");
++        let msg = DevToolsUtils.getProperty(obj, "message");
++        let stack = DevToolsUtils.getProperty(obj, "stack");
 +        aGrip.preview = {
 +          kind: "Error",
-+          name: threadActor.createValueGrip(raw.name),
-+          message: threadActor.createValueGrip(raw.message),
-+          stack: threadActor.createValueGrip(raw.stack),
++          name: threadActor.createValueGrip(name),
++          message: threadActor.createValueGrip(msg),
++          stack: threadActor.createValueGrip(stack),
 +        };
 +        return true;
 +      default:
@@ -631,6 +655,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    }
 +  },
 +
++  // TODO: try to avoid the use of unsafeDereference
 +  function CSSMediaRule({obj, threadActor}, aGrip) {
 +    let raw = obj.unsafeDereference();
 +    if (!(raw instanceof Ci.nsIDOMCSSMediaRule)) {
@@ -703,30 +728,32 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    return true;
 +  },
 +
-+  function ArrayLike({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (obj.class != "Array" &&
-+        obj.class != "DOMTokenList" &&
-+        !(raw instanceof Ci.nsIDOMMozNamedAttrMap ||
-+          raw instanceof Ci.nsIDOMCSSRuleList ||
-+          raw instanceof Ci.nsIDOMCSSValueList ||
-+          raw instanceof Ci.nsIDOMDOMStringList ||
-+          raw instanceof Ci.nsIDOMFileList ||
-+          raw instanceof Ci.nsIDOMFontFaceList ||
-+          raw instanceof Ci.nsIDOMMediaList ||
-+          raw instanceof Ci.nsIDOMMediaQueryList ||
-+          raw instanceof Ci.nsIDOMNodeList ||
-+          raw instanceof Ci.nsIDOMStyleSheetList)) {
++  function ArrayLikeRaw({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || obj.class != "DOMTokenList" &&
++        !(aRawObj instanceof Ci.nsIDOMMozNamedAttrMap ||
++          aRawObj instanceof Ci.nsIDOMCSSRuleList ||
++          aRawObj instanceof Ci.nsIDOMCSSValueList ||
++          aRawObj instanceof Ci.nsIDOMDOMStringList ||
++          aRawObj instanceof Ci.nsIDOMFileList ||
++          aRawObj instanceof Ci.nsIDOMFontFaceList ||
++          aRawObj instanceof Ci.nsIDOMMediaList ||
++          aRawObj instanceof Ci.nsIDOMMediaQueryList ||
++          aRawObj instanceof Ci.nsIDOMNodeList)) {
++            if (!aRawObj) {
++              console.log("ArrayLikeRaw no raw obj", obj.class);
++            }
 +      return false;
 +    }
 +
-+    if (typeof raw.length != "number") {
++    console.log("ArrayLikeRaw raw obj", obj.class, aRawObj);
++
++    if (typeof aRawObj.length != "number") {
 +      return false;
 +    }
 +
 +    aGrip.preview = {
 +      kind: "ArrayLike",
-+      length: raw.length,
++      length: aRawObj.length,
 +    };
 +
 +    if (threadActor._gripDepth > 1) {
@@ -734,16 +761,50 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    }
 +
 +    let items = aGrip.preview.items = [];
-+    for (let i = 0; i < raw.length && i < OBJECT_PREVIEW_MAX_ARRAY_ITEMS; i++) {
-+      let value = raw[i];
-+      if (typeof value == "object") {
++    for (let i = 0; i < aRawObj.length &&
++                    items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
++      let value = aRawObj[i];
++      if (value && typeof value == "object") {
 +        value = obj.makeDebuggeeValue(value);
 +      }
-+      items[i] = threadActor.createValueGrip(value);
++      items.push(threadActor.createValueGrip(value));
 +    }
 +
 +    return true;
-+  }, // ArrayLike
++  }, // ArrayLikeRaw
++
++  function ArrayLikeDbg({obj, threadActor}, aGrip) {
++    let raw = obj.unsafeDereference();
++    if (!(raw instanceof Ci.nsIDOMStyleSheetList)) {
++      return false;
++    }
++    console.log("ArrayLikeDbg", obj.class);
++
++    let length = DevToolsUtils.getProperty(obj, "length");
++    if (typeof length != "number") {
++      return false;
++    }
++
++    aGrip.preview = {
++      kind: "ArrayLike",
++      length: length,
++    };
++
++    if (threadActor._gripDepth > 1) {
++      return true;
++    }
++
++    let items = aGrip.preview.items = [];
++    for (let i = 0; i < length && items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
++      let value = DevToolsUtils.getProperty(obj, i);
++      if (value && typeof value == "object") {
++        value = obj.makeDebuggeeValue(value);
++      }
++      items.push(threadActor.createValueGrip(value));
++    }
++
++    return true;
++  }, // ArrayLikeDbg
 +
 +  function CSSStyleDeclaration({obj, threadActor}, aGrip) {
 +    let raw = obj.unsafeDereference();
@@ -758,7 +819,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    };
 +    let entries = aGrip.preview.entries;
 +
-+    for (let i = 0; i < OBJECT_PREVIEW_MAX_ARRAY_ITEMS &&
++    for (let i = 0; i < OBJECT_PREVIEW_MAX_ITEMS &&
 +                    i < raw.length; i++) {
 +      let prop = raw[i];
 +      let value = raw.getPropertyValue(prop);
@@ -792,7 +853,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      preview.attributesLength = raw.attributes.length;
 +      for (let attr of raw.attributes) {
 +        preview.attributes[attr.nodeName] = threadActor.createValueGrip(attr.value);
-+        if (++i == OBJECT_PREVIEW_MAX_ARRAY_ITEMS) {
++        if (++i == OBJECT_PREVIEW_MAX_ITEMS) {
 +          break;
 +        }
 +      }
@@ -809,6 +870,8 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    return true;
 +  }, // DOMNode
++
++  // TODO: add DOMException. check DOMRect output in firebug/chrome.
 +
 +  function GenericObject(aObjectActor, aGrip) {
 +    let {obj, threadActor} = aObjectActor;
@@ -828,17 +891,24 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      // allowed: "cannot modify properties of a WrappedNative".
 +    }
 +
++    preview.ownPropertiesLength = names.length;
++
 +    for (let name of names) {
-+      preview.ownProperties[name] = aObjectActor._propertyDescriptor(name);
-+      if (++i == OBJECT_PREVIEW_MAX_ARRAY_ITEMS) {
++      let desc = aObjectActor._propertyDescriptor(name, true);
++      if (!desc) {
++        continue;
++      }
++
++      preview.ownProperties[name] = desc;
++      if (++i == OBJECT_PREVIEW_MAX_ITEMS) {
 +        break;
 +      }
 +    }
 +
-+    if (i < OBJECT_PREVIEW_MAX_ARRAY_ITEMS) {
++    if (i < OBJECT_PREVIEW_MAX_ITEMS) {
 +      preview.safeGetterValues = aObjectActor.
 +                                 _findSafeGetterValues(preview.ownProperties,
-+                                                       OBJECT_PREVIEW_MAX_ARRAY_ITEMS - i);
++                                                       OBJECT_PREVIEW_MAX_ITEMS - i);
 +    }
 +
 +    return true;
@@ -855,7 +925,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
-@@ -182,20 +182,26 @@ let WebConsoleUtils = {
+@@ -183,20 +183,26 @@ let WebConsoleUtils = {
    },
  
    /**
@@ -883,7 +953,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
        }
      }
  
-@@ -208,23 +214,25 @@ let WebConsoleUtils = {
+@@ -209,23 +215,25 @@ let WebConsoleUtils = {
      // Remove any hash fragments.
      let hashIndex = aSourceURL.indexOf("#");
      if (hashIndex > -1) {
