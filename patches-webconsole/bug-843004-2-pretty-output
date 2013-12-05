@@ -1,13 +1,13 @@
 # HG changeset patch
-# Parent f3f8f27131807410440af922f6741d5cbbbe541f
+# Parent 2bd207736d7b96368839c4bbc85cfd024f2b9255
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1386193808 -7200
+# Date 1386279213 -7200
 Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output
 
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -3101,20 +3101,201 @@ VariablesView.getString = function(aGrip
+@@ -3101,20 +3101,222 @@ VariablesView.getString = function(aGrip
        case "NaN":
        case "Infinity":
        case "-Infinity":
@@ -152,6 +152,27 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +        if (preview.kind == "DOMNode" &&
 +            preview.nodeType == Ci.nsIDOMNode.COMMENT_NODE) {
 +          return "<!--" + preview.textContent + "-->";
++        }
++
++        if (preview.kind == "DOMEvent" && preview.type) {
++          let result = preview.type;
++
++          if (preview.eventKind == "key" && preview.modifiers &&
++              preview.modifiers.length) {
++            result += " " + preview.modifiers.join("-");
++          }
++
++          let props = [];
++          if (preview.target) {
++            let target = VariablesView.getString(preview.target, true);
++            props.push("target: " + target);
++          }
++          for (let prop in preview.properties) {
++            let value = preview.properties[prop];
++            props.push(prop + ": " + VariablesView.getString(value, true));
++          }
++
++          return result + " {" + props.join(", ") + "}";
 +        }
 +
 +        if (preview.kind == "Error") {
@@ -434,7 +455,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        enumerable: desc.enumerable
      };
  
-@@ -3230,16 +3247,487 @@ ObjectActor.prototype.requestTypes = {
+@@ -3230,16 +3247,567 @@ ObjectActor.prototype.requestTypes = {
    "property": ObjectActor.prototype.onProperty,
    "displayString": ObjectActor.prototype.onDisplayString,
    "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
@@ -486,7 +507,9 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +  }], // Function
 +
 +  RegExp: [function({obj, threadActor}, aGrip) {
-+    let str = RegExp.prototype.toString.call(obj.unsafeDereference());
++    // |raw| is not xray wrapped.
++    let raw = obj.unsafeDereference();
++    let str = RegExp.prototype.toString.call(raw);
 +    aGrip.displayString = threadActor.createValueGrip(str);
 +    return true;
 +  }],
@@ -598,6 +621,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +  }], // Map
 +
 +  DOMStringMap: [function({obj, threadActor}, aGrip, aRawObj) {
++    // aRawObj is expected to be xray wrapped.
 +    if (!aRawObj) {
 +      return false;
 +    }
@@ -655,15 +679,21 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    }
 +  },
 +
-+  // TODO: try to avoid the use of unsafeDereference
 +  function CSSMediaRule({obj, threadActor}, aGrip) {
 +    let raw = obj.unsafeDereference();
 +    if (!(raw instanceof Ci.nsIDOMCSSMediaRule)) {
 +      return false;
 +    }
++
++    // |raw| is not xray-wrapped and it's not safe to read properties from.
++    let conditionText = DevToolsUtils.getProperty(obj, "conditionText");
++    if (typeof conditionText != "string") {
++      return false;
++    }
++
 +    aGrip.preview = {
 +      kind: "CSSMediaRule",
-+      conditionText: threadActor.createValueGrip(raw.conditionText),
++      conditionText: threadActor.createValueGrip(conditionText),
 +    };
 +    return true;
 +  },
@@ -673,9 +703,16 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    if (!(raw instanceof Ci.nsIDOMCSSStyleRule)) {
 +      return false;
 +    }
++
++    // |raw| is not xray-wrapped.
++    let selectorText = DevToolsUtils.getProperty(obj, "selectorText");
++    if (typeof selectorText != "string") {
++      return false;
++    }
++
 +    aGrip.preview = {
 +      kind: "CSSStyleRule",
-+      selectorText: threadActor.createValueGrip(raw.selectorText),
++      selectorText: threadActor.createValueGrip(selectorText),
 +    };
 +    return true;
 +  },
@@ -685,102 +722,71 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    if (!(raw instanceof Ci.nsIDOMCSSImportRule)) {
 +      return false;
 +    }
++
++    // |raw| is not xray-wrapped.
++    let href = DevToolsUtils.getProperty(obj, "href");
++
 +    aGrip.preview = {
 +      kind: "CSSImportRule",
-+      href: threadActor.createValueGrip(raw.href),
++      href: threadActor.createValueGrip(href),
 +    };
 +    return true;
 +  },
 +
-+  function CSSStyleSheet({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (!(raw instanceof Ci.nsIDOMCSSStyleSheet)) {
++  function CSSStyleSheet({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleSheet)) {
 +      return false;
 +    }
 +    aGrip.preview = {
 +      kind: "CSSStyleSheet",
-+      href: threadActor.createValueGrip(raw.href),
++      href: threadActor.createValueGrip(aRawObj.href),
 +    };
 +    return true;
 +  },
 +
-+  function DOMLocation({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (!(raw instanceof Ci.nsIDOMLocation)) {
++  function DOMLocation({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMLocation)) {
 +      return false;
 +    }
 +    aGrip.preview = {
 +      kind: "DOMLocation",
-+      href: threadActor.createValueGrip(raw.href),
++      href: threadActor.createValueGrip(aRawObj.href),
 +    };
 +    return true;
 +  },
 +
-+  function DOMWindow({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (!(raw instanceof Ci.nsIDOMWindow)) {
++  function DOMWindow({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMWindow)) {
 +      return false;
 +    }
 +    aGrip.preview = {
 +      kind: "DOMWindow",
-+      location: threadActor.createValueGrip(raw.location.href),
++      location: threadActor.createValueGrip(aRawObj.location.href),
 +    };
 +    return true;
 +  },
 +
-+  function ArrayLikeRaw({obj, threadActor}, aGrip, aRawObj) {
-+    if (!aRawObj || obj.class != "DOMTokenList" &&
-+        !(aRawObj instanceof Ci.nsIDOMMozNamedAttrMap ||
-+          aRawObj instanceof Ci.nsIDOMCSSRuleList ||
-+          aRawObj instanceof Ci.nsIDOMCSSValueList ||
-+          aRawObj instanceof Ci.nsIDOMDOMStringList ||
-+          aRawObj instanceof Ci.nsIDOMFileList ||
-+          aRawObj instanceof Ci.nsIDOMFontFaceList ||
-+          aRawObj instanceof Ci.nsIDOMMediaList ||
-+          aRawObj instanceof Ci.nsIDOMMediaQueryList ||
-+          aRawObj instanceof Ci.nsIDOMNodeList)) {
-+            if (!aRawObj) {
-+              console.log("ArrayLikeRaw no raw obj", obj.class);
-+            }
-+      return false;
-+    }
-+
-+    console.log("ArrayLikeRaw raw obj", obj.class, aRawObj);
-+
-+    if (typeof aRawObj.length != "number") {
-+      return false;
-+    }
-+
-+    aGrip.preview = {
-+      kind: "ArrayLike",
-+      length: aRawObj.length,
-+    };
-+
-+    if (threadActor._gripDepth > 1) {
-+      return true;
-+    }
-+
-+    let items = aGrip.preview.items = [];
-+    for (let i = 0; i < aRawObj.length &&
-+                    items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
-+      let value = aRawObj[i];
-+      if (value && typeof value == "object") {
-+        value = obj.makeDebuggeeValue(value);
-+      }
-+      items.push(threadActor.createValueGrip(value));
-+    }
-+
-+    return true;
-+  }, // ArrayLikeRaw
-+
-+  function ArrayLikeDbg({obj, threadActor}, aGrip) {
++  function ArrayLike({obj, threadActor}, aGrip) {
 +    let raw = obj.unsafeDereference();
-+    if (!(raw instanceof Ci.nsIDOMStyleSheetList)) {
++    if (obj.class != "DOMTokenList" &&
++        !(raw instanceof Ci.nsIDOMMozNamedAttrMap ||
++          raw instanceof Ci.nsIDOMCSSRuleList ||
++          raw instanceof Ci.nsIDOMCSSValueList ||
++          raw instanceof Ci.nsIDOMDOMStringList ||
++          raw instanceof Ci.nsIDOMFileList ||
++          raw instanceof Ci.nsIDOMFontFaceList ||
++          raw instanceof Ci.nsIDOMMediaList ||
++          raw instanceof Ci.nsIDOMMediaQueryList ||
++          raw instanceof Ci.nsIDOMNodeList ||
++          raw instanceof Ci.nsIDOMStyleSheetList)) {
 +      return false;
 +    }
-+    console.log("ArrayLikeDbg", obj.class);
 +
-+    let length = DevToolsUtils.getProperty(obj, "length");
++    let isSafe = Cu.isXrayWrapper(raw);
++    let length = isSafe ? raw.length : DevToolsUtils.getProperty(obj, "length");
++
++    console.log("arraylike", obj.class, isSafe);
++
 +    if (typeof length != "number") {
 +      return false;
 +    }
@@ -795,63 +801,70 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    }
 +
 +    let items = aGrip.preview.items = [];
-+    for (let i = 0; i < length && items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
-+      let value = DevToolsUtils.getProperty(obj, i);
-+      if (value && typeof value == "object") {
-+        value = obj.makeDebuggeeValue(value);
++
++    if (isSafe) {
++      for (let i = 0; i < length &&
++                      items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
++        let value = raw[i];
++        if (value && typeof value == "object") {
++          value = obj.makeDebuggeeValue(value);
++        }
++        items.push(threadActor.createValueGrip(value));
 +      }
-+      items.push(threadActor.createValueGrip(value));
++    } else {
++      for (let i = 0; i < length &&
++                      items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
++        let value = DevToolsUtils.getProperty(obj, i);
++        items.push(threadActor.createValueGrip(value));
++      }
 +    }
 +
 +    return true;
-+  }, // ArrayLikeDbg
++  }, // ArrayLike
 +
-+  function CSSStyleDeclaration({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (!(raw instanceof Ci.nsIDOMCSSStyleDeclaration)) {
++  function CSSStyleDeclaration({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleDeclaration)) {
 +      return false;
 +    }
 +
 +    aGrip.preview = {
 +      kind: "MapLike",
 +      entries: [],
-+      size: raw.length,
++      size: aRawObj.length,
 +    };
 +    let entries = aGrip.preview.entries;
 +
 +    for (let i = 0; i < OBJECT_PREVIEW_MAX_ITEMS &&
-+                    i < raw.length; i++) {
-+      let prop = raw[i];
-+      let value = raw.getPropertyValue(prop);
++                    i < aRawObj.length; i++) {
++      let prop = aRawObj[i];
++      let value = aRawObj.getPropertyValue(prop);
 +      entries.push([prop, threadActor.createValueGrip(value)]);
 +    }
 +
 +    return true;
 +  }, // CSSStyleDeclaration
 +
-+  function DOMNode({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (!(raw instanceof Ci.nsIDOMNode)) {
++  function DOMNode({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMNode)) {
 +      return false;
 +    }
 +
 +    let preview = aGrip.preview = {
 +      kind: "DOMNode",
-+      nodeType: raw.nodeType,
-+      nodeName: raw.nodeName,
++      nodeType: aRawObj.nodeType,
++      nodeName: aRawObj.nodeName,
 +    };
 +
-+    if (raw instanceof Ci.nsIDOMDocument) {
-+      preview.location = threadActor.createValueGrip(raw.location.href);
++    if (aRawObj instanceof Ci.nsIDOMDocument) {
++      preview.location = threadActor.createValueGrip(aRawObj.location.href);
 +    }
 +
 +    // Add preview for DOM element attributes.
-+    if (raw instanceof Ci.nsIDOMElement) {
-+      // TODO: use getProperty() or getAttribute()
++    if (aRawObj instanceof Ci.nsIDOMElement) {
 +      let i = 0;
 +      preview.attributes = {};
-+      preview.attributesLength = raw.attributes.length;
-+      for (let attr of raw.attributes) {
++      preview.attributesLength = aRawObj.attributes.length;
++      for (let attr of aRawObj.attributes) {
 +        preview.attributes[attr.nodeName] = threadActor.createValueGrip(attr.value);
 +        if (++i == OBJECT_PREVIEW_MAX_ITEMS) {
 +          break;
@@ -859,19 +872,107 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      }
 +    }
 +
-+    if (raw instanceof Ci.nsIDOMAttr) {
-+      preview.value = threadActor.createValueGrip(raw.value);
++    if (aRawObj instanceof Ci.nsIDOMAttr) {
++      preview.value = threadActor.createValueGrip(aRawObj.value);
 +    }
 +
-+    if (raw instanceof Ci.nsIDOMText ||
-+        raw instanceof Ci.nsIDOMComment) {
-+      preview.textContent = threadActor.createValueGrip(raw.textContent);
++    if (aRawObj instanceof Ci.nsIDOMText ||
++        aRawObj instanceof Ci.nsIDOMComment) {
++      preview.textContent = threadActor.createValueGrip(aRawObj.textContent);
 +    }
 +
 +    return true;
 +  }, // DOMNode
 +
-+  // TODO: add DOMException. check DOMRect output in firebug/chrome.
++  function DOMEvent({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMEvent)) {
++      return false;
++    }
++
++    let preview = aGrip.preview = {
++      kind: "DOMEvent",
++      type: aRawObj.type,
++      properties: Object.create(null),
++    };
++
++    if (threadActor._gripDepth < 2) {
++      let target = obj.makeDebuggeeValue(aRawObj.target);
++      preview.target = threadActor.createValueGrip(target);
++    }
++
++    let props = [];
++    if (aRawObj instanceof Ci.nsIDOMMouseEvent) {
++      props.push("buttons", "clientX", "clientY", "layerX", "layerY");
++    }
++
++    if (aRawObj instanceof Ci.nsIDOMKeyEvent) {
++      let modifiers = [];
++      if (aRawObj.altKey) {
++        modifiers.push("Alt");
++      }
++      if (aRawObj.ctrlKey) {
++        modifiers.push("Control");
++      }
++      if (aRawObj.metaKey) {
++        modifiers.push("Meta");
++      }
++      if (aRawObj.shiftKey) {
++        modifiers.push("Shift");
++      }
++      preview.eventKind = "key";
++      preview.modifiers = modifiers;
++
++      props.push("key", "charCode", "keyCode");
++    }
++
++    if (aRawObj instanceof Ci.nsIDOMTransitionEvent ||
++        aRawObj instanceof Ci.nsIDOMAnimationEvent) {
++      props.push("animationName", "pseudoElement");
++    }
++
++    if (aRawObj instanceof Ci.nsIDOMClipboardEvent) {
++      props.push("clipboardData");
++    }
++
++    // Add event-specific properties.
++    for (let prop of props) {
++      let value = aRawObj[prop];
++      if (value && typeof value == "object") {
++        // Skip properties pointing to objects.
++        if (threadActor._gripDepth > 1) {
++          continue;
++        }
++        value = obj.makeDebuggeeValue(value);
++      }
++      preview.properties[prop] = threadActor.createValueGrip(value);
++    }
++
++    // Add any properties we find on the event object.
++    if (!props.length) {
++      let i = 0;
++      for (let prop in aRawObj) {
++        let value = aRawObj[prop];
++        if (prop == "target" || prop == "type" || value === null ||
++            typeof value == "function") {
++          continue;
++        }
++        if (value && typeof value == "object") {
++          if (threadActor._gripDepth > 1) {
++            continue;
++          }
++          value = obj.makeDebuggeeValue(value);
++        }
++        preview.properties[prop] = threadActor.createValueGrip(value);
++        if (++i == OBJECT_PREVIEW_MAX_ITEMS) {
++          break;
++        }
++      }
++    }
++
++    return true;
++  }, // DOMEvent
++
++  // TODO: add DOMException
 +
 +  function GenericObject(aObjectActor, aGrip) {
 +    let {obj, threadActor} = aObjectActor;
