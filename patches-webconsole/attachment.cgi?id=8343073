@@ -1,0 +1,191 @@
+# HG changeset patch
+# Parent 09714c24277b8b5d0c9d63f262b7d2744d4769ff
+# User Douglas Edmonson Jr <dj@the-edmonsons.com>
+Bug 900448 - Close the webconsole autocomplete popup on tab switch; r=msucan; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser.ini b/browser/devtools/webconsole/test/browser.ini
+--- a/browser/devtools/webconsole/test/browser.ini
++++ b/browser/devtools/webconsole/test/browser.ini
+@@ -236,8 +236,9 @@ support-files =
+ [browser_webconsole_property_provider.js]
+ [browser_webconsole_scratchpad_panel_link.js]
+ [browser_webconsole_split.js]
+ [browser_webconsole_view_source.js]
+ [browser_webconsole_reflow.js]
+ [browser_webconsole_log_file_filter.js]
+ [browser_webconsole_expandable_timestamps.js]
+ [browser_webconsole_autocomplete_in_debugger_stackframe.js]
++[browser_webconsole_autocomplete_popup_close_on_tab_switch.js]
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_autocomplete_popup_close_on_tab_switch.js b/browser/devtools/webconsole/test/browser_webconsole_autocomplete_popup_close_on_tab_switch.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_autocomplete_popup_close_on_tab_switch.js
+@@ -0,0 +1,42 @@
++/* vim:set ts=2 sw=2 sts=2 et: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++// Test that the autocomplete popup closes on switching tabs. See bug 900448.
++
++const TEST_URI = "data:text/html;charset=utf-8,<p>bug 900448 - autocomplete popup closes on tab switch";
++
++let popup = null;
++
++registerCleanupFunction(function() {
++  popup = null;
++});
++
++function test() {
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    openConsole(null, consoleOpened);
++  }, true);
++}
++
++function consoleOpened(HUD) {
++  popup = HUD.jsterm.autocompletePopup;
++
++  popup._panel.addEventListener("popupshown", function popupOpened() {
++    popup._panel.removeEventListener("popupshown", popupOpened, false);
++    addTab("data:text/html;charset=utf-8,<p>testing autocomplete closes");
++    gBrowser.selectedBrowser.addEventListener("load", tab2Loaded, true);
++  }, false);
++
++  HUD.jsterm.setInputValue("sc");
++  EventUtils.synthesizeKey("r", {});
++}
++
++function tab2Loaded() {
++  gBrowser.selectedBrowser.removeEventListener("load", tab2Loaded, true);
++  ok(!popup.isOpen, "Popup closes on tab switch");
++  gBrowser.removeCurrentTab();
++  finishTest();
++}
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -740,17 +740,17 @@ WebConsoleFrame.prototype = {
+     }
+     this._updateCharSize();
+   },
+ 
+   /**
+    * Calculates the width and height of a single character of the input box.
+    * This will be used in opening the popup at the correct offset.
+    *
+-   * @private 
++   * @private
+    */
+   _updateCharSize: function WCF__updateCharSize()
+   {
+     let doc = this.document;
+     let tempLabel = doc.createElementNS(XHTML_NS, "span");
+     let style = tempLabel.style;
+     style.position = "fixed";
+     style.padding = "0";
+@@ -2907,16 +2907,17 @@ function JSTerm(aWebConsoleFrame)
+   // This is reset to this.history.length when this.execute() is invoked.
+   this.historyPlaceHolder = 0;
+   this._objectActorsInVariablesViews = new Map();
+ 
+   this._keyPress = this._keyPress.bind(this);
+   this._inputEventHandler = this._inputEventHandler.bind(this);
+   this._focusEventHandler = this._focusEventHandler.bind(this);
+   this._onKeypressInVariablesView = this._onKeypressInVariablesView.bind(this);
++  this._blurEventHandler = this._blurEventHandler.bind(this);
+ 
+   EventEmitter.decorate(this);
+ }
+ 
+ JSTerm.prototype = {
+   SELECTED_FRAME: -1,
+ 
+   /**
+@@ -3028,37 +3029,37 @@ JSTerm.prototype = {
+   COMPLETE_BACKWARD: 1,
+   COMPLETE_HINT_ONLY: 2,
+ 
+   /**
+    * Initialize the JSTerminal UI.
+    */
+   init: function JST_init()
+   {
+-    let chromeDocument = this.hud.owner.chromeWindow.document;
+     let autocompleteOptions = {
+       onSelect: this.onAutocompleteSelect.bind(this),
+       onClick: this.acceptProposedCompletion.bind(this),
+       panelId: "webConsole_autocompletePopup",
+       listBoxId: "webConsole_autocompletePopupListBox",
+       position: "before_start",
+       theme: "auto",
+       direction: "ltr",
+       autoSelect: true
+     };
+-    this.autocompletePopup = new AutocompletePopup(chromeDocument,
++    this.autocompletePopup = new AutocompletePopup(this.hud.document,
+                                                    autocompleteOptions);
+ 
+     let doc = this.hud.document;
+     this.completeNode = doc.querySelector(".jsterm-complete-node");
+     this.inputNode = doc.querySelector(".jsterm-input-node");
+     this.inputNode.addEventListener("keypress", this._keyPress, false);
+     this.inputNode.addEventListener("input", this._inputEventHandler, false);
+     this.inputNode.addEventListener("keyup", this._inputEventHandler, false);
+     this.inputNode.addEventListener("focus", this._focusEventHandler, false);
++    this.hud.window.addEventListener("blur", this._blurEventHandler, false);
+ 
+     this.lastInputValue && this.setInputValue(this.lastInputValue);
+   },
+ 
+   /**
+    * The JavaScript evaluation response handler.
+    *
+    * @private
+@@ -3736,16 +3737,27 @@ JSTerm.prototype = {
+       this.resizeInput();
+       this.complete(this.COMPLETE_HINT_ONLY);
+       this.lastInputValue = this.inputNode.value;
+       this._inputChanged = true;
+     }
+   },
+ 
+   /**
++   * The window "blur" event handler.
++   * @private
++   */
++  _blurEventHandler: function JST__blurEventHandler()
++  {
++    if (this.autocompletePopup) {
++      this.clearCompletion();
++    }
++  },
++
++  /**
+    * The inputNode "keypress" event handler.
+    *
+    * @private
+    * @param nsIDOMEvent aEvent
+    */
+   _keyPress: function JST__keyPress(aEvent)
+   {
+     let inputNode = this.inputNode;
+@@ -4366,16 +4378,17 @@ JSTerm.prototype = {
+     if (popup) {
+       popup.parentNode.removeChild(popup);
+     }
+ 
+     this.inputNode.removeEventListener("keypress", this._keyPress, false);
+     this.inputNode.removeEventListener("input", this._inputEventHandler, false);
+     this.inputNode.removeEventListener("keyup", this._inputEventHandler, false);
+     this.inputNode.removeEventListener("focus", this._focusEventHandler, false);
++    this.hud.window.removeEventListener("blur", this._blurEventHandler, false);
+ 
+     this.hud = null;
+   },
+ };
+ 
+ /**
+  * Utils: a collection of globally used functions.
+  */

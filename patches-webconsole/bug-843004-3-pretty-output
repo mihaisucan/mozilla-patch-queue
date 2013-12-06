@@ -1,0 +1,315 @@
+# HG changeset patch
+# Parent 7d28a22b18dcb1439dc64d61ec177b95167254e2
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1386362721 -7200
+
+Bug 843004 - Part 3: VariablesView ObjectActor pretty output
+
+diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
+--- a/browser/devtools/shared/widgets/VariablesView.jsm
++++ b/browser/devtools/shared/widgets/VariablesView.jsm
+@@ -3101,20 +3101,241 @@ VariablesView.getString = function(aGrip
+       case "NaN":
+       case "Infinity":
+       case "-Infinity":
+       case "-0":
+         return aGrip.type;
+       case "longString":
+         return "\"" + aGrip.initial + "\"";
+       default:
+-        if (!aConciseFlag) {
++        if (aGrip.type != "object") {
+           return "[" + aGrip.type + " " + aGrip.class + "]";
+         }
+-        return aGrip.class;
++
++        if (aGrip.class == "Function") {
++          let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name || "";
++          let params = aGrip.parameterNames || "";
++          if (!aConciseFlag) {
++            return "function " + name + "(" + params + ")";
++          }
++          return (name || "function") + "(" + params + ")";
++        }
++
++        if (aGrip.displayString && aGrip.class == "RegExp") {
++          // TODO: handle longStrings
++          return aGrip.displayString;
++        }
++
++        let preview = aGrip.preview;
++        if (!preview) {
++          if (aConciseFlag) {
++            return aGrip.class;
++          }
++          return "[" + aGrip.type + " " + aGrip.class + "]";
++        }
++
++        if (preview.kind == "ArrayLike") {
++          if (!aConciseFlag && preview.items) {
++            let result = [];
++            for (let item of preview.items) {
++              result.push(VariablesView.getString(item, true));
++            }
++            if (result.length < preview.length) {
++              result.push((preview.length - result.length) + " more\u2026"); // TODO: localize
++            }
++
++            let prefix = aGrip.class == "Array" ? "" : aGrip.class + " ";
++            return prefix + "[" + result.join(", ") + "]";
++          }
++
++          return aGrip.class + "[" + preview.length + "]";
++        }
++
++        if (preview.kind == "MapLike") {
++          if (aConciseFlag || !preview.entries) {
++            let size = typeof preview.size == "number" ?
++                         "[" + preview.size + "]" : "";
++            return aGrip.class + size;
++          }
++
++          let entries = [];
++          for (let [key, value] of preview.entries) {
++            // TODO: support longstring
++            if (typeof key != "string") {
++              key = VariablesView.getString(key, true);
++            }
++            value = VariablesView.getString(value, true);
++            entries.push(key + ": " + value);
++          }
++          if (typeof preview.size == "number" && preview.size > entries.length) {
++            entries.push((preview.size - entries.length) + " more\u2026");
++          }
++          return aGrip.class + " {" + entries.join(", ") + "}";
++        }
++
++        if (aGrip.class == "Date" && preview.timestamp) {
++          if (aConciseFlag) {
++            return "Date " + new Date(preview.timestamp).toISOString();
++          }
++          return "Date " + new Date(preview.timestamp).toLocaleString();
++        }
++
++        if (preview.kind == "CSSStyleSheet" ||
++            preview.kind == "CSSImportRule" ||
++            preview.kind == "DOMLocation") {
++          let result = aGrip.class;
++          if (!VariablesView.isFalsy({ value: preview.href })) {
++            result += " " + WebConsoleUtils.abbreviateSourceURL(preview.href,
++                                                                { onlyCropQuery: !aConciseFlag });
++          }
++          return result;
++        }
++
++        if (preview.kind == "CSSStyleRule") {
++          return aGrip.class + " " + VariablesView.getString(preview.selectorText);
++        }
++
++        if (preview.kind == "CSSMediaRule") {
++          return aGrip.class + " " + VariablesView.getString(preview.conditionText);
++        }
++
++        if (preview.kind == "DOMWindow" ||
++            (preview.kind == "DOMNode" &&
++             preview.nodeType == Ci.nsIDOMNode.DOCUMENT_NODE)) {
++          let location = WebConsoleUtils.abbreviateSourceURL(preview.location,
++                                                             { onlyCropQuery: !aConciseFlag });
++          return aGrip.class + " " + location;
++        }
++
++        if (preview.kind == "DOMNode" &&
++            preview.nodeType == Ci.nsIDOMNode.ELEMENT_NODE) {
++          let attrs = preview.attributes;
++          if (!aConciseFlag) {
++            let n = 0, result = "<" + preview.nodeName;
++            for (let name in attrs) {
++              result += " " + name + "=" + VariablesView.getString(attrs[name], true);
++              n++;
++            }
++            if (preview.attributesLength > n) {
++              result += " \u2026";
++            }
++            return result + ">";
++          }
++
++          let result = "<" + preview.nodeName;
++          if (attrs.id) {
++            result += "#" + attrs.id;
++          }
++          return result + ">";
++        }
++
++        if (preview.kind == "DOMNode" &&
++            preview.nodeType == Ci.nsIDOMNode.ATTRIBUTE_NODE) {
++          return preview.nodeName + "=" + VariablesView.getString(preview.value, true);
++        }
++
++        if (preview.kind == "DOMNode" &&
++            preview.nodeType == Ci.nsIDOMNode.TEXT_NODE) {
++          return preview.nodeName + " " + VariablesView.getString(preview.textContent, true);
++        }
++
++        if (preview.kind == "DOMNode" &&
++            preview.nodeType == Ci.nsIDOMNode.COMMENT_NODE) {
++          return "<!--" + preview.textContent + "-->";
++        }
++
++        if (preview.kind == "DOMEvent" && preview.type) {
++          let result = preview.type;
++
++          if (preview.eventKind == "key" && preview.modifiers &&
++              preview.modifiers.length) {
++            result += " " + preview.modifiers.join("-");
++          }
++
++          let props = [];
++          if (preview.target) {
++            let target = VariablesView.getString(preview.target, true);
++            props.push("target: " + target);
++          }
++          for (let prop in preview.properties) {
++            let value = preview.properties[prop];
++            props.push(prop + ": " + VariablesView.getString(value, true));
++          }
++
++          return result + " {" + props.join(", ") + "}";
++        }
++
++        if (preview.kind == "DOMException") {
++          let name = preview.name || aGrip.class;
++          if (aConciseFlag) {
++            return name;
++          }
++
++          let msg = name + ": " +
++                    VariablesView.getString(preview.message, true) + "\n" +
++                    "Code: " + preview.code + "\n" +
++                    "Result: 0x" + (+preview.result).toString(16);
++          if (preview.filename) {
++            msg += "\nLocation: " + preview.filename;
++            if (preview.lineNumber) {
++              msg += "@" + preview.lineNumber;
++            }
++          }
++          return msg;
++        } // DOMException
++
++        if (preview.kind == "Error") {
++          if (aConciseFlag) {
++            return aGrip.class;
++          }
++
++          // TODO: handle non-string properties, including longStrings.
++          let msg = preview.name + ": " + preview.message;
++          if (!VariablesView.isFalsy({ value: preview.stack })) {
++            msg += "\nStack trace:\n" + preview.stack;
++          }
++          return msg;
++        }
++
++        if (aConciseFlag) {
++          return aGrip.class;
++        }
++
++        // generic object preview
++        let props = [];
++        for (let [key, value] of Iterator(preview.ownProperties || {})) {
++          let valueString = "";
++          if (value.get) {
++            valueString = "Getter";
++          } else if (value.set) {
++            valueString = "Setter";
++          } else {
++            valueString = VariablesView.getString(value.value, true);
++          }
++          props.push(key + ": " + valueString);
++        }
++
++        for (let [key, value] of Iterator(preview.safeGetterValues || {})) {
++          let valueString = VariablesView.getString(value.getterValue, true);
++          props.push(key + ": " + valueString);
++        }
++
++        if (props.length > 0) {
++          if (preview.ownPropertiesLength) {
++            let previewLength = Object.keys(preview.ownProperties).length;
++            let diff = preview.ownPropertiesLength - previewLength;
++            if (diff > 0) {
++              props.push(diff + " more\u2026");
++            }
++          }
++          let klass = aGrip.class != "Object" ? aGrip.class + " " : "";
++          return klass + "{" + props.join(", ") + "}";
++        }
++
++        return "[" + aGrip.type + " " + aGrip.class + "]";
+     }
+   }
+   switch (typeof aGrip) {
+     case "string":
+       return "\"" + aGrip + "\"";
+     case "boolean":
+       return aGrip ? "true" : "false";
+     case "number":
+diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
+--- a/toolkit/devtools/webconsole/utils.js
++++ b/toolkit/devtools/webconsole/utils.js
+@@ -183,20 +183,26 @@ let WebConsoleUtils = {
+   },
+ 
+   /**
+    * Abbreviates the given source URL so that it can be displayed flush-right
+    * without being too distracting.
+    *
+    * @param string aSourceURL
+    *        The source URL to shorten.
++   * @param object [aOptions]
++   *        Options:
++   *        - onlyCropQuery: boolean that tells if the URL abbreviation function
++   *        should only remove the query parameters and the hash fragment from
++   *        the given URL.
+    * @return string
+    *         The abbreviated form of the source URL.
+    */
+-  abbreviateSourceURL: function WCU_abbreviateSourceURL(aSourceURL)
++  abbreviateSourceURL:
++  function WCU_abbreviateSourceURL(aSourceURL, aOptions = {})
+   {
+     if (aSourceURL.substr(0, 5) == "data:") {
+       let commaIndex = aSourceURL.indexOf(",");
+       if (commaIndex > -1) {
+         aSourceURL = "data:" + aSourceURL.substring(commaIndex + 1);
+       }
+     }
+ 
+@@ -209,23 +215,25 @@ let WebConsoleUtils = {
+     // Remove any hash fragments.
+     let hashIndex = aSourceURL.indexOf("#");
+     if (hashIndex > -1) {
+       aSourceURL = aSourceURL.substring(0, hashIndex);
+     }
+ 
+     // Remove a trailing "/".
+     if (aSourceURL[aSourceURL.length - 1] == "/") {
+-      aSourceURL = aSourceURL.substring(0, aSourceURL.length - 1);
++      aSourceURL = aSourceURL.replace(/\/+$/, "");
+     }
+ 
+     // Remove all but the last path component.
+-    let slashIndex = aSourceURL.lastIndexOf("/");
+-    if (slashIndex > -1) {
+-      aSourceURL = aSourceURL.substring(slashIndex + 1);
++    if (!aOptions.onlyCropQuery) {
++      let slashIndex = aSourceURL.lastIndexOf("/");
++      if (slashIndex > -1) {
++        aSourceURL = aSourceURL.substring(slashIndex + 1);
++      }
+     }
+ 
+     return aSourceURL;
+   },
+ 
+   /**
+    * Tells if the given function is native or not.
+    *

@@ -1,241 +1,78 @@
 # HG changeset patch
-# Parent 2bd207736d7b96368839c4bbc85cfd024f2b9255
+# Parent e29c8d6d4ac185f53474e23edc87110fb30596ff
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1386279213 -7200
-Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output
+# Date 1386362957 -7200
+Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output; r=jimb,benvie
 
-diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
---- a/browser/devtools/shared/widgets/VariablesView.jsm
-+++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -3101,20 +3101,222 @@ VariablesView.getString = function(aGrip
-       case "NaN":
-       case "Infinity":
-       case "-Infinity":
-       case "-0":
-         return aGrip.type;
-       case "longString":
-         return "\"" + aGrip.initial + "\"";
-       default:
--        if (!aConciseFlag) {
-+        if (aGrip.type != "object") {
-           return "[" + aGrip.type + " " + aGrip.class + "]";
-         }
--        return aGrip.class;
+diff --git a/toolkit/devtools/DevToolsUtils.js b/toolkit/devtools/DevToolsUtils.js
+--- a/toolkit/devtools/DevToolsUtils.js
++++ b/toolkit/devtools/DevToolsUtils.js
+@@ -1,16 +1,17 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+ /* General utilities used throughout devtools. */
+ 
++let Cu = Components.utils;
+ let { Promise: promise } = Components.utils.import("resource://gre/modules/commonjs/sdk/core/promise.js", {});
+ let { Services } = Components.utils.import("resource://gre/modules/Services.jsm", {});
+ 
+ /**
+  * Turn the error |aError| into a string, without fail.
+  */
+ this.safeErrorString = function safeErrorString(aError) {
+   try {
+@@ -206,8 +207,29 @@ this.getProperty = function getProperty(
+  * @return Boolean
+  *         Whether a safe getter was found.
+  */
+ this.hasSafeGetter = function hasSafeGetter(aDesc) {
+   let fn = aDesc.get;
+   return fn && fn.callable && fn.class == "Function" && fn.script === undefined;
+ };
+ 
++/**
++ * Check if it is safe to read properties and execute methods from the given JS
++ * object. Safety is defined as being protected from unintended code execution
++ * from content scripts (or cross-compartment code).
++ *
++ * See bugs 945920 and 946752 for discussion.
++ *
++ * @type Object aObj
++ *       The object to check.
++ * @return Boolean
++ *         True if it is safe to read properties from aObj, or false otherwise.
++ */
++this.isSafeJSObject = function isSafeJSObject(aObj) {
++  if (Cu.getGlobalForObject(aObj) ==
++      Cu.getGlobalForObject(isSafeJSObject)) {
++    return true; // aObj is not a cross-compartment wrapper.
++  }
 +
-+        if (aGrip.class == "Function") {
-+          let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name || "";
-+          let params = aGrip.parameterNames || "";
-+          if (!aConciseFlag) {
-+            return "function " + name + "(" + params + ")";
-+          }
-+          return (name || "function") + "(" + params + ")";
-+        }
++  return Cu.isXrayWrapper(aObj);
++};
 +
-+        if (aGrip.displayString && aGrip.class == "RegExp") {
-+          // TODO: handle longStrings
-+          return aGrip.displayString;
-+        }
-+
-+        let preview = aGrip.preview;
-+        if (!preview) {
-+          if (aConciseFlag) {
-+            return aGrip.class;
-+          }
-+          return "[" + aGrip.type + " " + aGrip.class + "]";
-+        }
-+
-+        if (preview.kind == "ArrayLike") {
-+          if (!aConciseFlag && preview.items) {
-+            let result = [];
-+            for (let item of preview.items) {
-+              result.push(VariablesView.getString(item, true));
-+            }
-+            if (result.length < preview.length) {
-+              result.push((preview.length - result.length) + " more\u2026"); // TODO: localize
-+            }
-+
-+            let prefix = aGrip.class == "Array" ? "" : aGrip.class + " ";
-+            return prefix + "[" + result.join(", ") + "]";
-+          }
-+
-+          return aGrip.class + "[" + preview.length + "]";
-+        }
-+
-+        if (preview.kind == "MapLike") {
-+          if (aConciseFlag || !preview.entries) {
-+            let size = typeof preview.size == "number" ?
-+                         "[" + preview.size + "]" : "";
-+            return aGrip.class + size;
-+          }
-+
-+          let entries = [];
-+          for (let [key, value] of preview.entries) {
-+            // TODO: support longstring
-+            if (typeof key != "string") {
-+              key = VariablesView.getString(key, true);
-+            }
-+            value = VariablesView.getString(value, true);
-+            entries.push(key + ": " + value);
-+          }
-+          if (typeof preview.size == "number" && preview.size > entries.length) {
-+            entries.push((preview.size - entries.length) + " more\u2026");
-+          }
-+          return aGrip.class + " {" + entries.join(", ") + "}";
-+        }
-+
-+        if (aGrip.class == "Date" && preview.timestamp) {
-+          if (aConciseFlag) {
-+            return "Date " + new Date(preview.timestamp).toISOString();
-+          }
-+          return "Date " + new Date(preview.timestamp).toLocaleString();
-+        }
-+
-+        if (preview.kind == "CSSStyleSheet" ||
-+            preview.kind == "CSSImportRule" ||
-+            preview.kind == "DOMLocation") {
-+          let result = aGrip.class;
-+          if (!VariablesView.isFalsy({ value: preview.href })) {
-+            result += " " + WebConsoleUtils.abbreviateSourceURL(preview.href,
-+                                                                { onlyCropQuery: !aConciseFlag });
-+          }
-+          return result;
-+        }
-+
-+        if (preview.kind == "CSSStyleRule") {
-+          return aGrip.class + " " + VariablesView.getString(preview.selectorText);
-+        }
-+
-+        if (preview.kind == "CSSMediaRule") {
-+          return aGrip.class + " " + VariablesView.getString(preview.conditionText);
-+        }
-+
-+        if (preview.kind == "DOMWindow" ||
-+            (preview.kind == "DOMNode" &&
-+             preview.nodeType == Ci.nsIDOMNode.DOCUMENT_NODE)) {
-+          let location = WebConsoleUtils.abbreviateSourceURL(preview.location,
-+                                                             { onlyCropQuery: !aConciseFlag });
-+          return aGrip.class + " " + location;
-+        }
-+
-+        if (preview.kind == "DOMNode" &&
-+            preview.nodeType == Ci.nsIDOMNode.ELEMENT_NODE) {
-+          let attrs = preview.attributes;
-+          if (!aConciseFlag) {
-+            let n = 0, result = "<" + preview.nodeName;
-+            for (let name in attrs) {
-+              result += " " + name + "=" + VariablesView.getString(attrs[name], true);
-+              n++;
-+            }
-+            if (preview.attributesLength > n) {
-+              result += " \u2026";
-+            }
-+            return result + ">";
-+          }
-+
-+          let result = "<" + preview.nodeName;
-+          if (attrs.id) {
-+            result += "#" + attrs.id;
-+          }
-+          return result + ">";
-+        }
-+
-+        if (preview.kind == "DOMNode" &&
-+            preview.nodeType == Ci.nsIDOMNode.ATTRIBUTE_NODE) {
-+          return preview.nodeName + "=" + VariablesView.getString(preview.value, true);
-+        }
-+
-+        if (preview.kind == "DOMNode" &&
-+            preview.nodeType == Ci.nsIDOMNode.TEXT_NODE) {
-+          return preview.nodeName + " " + VariablesView.getString(preview.textContent, true);
-+        }
-+
-+        if (preview.kind == "DOMNode" &&
-+            preview.nodeType == Ci.nsIDOMNode.COMMENT_NODE) {
-+          return "<!--" + preview.textContent + "-->";
-+        }
-+
-+        if (preview.kind == "DOMEvent" && preview.type) {
-+          let result = preview.type;
-+
-+          if (preview.eventKind == "key" && preview.modifiers &&
-+              preview.modifiers.length) {
-+            result += " " + preview.modifiers.join("-");
-+          }
-+
-+          let props = [];
-+          if (preview.target) {
-+            let target = VariablesView.getString(preview.target, true);
-+            props.push("target: " + target);
-+          }
-+          for (let prop in preview.properties) {
-+            let value = preview.properties[prop];
-+            props.push(prop + ": " + VariablesView.getString(value, true));
-+          }
-+
-+          return result + " {" + props.join(", ") + "}";
-+        }
-+
-+        if (preview.kind == "Error") {
-+          if (aConciseFlag) {
-+            return aGrip.class;
-+          }
-+
-+          // TODO: handle non-string properties, including longStrings.
-+          let msg = preview.name + ": " + preview.message;
-+          if (!VariablesView.isFalsy({ value: preview.stack })) {
-+            msg += "\nStack trace:\n" + preview.stack;
-+          }
-+          return msg;
-+        }
-+
-+        if (aConciseFlag) {
-+          return aGrip.class;
-+        }
-+
-+        // generic object preview
-+        let props = [];
-+        for (let [key, value] of Iterator(preview.ownProperties || {})) {
-+          let valueString = "";
-+          if (value.get) {
-+            valueString = "Getter";
-+          } else if (value.set) {
-+            valueString = "Setter";
-+          } else {
-+            valueString = VariablesView.getString(value.value, true);
-+          }
-+          props.push(key + ": " + valueString);
-+        }
-+
-+        for (let [key, value] of Iterator(preview.safeGetterValues || {})) {
-+          let valueString = VariablesView.getString(value.getterValue, true);
-+          props.push(key + ": " + valueString);
-+        }
-+
-+        if (props.length > 0) {
-+          if (preview.ownPropertiesLength) {
-+            let previewLength = Object.keys(preview.ownProperties).length;
-+            let diff = preview.ownPropertiesLength - previewLength;
-+            if (diff > 0) {
-+              props.push(diff + " more\u2026");
-+            }
-+          }
-+          let klass = aGrip.class != "Object" ? aGrip.class + " " : "";
-+          return klass + "{" + props.join(", ") + "}";
-+        }
-+
-+        return "[" + aGrip.type + " " + aGrip.class + "]";
-     }
-   }
-   switch (typeof aGrip) {
-     case "string":
-       return "\"" + aGrip + "\"";
-     case "boolean":
-       return aGrip ? "true" : "false";
-     case "number":
+diff --git a/toolkit/devtools/DevToolsUtils.jsm b/toolkit/devtools/DevToolsUtils.jsm
+--- a/toolkit/devtools/DevToolsUtils.jsm
++++ b/toolkit/devtools/DevToolsUtils.jsm
+@@ -22,9 +22,10 @@ this.DevToolsUtils = {
+   safeErrorString: safeErrorString,
+   reportException: reportException,
+   makeInfallible: makeInfallible,
+   yieldingEach: yieldingEach,
+   reportingDisabled: false , // Used by tests.
+   defineLazyPrototypeGetter: defineLazyPrototypeGetter,
+   getProperty: getProperty,
+   hasSafeGetter: hasSafeGetter,
++  isSafeJSObject: isSafeJSObject,
+ };
 diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
 --- a/toolkit/devtools/server/actors/script.js
 +++ b/toolkit/devtools/server/actors/script.js
-@@ -2704,17 +2704,17 @@ function errorStringify(aObj) {
+@@ -2707,17 +2707,17 @@ function errorStringify(aObj) {
   * Stringify a Debugger.Object based on its class.
   *
   * @param Debugger.Object aObj
@@ -254,7 +91,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
    return stringifier(aObj);
  }
  
-@@ -2794,59 +2794,60 @@ let stringifiers = {
+@@ -2797,59 +2797,58 @@ let stringifiers = {
   *        The debuggee object.
   * @param aThreadActor ThreadActor
   *        The parent thread actor for this object.
@@ -294,8 +131,8 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 -      if (this.obj.name) {
 -        g.name = this.obj.name;
 +    if (this.obj.class != "DeadObject") {
-+      let raw = this.obj.unsafeDereference();
-+      if (!Cu.isXrayWrapper(raw)) {
++      let raw = Cu.unwaiveXrays(this.obj.unsafeDereference());
++      if (!DevToolsUtils.isSafeJSObject(raw)) {
 +        raw = null;
        }
 -      if (this.obj.displayName) {
@@ -325,8 +162,6 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 -
 +    }
 +
-+    // TODO: do not do previews for __proto__
-+
 +    this.threadActor._gripDepth--;
      return g;
    },
@@ -336,7 +171,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
     */
    release: function () {
      if (this.registeredPool.objectActors) {
-@@ -2963,25 +2964,27 @@ ObjectActor.prototype = {
+@@ -2966,25 +2965,27 @@ ObjectActor.prototype = {
  
    /**
     * Find the safe getter values for the current Debugger.Object, |this.obj|.
@@ -366,7 +201,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
          // avoid providing safeGetterValues from prototypes if property |name|
          // is already defined as an own property.
          if (name in safeGetterValues ||
-@@ -3013,19 +3016,25 @@ ObjectActor.prototype = {
+@@ -3016,19 +3017,25 @@ ObjectActor.prototype = {
            // return undefined and should be ignored.
            if (getterValue !== undefined) {
              safeGetterValues[name] = {
@@ -392,7 +227,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
      return safeGetterValues;
    },
  
-@@ -3042,17 +3051,25 @@ ObjectActor.prototype = {
+@@ -3045,17 +3052,25 @@ ObjectActor.prototype = {
     */
    _findSafeGetters: function (aObject)
    {
@@ -419,7 +254,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
          // allowed (bug 560072).
        }
        if (!desc || desc.value !== undefined || !("get" in desc)) {
-@@ -3110,33 +3127,33 @@ ObjectActor.prototype = {
+@@ -3113,33 +3128,33 @@ ObjectActor.prototype = {
  
    /**
     * A helper method that creates a property descriptor for the provided object,
@@ -455,7 +290,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        enumerable: desc.enumerable
      };
  
-@@ -3230,16 +3247,567 @@ ObjectActor.prototype.requestTypes = {
+@@ -3233,16 +3248,569 @@ ObjectActor.prototype.requestTypes = {
    "property": ObjectActor.prototype.onProperty,
    "displayString": ObjectActor.prototype.onDisplayString,
    "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
@@ -471,9 +306,17 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +/**
 + * Functions for adding information to ObjectActor grips for the purpose of
 + * having customized output. This object holds arrays mapped by
-+ * DebuggerObject.class. In each array you can add functions that take two
-+ * arguments: the ObjectActor instance and the grip object being prepared for
-+ * the client. Functions must return false if they cannot provide preview
++ * DebuggerObject.class.
++ *
++ * In each array you can add functions that take two
++ * arguments:
++ *   - the ObjectActor instance to make a preview for,
++ *   - the grip object being prepared for the client,
++ *   - the raw JS object after calling Debugger.Object.unsafeDereference(). This
++ *   argument is only provided if the object is safe for reading properties and
++ *   executing methods. See DevToolsUtils.isSafeJSObject().
++ *
++ * Functions must return false if they cannot provide preview
 + * information for the debugger object, or true otherwise.
 + */
 +DebuggerServer.ObjectActorPreviewers = {
@@ -507,16 +350,22 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +  }], // Function
 +
 +  RegExp: [function({obj, threadActor}, aGrip) {
-+    // |raw| is not xray wrapped.
++    if (!obj.proto || obj.proto.class != "RegExp") {
++      return false;
++    }
++
 +    let raw = obj.unsafeDereference();
 +    let str = RegExp.prototype.toString.call(raw);
 +    aGrip.displayString = threadActor.createValueGrip(str);
 +    return true;
 +  }],
 +
-+  // TODO: fix exception when trying expand proto
 +  Date: [function({obj, threadActor}, aGrip) {
 +    let time = Date.prototype.getTime.call(obj.unsafeDereference());
++    if (isNaN(time)) {
++      return false;
++    }
++
 +    aGrip.preview = {
 +      timestamp: threadActor.createValueGrip(time),
 +    };
@@ -621,7 +470,6 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +  }], // Map
 +
 +  DOMStringMap: [function({obj, threadActor}, aGrip, aRawObj) {
-+    // aRawObj is expected to be xray wrapped.
 +    if (!aRawObj) {
 +      return false;
 +    }
@@ -667,11 +515,17 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +        let name = DevToolsUtils.getProperty(obj, "name");
 +        let msg = DevToolsUtils.getProperty(obj, "message");
 +        let stack = DevToolsUtils.getProperty(obj, "stack");
++        let fileName = DevToolsUtils.getProperty(obj, "fileName");
++        let lineNumber = DevToolsUtils.getProperty(obj, "lineNumber");
++        let columnNumber = DevToolsUtils.getProperty(obj, "columnNumber");
 +        aGrip.preview = {
 +          kind: "Error",
 +          name: threadActor.createValueGrip(name),
 +          message: threadActor.createValueGrip(msg),
 +          stack: threadActor.createValueGrip(stack),
++          fileName: threadActor.createValueGrip(fileName),
++          lineNumber: threadActor.createValueGrip(lineNumber),
++          columnNumber: threadActor.createValueGrip(columnNumber),
 +        };
 +        return true;
 +      default:
@@ -679,56 +533,35 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    }
 +  },
 +
-+  function CSSMediaRule({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (!(raw instanceof Ci.nsIDOMCSSMediaRule)) {
++  function CSSMediaRule({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSMediaRule)) {
 +      return false;
 +    }
-+
-+    // |raw| is not xray-wrapped and it's not safe to read properties from.
-+    let conditionText = DevToolsUtils.getProperty(obj, "conditionText");
-+    if (typeof conditionText != "string") {
-+      return false;
-+    }
-+
 +    aGrip.preview = {
 +      kind: "CSSMediaRule",
-+      conditionText: threadActor.createValueGrip(conditionText),
++      conditionText: threadActor.createValueGrip(aRawObj.conditionText),
 +    };
 +    return true;
 +  },
 +
-+  function CSSStyleRule({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (!(raw instanceof Ci.nsIDOMCSSStyleRule)) {
++  function CSSStyleRule({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleRule)) {
 +      return false;
 +    }
-+
-+    // |raw| is not xray-wrapped.
-+    let selectorText = DevToolsUtils.getProperty(obj, "selectorText");
-+    if (typeof selectorText != "string") {
-+      return false;
-+    }
-+
 +    aGrip.preview = {
 +      kind: "CSSStyleRule",
-+      selectorText: threadActor.createValueGrip(selectorText),
++      selectorText: threadActor.createValueGrip(aRawObj.selectorText),
 +    };
 +    return true;
 +  },
 +
-+  function CSSImportRule({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (!(raw instanceof Ci.nsIDOMCSSImportRule)) {
++  function CSSImportRule({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSImportRule)) {
 +      return false;
 +    }
-+
-+    // |raw| is not xray-wrapped.
-+    let href = DevToolsUtils.getProperty(obj, "href");
-+
 +    aGrip.preview = {
 +      kind: "CSSImportRule",
-+      href: threadActor.createValueGrip(href),
++      href: threadActor.createValueGrip(aRawObj.href),
 +    };
 +    return true;
 +  },
@@ -766,34 +599,29 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    return true;
 +  },
 +
-+  function ArrayLike({obj, threadActor}, aGrip) {
-+    let raw = obj.unsafeDereference();
-+    if (obj.class != "DOMTokenList" &&
-+        !(raw instanceof Ci.nsIDOMMozNamedAttrMap ||
-+          raw instanceof Ci.nsIDOMCSSRuleList ||
-+          raw instanceof Ci.nsIDOMCSSValueList ||
-+          raw instanceof Ci.nsIDOMDOMStringList ||
-+          raw instanceof Ci.nsIDOMFileList ||
-+          raw instanceof Ci.nsIDOMFontFaceList ||
-+          raw instanceof Ci.nsIDOMMediaList ||
-+          raw instanceof Ci.nsIDOMMediaQueryList ||
-+          raw instanceof Ci.nsIDOMNodeList ||
-+          raw instanceof Ci.nsIDOMStyleSheetList)) {
++  function ArrayLike({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj ||
++        obj.class != "DOMTokenList" &&
++        !(aRawObj instanceof Ci.nsIDOMMozNamedAttrMap ||
++          aRawObj instanceof Ci.nsIDOMCSSRuleList ||
++          aRawObj instanceof Ci.nsIDOMCSSValueList ||
++          aRawObj instanceof Ci.nsIDOMDOMStringList ||
++          aRawObj instanceof Ci.nsIDOMFileList ||
++          aRawObj instanceof Ci.nsIDOMFontFaceList ||
++          aRawObj instanceof Ci.nsIDOMMediaList ||
++          aRawObj instanceof Ci.nsIDOMMediaQueryList ||
++          aRawObj instanceof Ci.nsIDOMNodeList ||
++          aRawObj instanceof Ci.nsIDOMStyleSheetList)) {
 +      return false;
 +    }
 +
-+    let isSafe = Cu.isXrayWrapper(raw);
-+    let length = isSafe ? raw.length : DevToolsUtils.getProperty(obj, "length");
-+
-+    console.log("arraylike", obj.class, isSafe);
-+
-+    if (typeof length != "number") {
++    if (typeof aRawObj.length != "number") {
 +      return false;
 +    }
 +
 +    aGrip.preview = {
 +      kind: "ArrayLike",
-+      length: length,
++      length: aRawObj.length,
 +    };
 +
 +    if (threadActor._gripDepth > 1) {
@@ -802,21 +630,13 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    let items = aGrip.preview.items = [];
 +
-+    if (isSafe) {
-+      for (let i = 0; i < length &&
-+                      items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
-+        let value = raw[i];
-+        if (value && typeof value == "object") {
-+          value = obj.makeDebuggeeValue(value);
-+        }
-+        items.push(threadActor.createValueGrip(value));
++    for (let i = 0; i < aRawObj.length &&
++                    items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
++      let value = aRawObj[i];
++      if (value && typeof value == "object") {
++        value = obj.makeDebuggeeValue(value);
 +      }
-+    } else {
-+      for (let i = 0; i < length &&
-+                      items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
-+        let value = DevToolsUtils.getProperty(obj, i);
-+        items.push(threadActor.createValueGrip(value));
-+      }
++      items.push(threadActor.createValueGrip(value));
 +    }
 +
 +    return true;
@@ -972,7 +792,24 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    return true;
 +  }, // DOMEvent
 +
-+  // TODO: add DOMException
++  function DOMException({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMDOMException)) {
++      return false;
++    }
++
++    aGrip.preview = {
++      kind: "DOMException",
++      name: threadActor.createValueGrip(aRawObj.name),
++      message: threadActor.createValueGrip(aRawObj.message),
++      code: threadActor.createValueGrip(aRawObj.code),
++      result: threadActor.createValueGrip(aRawObj.result),
++      filename: threadActor.createValueGrip(aRawObj.filename),
++      lineNumber: threadActor.createValueGrip(aRawObj.lineNumber),
++      columnNumber: threadActor.createValueGrip(aRawObj.columnNumber),
++    };
++
++    return true;
++  },
 +
 +  function GenericObject(aObjectActor, aGrip) {
 +    let {obj, threadActor} = aObjectActor;
@@ -1023,64 +860,3 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
  function PauseScopedObjectActor()
  {
    ObjectActor.apply(this, arguments);
-diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
---- a/toolkit/devtools/webconsole/utils.js
-+++ b/toolkit/devtools/webconsole/utils.js
-@@ -183,20 +183,26 @@ let WebConsoleUtils = {
-   },
- 
-   /**
-    * Abbreviates the given source URL so that it can be displayed flush-right
-    * without being too distracting.
-    *
-    * @param string aSourceURL
-    *        The source URL to shorten.
-+   * @param object [aOptions]
-+   *        Options:
-+   *        - onlyCropQuery: boolean that tells if the URL abbreviation function
-+   *        should only remove the query parameters and the hash fragment from
-+   *        the given URL.
-    * @return string
-    *         The abbreviated form of the source URL.
-    */
--  abbreviateSourceURL: function WCU_abbreviateSourceURL(aSourceURL)
-+  abbreviateSourceURL:
-+  function WCU_abbreviateSourceURL(aSourceURL, aOptions = {})
-   {
-     if (aSourceURL.substr(0, 5) == "data:") {
-       let commaIndex = aSourceURL.indexOf(",");
-       if (commaIndex > -1) {
-         aSourceURL = "data:" + aSourceURL.substring(commaIndex + 1);
-       }
-     }
- 
-@@ -209,23 +215,25 @@ let WebConsoleUtils = {
-     // Remove any hash fragments.
-     let hashIndex = aSourceURL.indexOf("#");
-     if (hashIndex > -1) {
-       aSourceURL = aSourceURL.substring(0, hashIndex);
-     }
- 
-     // Remove a trailing "/".
-     if (aSourceURL[aSourceURL.length - 1] == "/") {
--      aSourceURL = aSourceURL.substring(0, aSourceURL.length - 1);
-+      aSourceURL = aSourceURL.replace(/\/+$/, "");
-     }
- 
-     // Remove all but the last path component.
--    let slashIndex = aSourceURL.lastIndexOf("/");
--    if (slashIndex > -1) {
--      aSourceURL = aSourceURL.substring(slashIndex + 1);
-+    if (!aOptions.onlyCropQuery) {
-+      let slashIndex = aSourceURL.lastIndexOf("/");
-+      if (slashIndex > -1) {
-+        aSourceURL = aSourceURL.substring(slashIndex + 1);
-+      }
-     }
- 
-     return aSourceURL;
-   },
- 
-   /**
-    * Tells if the given function is native or not.
-    *
