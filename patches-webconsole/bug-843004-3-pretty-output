@@ -1,257 +1,493 @@
 # HG changeset patch
-# Parent 7d28a22b18dcb1439dc64d61ec177b95167254e2
+# Parent 65e0e177a4eb522704f1521bfa8d85775882dbad
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1386362721 -7200
+# Date 1386625298 -7200
 
-Bug 843004 - Part 3: VariablesView ObjectActor pretty output
+Bug 843004 - Part 3: VariablesView ObjectActor pretty output; r=benvie,vporof
 
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -3101,20 +3101,241 @@ VariablesView.getString = function(aGrip
+@@ -2343,17 +2343,17 @@ Variable.prototype = Heritage.extend(Sco
+       return;
+     }
+ 
+     let prevGrip = this._valueGrip;
+     if (prevGrip) {
+       this._valueLabel.classList.remove(VariablesView.getClass(prevGrip));
+     }
+     this._valueGrip = aGrip;
+-    this._valueString = VariablesView.getString(aGrip, true);
++    this._valueString = VariablesView.getString(aGrip, { concise: true });
+     this._valueClassName = VariablesView.getClass(aGrip);
+ 
+     this._valueLabel.classList.add(this._valueClassName);
+     this._valueLabel.setAttribute("value", this._valueString);
+   },
+ 
+   /**
+    * Initializes this variable's id, view and binds event listeners.
+@@ -3084,54 +3084,378 @@ VariablesView.getGrip = function(aValue)
+   }
+ };
+ 
+ /**
+  * Returns a custom formatted property string for a grip.
+  *
+  * @param any aGrip
+  *        @see Variable.setGrip
+- * @param boolean aConciseFlag
+- *        Return a concisely formatted property string.
++ * @param object aOptions
++ *        Options:
++ *        - concise: boolean that tells you want a concisely formatted string.
++ *        - noStringQuotes: boolean that tells to not quote strings.
+  * @return string
+  *         The formatted property string.
+  */
+-VariablesView.getString = function(aGrip, aConciseFlag) {
++VariablesView.getString = function(aGrip, aOptions = {}) {
+   if (aGrip && typeof aGrip == "object") {
+     switch (aGrip.type) {
+       case "undefined":
+       case "null":
        case "NaN":
        case "Infinity":
        case "-Infinity":
        case "-0":
          return aGrip.type;
-       case "longString":
-         return "\"" + aGrip.initial + "\"";
+-      case "longString":
+-        return "\"" + aGrip.initial + "\"";
        default:
 -        if (!aConciseFlag) {
-+        if (aGrip.type != "object") {
-           return "[" + aGrip.type + " " + aGrip.class + "]";
+-          return "[" + aGrip.type + " " + aGrip.class + "]";
++        let stringifier = VariablesView.stringifiers.byType[aGrip.type];
++        if (stringifier) {
++          let result = stringifier(aGrip, aOptions);
++          if (result) {
++            return result;
++          }
          }
 -        return aGrip.class;
 +
-+        if (aGrip.class == "Function") {
-+          let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name || "";
-+          let params = aGrip.parameterNames || "";
-+          if (!aConciseFlag) {
-+            return "function " + name + "(" + params + ")";
-+          }
-+          return (name || "function") + "(" + params + ")";
-+        }
-+
-+        if (aGrip.displayString && aGrip.class == "RegExp") {
-+          // TODO: handle longStrings
++        if (aGrip.displayString) {
 +          return aGrip.displayString;
 +        }
 +
-+        let preview = aGrip.preview;
-+        if (!preview) {
-+          if (aConciseFlag) {
-+            return aGrip.class;
-+          }
-+          return "[" + aGrip.type + " " + aGrip.class + "]";
-+        }
-+
-+        if (preview.kind == "ArrayLike") {
-+          if (!aConciseFlag && preview.items) {
-+            let result = [];
-+            for (let item of preview.items) {
-+              result.push(VariablesView.getString(item, true));
-+            }
-+            if (result.length < preview.length) {
-+              result.push((preview.length - result.length) + " more\u2026"); // TODO: localize
-+            }
-+
-+            let prefix = aGrip.class == "Array" ? "" : aGrip.class + " ";
-+            return prefix + "[" + result.join(", ") + "]";
-+          }
-+
-+          return aGrip.class + "[" + preview.length + "]";
-+        }
-+
-+        if (preview.kind == "MapLike") {
-+          if (aConciseFlag || !preview.entries) {
-+            let size = typeof preview.size == "number" ?
-+                         "[" + preview.size + "]" : "";
-+            return aGrip.class + size;
-+          }
-+
-+          let entries = [];
-+          for (let [key, value] of preview.entries) {
-+            // TODO: support longstring
-+            if (typeof key != "string") {
-+              key = VariablesView.getString(key, true);
-+            }
-+            value = VariablesView.getString(value, true);
-+            entries.push(key + ": " + value);
-+          }
-+          if (typeof preview.size == "number" && preview.size > entries.length) {
-+            entries.push((preview.size - entries.length) + " more\u2026");
-+          }
-+          return aGrip.class + " {" + entries.join(", ") + "}";
-+        }
-+
-+        if (aGrip.class == "Date" && preview.timestamp) {
-+          if (aConciseFlag) {
-+            return "Date " + new Date(preview.timestamp).toISOString();
-+          }
-+          return "Date " + new Date(preview.timestamp).toLocaleString();
-+        }
-+
-+        if (preview.kind == "CSSStyleSheet" ||
-+            preview.kind == "CSSImportRule" ||
-+            preview.kind == "DOMLocation") {
-+          let result = aGrip.class;
-+          if (!VariablesView.isFalsy({ value: preview.href })) {
-+            result += " " + WebConsoleUtils.abbreviateSourceURL(preview.href,
-+                                                                { onlyCropQuery: !aConciseFlag });
-+          }
-+          return result;
-+        }
-+
-+        if (preview.kind == "CSSStyleRule") {
-+          return aGrip.class + " " + VariablesView.getString(preview.selectorText);
-+        }
-+
-+        if (preview.kind == "CSSMediaRule") {
-+          return aGrip.class + " " + VariablesView.getString(preview.conditionText);
-+        }
-+
-+        if (preview.kind == "DOMWindow" ||
-+            (preview.kind == "DOMNode" &&
-+             preview.nodeType == Ci.nsIDOMNode.DOCUMENT_NODE)) {
-+          let location = WebConsoleUtils.abbreviateSourceURL(preview.location,
-+                                                             { onlyCropQuery: !aConciseFlag });
-+          return aGrip.class + " " + location;
-+        }
-+
-+        if (preview.kind == "DOMNode" &&
-+            preview.nodeType == Ci.nsIDOMNode.ELEMENT_NODE) {
-+          let attrs = preview.attributes;
-+          if (!aConciseFlag) {
-+            let n = 0, result = "<" + preview.nodeName;
-+            for (let name in attrs) {
-+              result += " " + name + "=" + VariablesView.getString(attrs[name], true);
-+              n++;
-+            }
-+            if (preview.attributesLength > n) {
-+              result += " \u2026";
-+            }
-+            return result + ">";
-+          }
-+
-+          let result = "<" + preview.nodeName;
-+          if (attrs.id) {
-+            result += "#" + attrs.id;
-+          }
-+          return result + ">";
-+        }
-+
-+        if (preview.kind == "DOMNode" &&
-+            preview.nodeType == Ci.nsIDOMNode.ATTRIBUTE_NODE) {
-+          return preview.nodeName + "=" + VariablesView.getString(preview.value, true);
-+        }
-+
-+        if (preview.kind == "DOMNode" &&
-+            preview.nodeType == Ci.nsIDOMNode.TEXT_NODE) {
-+          return preview.nodeName + " " + VariablesView.getString(preview.textContent, true);
-+        }
-+
-+        if (preview.kind == "DOMNode" &&
-+            preview.nodeType == Ci.nsIDOMNode.COMMENT_NODE) {
-+          return "<!--" + preview.textContent + "-->";
-+        }
-+
-+        if (preview.kind == "DOMEvent" && preview.type) {
-+          let result = preview.type;
-+
-+          if (preview.eventKind == "key" && preview.modifiers &&
-+              preview.modifiers.length) {
-+            result += " " + preview.modifiers.join("-");
-+          }
-+
-+          let props = [];
-+          if (preview.target) {
-+            let target = VariablesView.getString(preview.target, true);
-+            props.push("target: " + target);
-+          }
-+          for (let prop in preview.properties) {
-+            let value = preview.properties[prop];
-+            props.push(prop + ": " + VariablesView.getString(value, true));
-+          }
-+
-+          return result + " {" + props.join(", ") + "}";
-+        }
-+
-+        if (preview.kind == "DOMException") {
-+          let name = preview.name || aGrip.class;
-+          if (aConciseFlag) {
-+            return name;
-+          }
-+
-+          let msg = name + ": " +
-+                    VariablesView.getString(preview.message, true) + "\n" +
-+                    "Code: " + preview.code + "\n" +
-+                    "Result: 0x" + (+preview.result).toString(16);
-+          if (preview.filename) {
-+            msg += "\nLocation: " + preview.filename;
-+            if (preview.lineNumber) {
-+              msg += "@" + preview.lineNumber;
-+            }
-+          }
-+          return msg;
-+        } // DOMException
-+
-+        if (preview.kind == "Error") {
-+          if (aConciseFlag) {
-+            return aGrip.class;
-+          }
-+
-+          // TODO: handle non-string properties, including longStrings.
-+          let msg = preview.name + ": " + preview.message;
-+          if (!VariablesView.isFalsy({ value: preview.stack })) {
-+            msg += "\nStack trace:\n" + preview.stack;
-+          }
-+          return msg;
-+        }
-+
-+        if (aConciseFlag) {
++        if (aGrip.type == "object" && aOptions.concise) {
 +          return aGrip.class;
-+        }
-+
-+        // generic object preview
-+        let props = [];
-+        for (let [key, value] of Iterator(preview.ownProperties || {})) {
-+          let valueString = "";
-+          if (value.get) {
-+            valueString = "Getter";
-+          } else if (value.set) {
-+            valueString = "Setter";
-+          } else {
-+            valueString = VariablesView.getString(value.value, true);
-+          }
-+          props.push(key + ": " + valueString);
-+        }
-+
-+        for (let [key, value] of Iterator(preview.safeGetterValues || {})) {
-+          let valueString = VariablesView.getString(value.getterValue, true);
-+          props.push(key + ": " + valueString);
-+        }
-+
-+        if (props.length > 0) {
-+          if (preview.ownPropertiesLength) {
-+            let previewLength = Object.keys(preview.ownProperties).length;
-+            let diff = preview.ownPropertiesLength - previewLength;
-+            if (diff > 0) {
-+              props.push(diff + " more\u2026");
-+            }
-+          }
-+          let klass = aGrip.class != "Object" ? aGrip.class + " " : "";
-+          return klass + "{" + props.join(", ") + "}";
 +        }
 +
 +        return "[" + aGrip.type + " " + aGrip.class + "]";
      }
    }
++
    switch (typeof aGrip) {
      case "string":
-       return "\"" + aGrip + "\"";
+-      return "\"" + aGrip + "\"";
++      return VariablesView.stringifiers.byType.string(aGrip, aOptions);
      case "boolean":
        return aGrip ? "true" : "false";
      case "number":
+       if (!aGrip && 1 / aGrip === -Infinity) {
+         return "-0";
+       }
+     default:
+       return aGrip + "";
+   }
+ };
+ 
++VariablesView.stringifiers = {};
++
++VariablesView.stringifiers.byType = {
++  string: function(aGrip, {noStringQuotes}) {
++    if (noStringQuotes) {
++      return aGrip;
++    }
++    return uneval(aGrip);
++  },
++
++  longString: function({initial}, {noStringQuotes}) {
++    // XXX: add an ellipsis after .initial? If yes, should we also add an option
++    // to toggle the ellipsis?
++    if (noStringQuotes) {
++      return initial;
++    }
++    return uneval(initial);
++  },
++
++  object: function(aGrip, aOptions) {
++    let {preview} = aGrip;
++    let stringifier;
++    if (preview && preview.kind) {
++      stringifier = VariablesView.stringifiers.byObjectKind[preview.kind];
++    }
++    if (!stringifier && aGrip.class) {
++      stringifier = VariablesView.stringifiers.byObjectClass[aGrip.class];
++    }
++    if (stringifier) {
++      return stringifier(aGrip, aOptions);
++    }
++    return null;
++  },
++}; // VariablesView.stringifiers.byType
++
++VariablesView.stringifiers.byObjectClass = {
++  Function: function(aGrip, {concise}) {
++    let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name || "";
++    let params = aGrip.parameterNames || "";
++    if (!concise) {
++      return "function " + name + "(" + params + ")";
++    }
++    return (name || "function") + "(" + params + ")";
++  },
++
++  RegExp: function({displayString}) {
++    // TODO: handle longStrings
++    return displayString;
++  },
++
++  Date: function({preview}, {concise}) {
++    if (!("timestamp" in preview)) {
++      return null;
++    }
++
++    if (concise) {
++      return "Date " + new Date(preview.timestamp).toISOString();
++    }
++
++    return "Date " + new Date(preview.timestamp).toLocaleString();
++  },
++}; // VariablesView.stringifiers.byObjectClass
++
++VariablesView.stringifiers.byObjectKind = {
++  ArrayLike: function(aGrip, {concise}) {
++    let {preview} = aGrip;
++    if (concise) {
++      return aGrip.class + "[" + preview.length + "]";
++    }
++
++    if (!preview.items) {
++      return null;
++    }
++
++    let result = [];
++    for (let item of preview.items) {
++      result.push(VariablesView.getString(item, { concise: true }));
++    }
++
++    if (result.length < preview.length) {
++      result.push((preview.length - result.length) + " more\u2026"); // TODO: localize
++    }
++
++    let prefix = aGrip.class == "Array" ? "" : aGrip.class + " ";
++    return prefix + "[" + result.join(", ") + "]";
++  },
++
++  MapLike: function(aGrip, {concise}) {
++    let {preview} = aGrip;
++    if (concise || !preview.entries) {
++      let size = typeof preview.size == "number" ?
++                   "[" + preview.size + "]" : "";
++      return aGrip.class + size;
++    }
++
++    let entries = [];
++    for (let [key, value] of preview.entries) {
++      key = VariablesView.getString(key, { concise: true, noStringQuotes: true });
++      value = VariablesView.getString(value, { concise: true });
++      entries.push(key + ": " + value);
++    }
++
++    if (typeof preview.size == "number" && preview.size > entries.length) {
++      entries.push((preview.size - entries.length) + " more\u2026");
++    }
++
++    return aGrip.class + " {" + entries.join(", ") + "}";
++  },
++
++  // Stringifier for any kind of object.
++  Object: function(aGrip, {concise}) {
++    if (concise) {
++      return aGrip.class;
++    }
++
++    let {preview} = aGrip;
++    let props = [];
++    for (let [key, value] of Iterator(preview.ownProperties || {})) {
++      let valueString = "";
++      if (value.get) {
++        valueString = "Getter";
++      } else if (value.set) {
++        valueString = "Setter";
++      } else {
++        valueString = VariablesView.getString(value.value, { concise: true });
++      }
++      props.push(key + ": " + valueString);
++    }
++
++    for (let [key, value] of Iterator(preview.safeGetterValues || {})) {
++      let valueString = VariablesView.getString(value.getterValue,
++                                                { concise: true });
++      props.push(key + ": " + valueString);
++    }
++
++    if (!props.length) {
++      return null;
++    }
++
++    if (preview.ownPropertiesLength) {
++      let previewLength = Object.keys(preview.ownProperties).length;
++      let diff = preview.ownPropertiesLength - previewLength;
++      if (diff > 0) {
++        props.push(diff + " more\u2026"); // TODO: localize
++      }
++    }
++
++    let prefix = aGrip.class != "Object" ? aGrip.class + " " : "";
++    return prefix + "{" + props.join(", ") + "}";
++  }, // Object
++
++  Error: function(aGrip, {concise}) {
++    if (concise) {
++      return aGrip.class;
++    }
++
++    let {preview} = aGrip;
++    let msg = VariablesView.getString(preview.name, { noStringQuotes: true }) +
++              ": " +
++              VariablesView.getString(preview.message, { noStringQuotes: true });
++    if (!VariablesView.isFalsy({ value: preview.stack })) {
++      msg += "\nStack trace:\n" + preview.stack; // TODO: localize
++    }
++
++    return msg;
++  },
++
++  DOMException: function(aGrip, {concise}) {
++    let {preview} = aGrip;
++    if (concise) {
++      return preview.name || aGrip.class;
++    }
++
++    let msg = aGrip.class + " [" + preview.name + ": " +
++              VariablesView.getString(preview.message) + "\n" +
++              "code: " + preview.code + "\n" +
++              "nsresult: 0x" + (+preview.result).toString(16);
++
++    if (preview.filename) {
++      msg += "\nlocation: " + preview.filename;
++      if (preview.lineNumber) {
++        msg += "@" + preview.lineNumber;
++      }
++    }
++
++    return msg + "]";
++  },
++
++  DOMEvent: function(aGrip, {concise}) {
++    let {preview} = aGrip;
++    if (!preview.type) {
++      return null;
++    }
++
++    if (concise) {
++      return aGrip.class + " " + preview.type; // XXX: maybe just preview.type?
++    }
++
++    let result = preview.type;
++
++    if (preview.eventKind == "key" && preview.modifiers &&
++        preview.modifiers.length) {
++      result += " " + preview.modifiers.join("-");
++    }
++
++    let props = [];
++    if (preview.target) {
++      let target = VariablesView.getString(preview.target, { concise: true });
++      props.push("target: " + target);
++    }
++
++    for (let prop in preview.properties) {
++      let value = preview.properties[prop];
++      props.push(prop + ": " + VariablesView.getString(value, { concise: true }));
++    }
++
++    return result + " {" + props.join(", ") + "}";
++  }, // DOMEvent
++
++  CSSStyleSheet: function(aGrip, {concise}) {
++    let result = aGrip.class;
++    let href = aGrip.preview.href;
++    if (!VariablesView.isFalsy({ value: href })) {
++      result += " " + WebConsoleUtils.abbreviateSourceURL(href,
++                                                          { onlyCropQuery: !concise });
++    }
++    return result;
++  },
++
++  CSSStyleRule: function(aGrip) {
++    // XXX: should we output only |class| if |concise| is true?
++    let str = VariablesView.getString(aGrip.preview.selectorText);
++    return aGrip.class + " " + str;
++  },
++
++  CSSMediaRule: function(aGrip) {
++    // XXX: we could introduce a new preview.kind = "ObjectWithText" or
++    // something, one that we would reuse for CSSStyleRule and CSSMediaRule.
++    let str = VariablesView.getString(aGrip.preview.conditionText);
++    return aGrip.class + " " + str;
++  },
++
++  DOMWindow: function(aGrip, {concise}) {
++    let location = WebConsoleUtils.abbreviateSourceURL(aGrip.preview.location,
++                                                       { onlyCropQuery: !concise });
++    return aGrip.class + " " + location;
++  },
++
++  DOMNode: function(aGrip, {concise}) {
++    let {preview} = aGrip;
++
++    switch (preview.nodeType) {
++      case Ci.nsIDOMNode.DOCUMENT_NODE: {
++        let location = WebConsoleUtils.abbreviateSourceURL(preview.location,
++                                                           { onlyCropQuery: !concise });
++        return aGrip.class + " " + location;
++      }
++
++      case Ci.nsIDOMNode.ATTRIBUTE_NODE: {
++        // TODO: escape html entities.
++        let value = VariablesView.getString(preview.value);
++        return preview.nodeName + "=" + value;
++      }
++
++      case Ci.nsIDOMNode.TEXT_NODE:
++        return preview.nodeName + " " +
++               VariablesView.getString(preview.textContent);
++
++      case Ci.nsIDOMNode.COMMENT_NODE: {
++        let comment = VariablesView.getString(preview.textContent,
++                                              { noStringQuotes: true });
++        return "<!--" + comment + "-->";
++      }
++
++      case Ci.nsIDOMNode.ELEMENT_NODE: {
++        let attrs = preview.attributes;
++        if (!concise) {
++          let n = 0, result = "<" + preview.nodeName;
++          for (let name in attrs) {
++            // TODO: escape html entities.
++            let value = VariablesView.getString(attrs[name],
++                                                { noStringQuotes: true });
++            result += " " + name + "=" + value;
++            n++;
++          }
++          if (preview.attributesLength > n) {
++            result += " \u2026";
++          }
++          return result + ">";
++        }
++
++        let result = "<" + preview.nodeName;
++        if (attrs.id) {
++          result += "#" + attrs.id;
++        }
++        return result + ">";
++      }
++
++      default:
++        return null;
++    }
++  }, // DOMNode
++}; // VariablesView.stringifiers.byObjectKind
++
++// XXX: here we could also add a new preview.kind ObjectWithURL for reuse.
++// thoughts?
++VariablesView.stringifiers.byObjectKind.DOMLocation =
++  VariablesView.stringifiers.byObjectKind.CSSImportRule =
++  VariablesView.stringifiers.byObjectKind.CSSStyleSheet;
++
+ /**
+  * Returns a custom class style for a grip.
+  *
+  * @param any aGrip
+  *        @see Variable.setGrip
+  * @return string
+  *         The custom class style.
+  */
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -992,20 +992,21 @@ Messages.Extended.prototype = Heritage.e
+       }
+       if (piece.type == "longString") {
+         let widget = new Widgets.LongString(this, piece).render();
+         return widget.element;
+       }
+     }
+ 
+     let result = this.document.createDocumentFragment();
+-    if (!isPrimitive || (!this._quoteStrings && typeof piece == "string")) {
++    if (isPrimitive) {
++      result.textContent = VariablesView.getString(piece,
++                           { noStringQuotes: !this._quoteStrings });
++    } else {
+       result.textContent = piece;
+-    } else {
+-      result.textContent = VariablesView.getString(piece);
+     }
+ 
+     return result;
+   },
+ }); // Messages.Extended.prototype
+ 
+ 
+ 
+@@ -1268,21 +1269,18 @@ Widgets.LongString.prototype = Heritage.
+   /**
+    * Render the long string in the widget element.
+    * @private
+    * @param string str
+    *        The string to display.
+    */
+   _renderString: function(str)
+   {
+-    if (this.message._quoteStrings) {
+-      this.element.textContent = VariablesView.getString(str);
+-    } else {
+-      this.element.textContent = str;
+-    }
++    this.element.textContent = VariablesView.getString(str,
++                               { noStringQuotes: !this.message._quoteStrings });
+   },
+ 
+   /**
+    * Render the anchor ellipsis that allows the user to expand the long string.
+    *
+    * @private
+    * @return Element
+    */
+diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
+--- a/toolkit/devtools/server/actors/script.js
++++ b/toolkit/devtools/server/actors/script.js
+@@ -3741,16 +3741,17 @@ DebuggerServer.ObjectActorPreviewers.Obj
+   function GenericObject(aObjectActor, aGrip) {
+     let {obj, threadActor} = aObjectActor;
+     if (aGrip.preview || aGrip.displayString || threadActor._gripDepth > 1) {
+       return false;
+     }
+ 
+     let i = 0, names = [];
+     let preview = aGrip.preview = {
++      kind: "Object",
+       ownProperties: Object.create(null),
+     };
+ 
+     try {
+       names = obj.getOwnPropertyNames();
+     } catch (ex) {
+       // Calling getOwnPropertyNames() on wrapped native prototypes is not
+       // allowed: "cannot modify properties of a WrappedNative".
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
