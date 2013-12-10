@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 65e0e177a4eb522704f1521bfa8d85775882dbad
+# Parent 7133d773329b77508ba741dac02bb7a56c36800b
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1386625298 -7200
+# Date 1386697688 -7200
 
 Bug 843004 - Part 3: VariablesView ObjectActor pretty output; r=benvie,vporof
 
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -2343,17 +2343,17 @@ Variable.prototype = Heritage.extend(Sco
+@@ -2343,17 +2343,20 @@ Variable.prototype = Heritage.extend(Sco
        return;
      }
  
@@ -18,7 +18,10 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
      }
      this._valueGrip = aGrip;
 -    this._valueString = VariablesView.getString(aGrip, true);
-+    this._valueString = VariablesView.getString(aGrip, { concise: true });
++    this._valueString = VariablesView.getString(aGrip, {
++      concise: true,
++      noEllipsis: true,
++    });
      this._valueClassName = VariablesView.getClass(aGrip);
  
      this._valueLabel.classList.add(this._valueClassName);
@@ -27,7 +30,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
  
    /**
     * Initializes this variable's id, view and binds event listeners.
-@@ -3084,54 +3084,378 @@ VariablesView.getGrip = function(aValue)
+@@ -3084,55 +3087,406 @@ VariablesView.getGrip = function(aValue)
    }
  };
  
@@ -42,6 +45,8 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 + *        Options:
 + *        - concise: boolean that tells you want a concisely formatted string.
 + *        - noStringQuotes: boolean that tells to not quote strings.
++ *        - noEllipsis: boolean that tells to not add an ellipsis after the
++ *        initial text of a longString.
   * @return string
   *         The formatted property string.
   */
@@ -71,7 +76,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 -        return aGrip.class;
 +
 +        if (aGrip.displayString) {
-+          return aGrip.displayString;
++          return VariablesView.getString(aGrip.displayString, aOptions);
 +        }
 +
 +        if (aGrip.type == "object" && aOptions.concise) {
@@ -97,6 +102,16 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
    }
  };
  
+ /**
++ * The VariablesView stringifiers are used by VariablesView.getString(). These
++ * are organized by object type, object class and by object actor preview kind.
++ * Some objects share identical ways for previews, for example Arrays, Sets and
++ * NodeLists.
++ *
++ * Any stringifier function must return a string. If a falsy result is returned,
++ * then the default stringifier will be used. When invoked, the stringifier is
++ * given the same two arguments as those given to VariablesView.getString().
++ */
 +VariablesView.stringifiers = {};
 +
 +VariablesView.stringifiers.byType = {
@@ -107,13 +122,12 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +    return uneval(aGrip);
 +  },
 +
-+  longString: function({initial}, {noStringQuotes}) {
-+    // XXX: add an ellipsis after .initial? If yes, should we also add an option
-+    // to toggle the ellipsis?
++  longString: function({initial}, {noStringQuotes, noEllipsis}) {
++    let ellipsis = noEllipsis ? "" : "\u2026";
 +    if (noStringQuotes) {
-+      return initial;
++      return initial + ellipsis;
 +    }
-+    return uneval(initial);
++    return uneval(initial) + ellipsis;
 +  },
 +
 +  object: function(aGrip, aOptions) {
@@ -134,7 +148,13 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +
 +VariablesView.stringifiers.byObjectClass = {
 +  Function: function(aGrip, {concise}) {
++    // TODO: Bug 948484 - support arrow functions and ES6 generators
++
 +    let name = aGrip.userDisplayName || aGrip.displayName || aGrip.name || "";
++    name = VariablesView.getString(name, { noStringQuotes: true });
++
++    // TODO: Bug 948489 - Support functions with destructured parameters and
++    // rest parameters
 +    let params = aGrip.parameterNames || "";
 +    if (!concise) {
 +      return "function " + name + "(" + params + ")";
@@ -143,20 +163,19 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +  },
 +
 +  RegExp: function({displayString}) {
-+    // TODO: handle longStrings
-+    return displayString;
++    return VariablesView.getString(displayString, { noStringQuotes: true });
 +  },
 +
-+  Date: function({preview}, {concise}) {
-+    if (!("timestamp" in preview)) {
++  Date: function({preview}) {
++    if (!preview || !("timestamp" in preview)) {
 +      return null;
 +    }
 +
-+    if (concise) {
-+      return "Date " + new Date(preview.timestamp).toISOString();
++    if (typeof preview.timestamp != "number") {
++      return new Date(preview.timestamp).toString(); // invalid date
 +    }
 +
-+    return "Date " + new Date(preview.timestamp).toLocaleString();
++    return "Date " + new Date(preview.timestamp).toISOString();
 +  },
 +}; // VariablesView.stringifiers.byObjectClass
 +
@@ -194,7 +213,10 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +
 +    let entries = [];
 +    for (let [key, value] of preview.entries) {
-+      key = VariablesView.getString(key, { concise: true, noStringQuotes: true });
++      key = VariablesView.getString(key, {
++        concise: true,
++        noStringQuotes: true,
++      });
 +      value = VariablesView.getString(value, { concise: true });
 +      entries.push(key + ": " + value);
 +    }
@@ -214,7 +236,8 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +
 +    let {preview} = aGrip;
 +    let props = [];
-+    for (let [key, value] of Iterator(preview.ownProperties || {})) {
++    for (let key of Object.keys(preview.ownProperties || {})) {
++      let value = preview.ownProperties[key];
 +      let valueString = "";
 +      if (value.get) {
 +        valueString = "Getter";
@@ -226,7 +249,8 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +      props.push(key + ": " + valueString);
 +    }
 +
-+    for (let [key, value] of Iterator(preview.safeGetterValues || {})) {
++    for (let key of Object.keys(preview.safeGetterValues || {})) {
++      let value = preview.safeGetterValues[key];
 +      let valueString = VariablesView.getString(value.getterValue,
 +                                                { concise: true });
 +      props.push(key + ": " + valueString);
@@ -292,7 +316,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +    }
 +
 +    if (concise) {
-+      return aGrip.class + " " + preview.type; // XXX: maybe just preview.type?
++      return aGrip.class + " " + preview.type;
 +    }
 +
 +    let result = preview.type;
@@ -326,13 +350,19 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +    return result;
 +  },
 +
-+  CSSStyleRule: function(aGrip) {
-+    // XXX: should we output only |class| if |concise| is true?
++  CSSStyleRule: function(aGrip, {concise}) {
++    if (concise) {
++      return aGrip.class;
++    }
 +    let str = VariablesView.getString(aGrip.preview.selectorText);
 +    return aGrip.class + " " + str;
 +  },
 +
-+  CSSMediaRule: function(aGrip) {
++  CSSMediaRule: function(aGrip, {concise}) {
++    if (concise) {
++      return aGrip.class;
++    }
++
 +    // XXX: we could introduce a new preview.kind = "ObjectWithText" or
 +    // something, one that we would reuse for CSSStyleRule and CSSMediaRule.
 +    let str = VariablesView.getString(aGrip.preview.conditionText);
@@ -407,7 +437,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +  VariablesView.stringifiers.byObjectKind.CSSImportRule =
 +  VariablesView.stringifiers.byObjectKind.CSSStyleSheet;
 +
- /**
++/**
   * Returns a custom class style for a grip.
   *
   * @param any aGrip
@@ -415,6 +445,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
   * @return string
   *         The custom class style.
   */
+ VariablesView.getClass = function(aGrip) {
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
@@ -470,7 +501,256 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
 --- a/toolkit/devtools/server/actors/script.js
 +++ b/toolkit/devtools/server/actors/script.js
-@@ -3741,16 +3741,17 @@ DebuggerServer.ObjectActorPreviewers.Obj
+@@ -435,25 +435,30 @@ function ThreadActor(aHooks, aGlobal)
+   this.findGlobals = this.globalManager.findGlobals.bind(this);
+   this.onNewGlobal = this.globalManager.onNewGlobal.bind(this);
+   this.onNewSource = this.onNewSource.bind(this);
+   this._allEventsListener = this._allEventsListener.bind(this);
+ 
+   this._options = {
+     useSourceMaps: false
+   };
++
++  this._gripDepth = 0;
+ }
+ 
+ /**
+  * The breakpoint store must be shared across instances of ThreadActor so that
+  * page reloads don't blow away all of our breakpoints.
+  */
+ ThreadActor.breakpointStore = new BreakpointStore();
+ 
+ ThreadActor.prototype = {
++  // Used by the ObjectActor to keep track of the depth of grip() calls.
++  _gripDepth: null,
++
+   actorPrefix: "context",
+ 
+   get state() { return this._state; },
+   get attached() this.state == "attached" ||
+                  this.state == "running" ||
+                  this.state == "paused",
+ 
+   get breakpointStore() { return ThreadActor.breakpointStore; },
+@@ -2815,20 +2820,16 @@ let stringifiers = {
+  *        The debuggee object.
+  * @param aThreadActor ThreadActor
+  *        The parent thread actor for this object.
+  */
+ function ObjectActor(aObj, aThreadActor)
+ {
+   this.obj = aObj;
+   this.threadActor = aThreadActor;
+-
+-  if (!("_gripDepth" in this.threadActor)) {
+-    this.threadActor._gripDepth = 0;
+-  }
+ }
+ 
+ ObjectActor.prototype = {
+   actorPrefix: "obj",
+ 
+   /**
+    * Returns a grip for this actor for returning in a protocol message.
+    */
+@@ -3050,17 +3051,17 @@ ObjectActor.prototype = {
+     }
+ 
+     let getters = new Set();
+     let names = [];
+     try {
+       names = aObject.getOwnPropertyNames()
+     } catch (ex) {
+       // Calling getOwnPropertyNames() on wrapped native prototypes is not
+-      // allowed: "cannot modify properties of a WrappedNative".
++      // allowed: "cannot modify properties of a WrappedNative". See bug 560072.
+     }
+ 
+     for (let name of names) {
+       let desc = null;
+       try {
+         desc = aObject.getOwnPropertyDescriptor(name);
+       } catch (e) {
+         // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
+@@ -3118,18 +3119,25 @@ ObjectActor.prototype = {
+     return { from: this.actorID,
+              displayString: this.threadActor.createValueGrip(string) };
+   },
+ 
+   /**
+    * A helper method that creates a property descriptor for the provided object,
+    * properly formatted for sending in a protocol response.
+    *
++   * @private
+    * @param string aName
+    *        The property that the descriptor is generated for.
++   * @param boolean aOnlyEnumerable
++   *        True if you want a descriptor only for an enumerable property, false
++   *        otherwise.
++   * @return object|undefined
++   *         The property descriptor, or undefined if this is not an enumerable
++   *         property and aOnlyEnumerable=true.
+    */
+   _propertyDescriptor: function (aName, aOnlyEnumerable) {
+     let desc;
+     try {
+       desc = this.obj.getOwnPropertyDescriptor(aName);
+     } catch (e) {
+       // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
+       // allowed (bug 560072). Inform the user with a bogus, but hopefully
+@@ -3268,62 +3276,68 @@ const OBJECT_PREVIEW_MAX_ITEMS = 10;
+  */
+ DebuggerServer.ObjectActorPreviewers = {
+   Function: [function({obj, threadActor}, aGrip) {
+     if (obj.name) {
+       aGrip.name = obj.name;
+     }
+ 
+     if (obj.displayName) {
+-      aGrip.displayName = obj.displayName;
+-    }
+-
++      aGrip.displayName = obj.displayName.substr(0, 500);
++    }
++
++    // TODO: handle fancy params
+     if (obj.parameterNames) {
+       aGrip.parameterNames = obj.parameterNames;
+     }
+ 
+     // Check if the developer has added a de-facto standard displayName
+     // property for us to use.
++    let userDisplayName;
+     try {
+-      let desc = obj.getOwnPropertyDescriptor("displayName");
+-      if (desc && desc.value && typeof desc.value == "string") {
+-        aGrip.userDisplayName = threadActor.createValueGrip(desc.value);
+-      }
++      userDisplayName = obj.getOwnPropertyDescriptor("displayName");
+     } catch (e) {
+       // Calling getOwnPropertyDescriptor with displayName might throw
+       // with "permission denied" errors for some functions.
+       dumpn(e);
+     }
+ 
++    if (userDisplayName && userDisplayName.value &&
++        typeof userDisplayName.value == "string") {
++      aGrip.userDisplayName = threadActor.createValueGrip(userDisplayName.value);
++    }
++
+     return true;
+   }], // Function
+ 
+   RegExp: [function({obj, threadActor}, aGrip) {
++    // Avoid having any special preview for the RegExp.prototype itself.
+     if (!obj.proto || obj.proto.class != "RegExp") {
+       return false;
+     }
+ 
+-    let raw = obj.unsafeDereference();
+-    let str = RegExp.prototype.toString.call(raw);
++    let str = RegExp.prototype.toString.call(obj.unsafeDereference());
+     aGrip.displayString = threadActor.createValueGrip(str);
+     return true;
+   }],
+ 
+   Date: [function({obj, threadActor}, aGrip) {
++    if (!obj.proto || obj.proto.class != "Date") {
++      return false;
++    }
++
+     let time = Date.prototype.getTime.call(obj.unsafeDereference());
+-    if (isNaN(time)) {
+-      return false;
+-    }
+ 
+     aGrip.preview = {
+       timestamp: threadActor.createValueGrip(time),
+     };
+     return true;
+   }],
+ 
++  // TODO: add typed arrays
+   Array: [function({obj, threadActor}, aGrip) {
+     let length = DevToolsUtils.getProperty(obj, "length");
+     if (typeof length != "number") {
+       return false;
+     }
+ 
+     aGrip.preview = {
+       kind: "ArrayLike",
+@@ -3332,16 +3346,17 @@ DebuggerServer.ObjectActorPreviewers = {
+ 
+     if (threadActor._gripDepth > 1) {
+       return true;
+     }
+ 
+     let raw = obj.unsafeDereference();
+     let items = aGrip.preview.items = [];
+ 
++    // TODO: handle array holes.
+     Array.some(raw, (item) => {
+       let value = item;
+       if (value && typeof value == "object") {
+         value = obj.makeDebuggeeValue(item);
+       }
+       items.push(threadActor.createValueGrip(value));
+ 
+       // Stop iterating the array once we have enough items.
+@@ -3419,25 +3434,24 @@ DebuggerServer.ObjectActorPreviewers = {
+   DOMStringMap: [function({obj, threadActor}, aGrip, aRawObj) {
+     if (!aRawObj) {
+       return false;
+     }
+ 
+     let keys = obj.getOwnPropertyNames();
+     aGrip.preview = {
+       kind: "MapLike",
+-      entries: [],
+       size: keys.length,
+     };
+ 
+     if (threadActor._gripDepth > 1) {
+-      return false;
+-    }
+-
+-    let entries = aGrip.preview.entries;
++      return true;
++    }
++
++    let entries = aGrip.preview.entries = [];
+     for (let key of keys) {
+       let value = aRawObj[key];
+       if (value && typeof value == "object") {
+         value = obj.makeDebuggeeValue(value);
+       }
+       entries.push([key, threadActor.createValueGrip(value)]);
+       if (entries.length == OBJECT_PREVIEW_MAX_ITEMS) {
+         break;
+@@ -3591,20 +3605,20 @@ DebuggerServer.ObjectActorPreviewers.Obj
+ 
+   function CSSStyleDeclaration({obj, threadActor}, aGrip, aRawObj) {
+     if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleDeclaration)) {
+       return false;
+     }
+ 
+     aGrip.preview = {
+       kind: "MapLike",
+-      entries: [],
+       size: aRawObj.length,
+     };
+-    let entries = aGrip.preview.entries;
++
++    let entries = aGrip.preview.entries = [];
+ 
+     for (let i = 0; i < OBJECT_PREVIEW_MAX_ITEMS &&
+                     i < aRawObj.length; i++) {
+       let prop = aRawObj[i];
+       let value = aRawObj.getPropertyValue(prop);
+       entries.push([prop, threadActor.createValueGrip(value)]);
+     }
+ 
+@@ -3761,24 +3775,25 @@ DebuggerServer.ObjectActorPreviewers.Obj
    function GenericObject(aObjectActor, aGrip) {
      let {obj, threadActor} = aObjectActor;
      if (aGrip.preview || aGrip.displayString || threadActor._gripDepth > 1) {
@@ -487,7 +767,16 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        names = obj.getOwnPropertyNames();
      } catch (ex) {
        // Calling getOwnPropertyNames() on wrapped native prototypes is not
-       // allowed: "cannot modify properties of a WrappedNative".
+-      // allowed: "cannot modify properties of a WrappedNative".
++      // allowed: "cannot modify properties of a WrappedNative". See bug 560072.
+     }
+ 
+     preview.ownPropertiesLength = names.length;
+ 
+     for (let name of names) {
+       let desc = aObjectActor._propertyDescriptor(name, true);
+       if (!desc) {
+         continue;
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
