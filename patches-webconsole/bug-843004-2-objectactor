@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent b3760b0987108600e580313b10d1b748953089e1
+# Parent 1c7402403124dc848840130b2629bb159847104b
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1386436448 -7200
 Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output; r=jimb,benvie
@@ -72,7 +72,63 @@ diff --git a/toolkit/devtools/DevToolsUtils.jsm b/toolkit/devtools/DevToolsUtils
 diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
 --- a/toolkit/devtools/server/actors/script.js
 +++ b/toolkit/devtools/server/actors/script.js
-@@ -2705,17 +2705,17 @@ function errorStringify(aObj) {
+@@ -1,16 +1,24 @@
+ /* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2; js-indent-level: 2; -*- */
+ /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
++const TYPED_ARRAY_CLASSES = ["Uint8Array", "Uint8ClampedArray", "Uint16Array",
++      "Uint32Array", "Int8Array", "Int16Array", "Int32Array", "Float32Array",
++      "Float64Array"];
++
++// Number of items to preview in objects, arrays, maps, sets, lists,
++// collections, etc.
++const OBJECT_PREVIEW_MAX_ITEMS = 10;
++
+ /**
+  * BreakpointStore objects keep track of all breakpoints that get set so that we
+  * can reset them when the same script is introduced to the thread again (such
+  * as after a refresh).
+  */
+ function BreakpointStore() {
+   // If we have a whole-line breakpoint set at LINE in URL, then
+   //
+@@ -435,25 +443,30 @@ function ThreadActor(aHooks, aGlobal)
+   this.findGlobals = this.globalManager.findGlobals.bind(this);
+   this.onNewGlobal = this.globalManager.onNewGlobal.bind(this);
+   this.onNewSource = this.onNewSource.bind(this);
+   this._allEventsListener = this._allEventsListener.bind(this);
+ 
+   this._options = {
+     useSourceMaps: false
+   };
++
++  this._gripDepth = 0;
+ }
+ 
+ /**
+  * The breakpoint store must be shared across instances of ThreadActor so that
+  * page reloads don't blow away all of our breakpoints.
+  */
+ ThreadActor.breakpointStore = new BreakpointStore();
+ 
+ ThreadActor.prototype = {
++  // Used by the ObjectActor to keep track of the depth of grip() calls.
++  _gripDepth: null,
++
+   actorPrefix: "context",
+ 
+   get state() { return this._state; },
+   get attached() this.state == "attached" ||
+                  this.state == "running" ||
+                  this.state == "paused",
+ 
+   get breakpointStore() { return ThreadActor.breakpointStore; },
+@@ -2725,17 +2738,17 @@ function errorStringify(aObj) {
   * Stringify a Debugger.Object based on its class.
   *
   * @param Debugger.Object aObj
@@ -91,20 +147,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
    return stringifier(aObj);
  }
  
-@@ -2795,57 +2795,56 @@ let stringifiers = {
-  *        The debuggee object.
-  * @param aThreadActor ThreadActor
-  *        The parent thread actor for this object.
-  */
- function ObjectActor(aObj, aThreadActor)
- {
-   this.obj = aObj;
-   this.threadActor = aThreadActor;
-+
-+  if (!("_gripDepth" in this.threadActor)) {
-+    this.threadActor._gripDepth = 0;
-+  }
- }
+@@ -2824,48 +2837,43 @@ function ObjectActor(aObj, aThreadActor)
  
  ObjectActor.prototype = {
    actorPrefix: "obj",
@@ -169,7 +212,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
     */
    release: function () {
      if (this.registeredPool.objectActors) {
-@@ -2939,25 +2938,27 @@ ObjectActor.prototype = {
+@@ -2959,25 +2967,27 @@ ObjectActor.prototype = {
  
    /**
     * Find the safe getter values for the current Debugger.Object, |this.obj|.
@@ -199,7 +242,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
          // avoid providing safeGetterValues from prototypes if property |name|
          // is already defined as an own property.
          if (name in safeGetterValues ||
-@@ -2989,19 +2990,25 @@ ObjectActor.prototype = {
+@@ -3009,19 +3019,25 @@ ObjectActor.prototype = {
            // return undefined and should be ignored.
            if (getterValue !== undefined) {
              safeGetterValues[name] = {
@@ -225,7 +268,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
      return safeGetterValues;
    },
  
-@@ -3018,17 +3025,25 @@ ObjectActor.prototype = {
+@@ -3038,17 +3054,25 @@ ObjectActor.prototype = {
     */
    _findSafeGetters: function (aObject)
    {
@@ -240,7 +283,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      names = aObject.getOwnPropertyNames()
 +    } catch (ex) {
 +      // Calling getOwnPropertyNames() on wrapped native prototypes is not
-+      // allowed: "cannot modify properties of a WrappedNative".
++      // allowed: "cannot modify properties of a WrappedNative". See bug 560072.
 +    }
 +
 +    for (let name of names) {
@@ -252,14 +295,24 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
          // allowed (bug 560072).
        }
        if (!desc || desc.value !== undefined || !("get" in desc)) {
-@@ -3086,33 +3101,33 @@ ObjectActor.prototype = {
+@@ -3103,36 +3127,43 @@ ObjectActor.prototype = {
+     return { from: this.actorID,
+              displayString: this.threadActor.createValueGrip(string) };
+   },
  
    /**
     * A helper method that creates a property descriptor for the provided object,
     * properly formatted for sending in a protocol response.
     *
++   * @private
     * @param string aName
     *        The property that the descriptor is generated for.
++   * @param boolean aOnlyEnumerable
++   *        True if you want a descriptor only for an enumerable property, false
++   *        otherwise.
++   * @return object|undefined
++   *         The property descriptor, or undefined if this is not an enumerable
++   *         property and aOnlyEnumerable=true.
     */
 -  _propertyDescriptor: function (aName) {
 +  _propertyDescriptor: function (aName, aOnlyEnumerable) {
@@ -288,20 +341,15 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        enumerable: desc.enumerable
      };
  
-@@ -3206,16 +3221,569 @@ ObjectActor.prototype.requestTypes = {
-   "property": ObjectActor.prototype.onProperty,
-   "displayString": ObjectActor.prototype.onDisplayString,
+@@ -3228,16 +3259,581 @@ ObjectActor.prototype.requestTypes = {
    "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
    "decompile": ObjectActor.prototype.onDecompile,
    "release": ObjectActor.prototype.onRelease,
    "scope": ObjectActor.prototype.onScope,
  };
  
-+// Number of items to preview in objects, arrays, maps, sets, lists,
-+// collections, etc.
-+const OBJECT_PREVIEW_MAX_ITEMS = 10;
-+
-+/**
+ 
+ /**
 + * Functions for adding information to ObjectActor grips for the purpose of
 + * having customized output. This object holds arrays mapped by
 + * DebuggerObject.class.
@@ -324,7 +372,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    }
 +
 +    if (obj.displayName) {
-+      aGrip.displayName = obj.displayName;
++      aGrip.displayName = obj.displayName.substr(0, 500);
 +    }
 +
 +    if (obj.parameterNames) {
@@ -333,36 +381,40 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    // Check if the developer has added a de-facto standard displayName
 +    // property for us to use.
++    let userDisplayName;
 +    try {
-+      let desc = obj.getOwnPropertyDescriptor("displayName");
-+      if (desc && desc.value && typeof desc.value == "string") {
-+        aGrip.userDisplayName = threadActor.createValueGrip(desc.value);
-+      }
++      userDisplayName = obj.getOwnPropertyDescriptor("displayName");
 +    } catch (e) {
 +      // Calling getOwnPropertyDescriptor with displayName might throw
 +      // with "permission denied" errors for some functions.
 +      dumpn(e);
 +    }
 +
++    if (userDisplayName && userDisplayName.value &&
++        typeof userDisplayName.value == "string") {
++      aGrip.userDisplayName = threadActor.createValueGrip(userDisplayName.value);
++    }
++
 +    return true;
 +  }], // Function
 +
 +  RegExp: [function({obj, threadActor}, aGrip) {
++    // Avoid having any special preview for the RegExp.prototype itself.
 +    if (!obj.proto || obj.proto.class != "RegExp") {
 +      return false;
 +    }
 +
-+    let raw = obj.unsafeDereference();
-+    let str = RegExp.prototype.toString.call(raw);
++    let str = RegExp.prototype.toString.call(obj.unsafeDereference());
 +    aGrip.displayString = threadActor.createValueGrip(str);
 +    return true;
 +  }],
 +
 +  Date: [function({obj, threadActor}, aGrip) {
-+    let time = Date.prototype.getTime.call(obj.unsafeDereference());
-+    if (isNaN(time)) {
++    if (!obj.proto || obj.proto.class != "Date") {
 +      return false;
 +    }
++
++    let time = Date.prototype.getTime.call(obj.unsafeDereference());
 +
 +    aGrip.preview = {
 +      timestamp: threadActor.createValueGrip(time),
@@ -388,16 +440,16 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    let raw = obj.unsafeDereference();
 +    let items = aGrip.preview.items = [];
 +
-+    Array.some(raw, (item) => {
-+      let value = item;
++    for (let [, value] of Array.prototype.entries.call(raw)) {
 +      if (value && typeof value == "object") {
-+        value = obj.makeDebuggeeValue(item);
++        value = obj.makeDebuggeeValue(value);
 +      }
 +      items.push(threadActor.createValueGrip(value));
 +
-+      // Stop iterating the array once we have enough items.
-+      return items.length == OBJECT_PREVIEW_MAX_ITEMS;
-+    });
++      if (items.length == OBJECT_PREVIEW_MAX_ITEMS) {
++        break;
++      }
++    }
 +
 +    return true;
 +  }], // Array
@@ -475,15 +527,14 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    let keys = obj.getOwnPropertyNames();
 +    aGrip.preview = {
 +      kind: "MapLike",
-+      entries: [],
 +      size: keys.length,
 +    };
 +
 +    if (threadActor._gripDepth > 1) {
-+      return false;
++      return true;
 +    }
 +
-+    let entries = aGrip.preview.entries;
++    let entries = aGrip.preview.entries = [];
 +    for (let key of keys) {
 +      let value = aRawObj[key];
 +      if (value && typeof value == "object") {
@@ -501,6 +552,37 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +// Preview functions that do not rely on the object class.
 +DebuggerServer.ObjectActorPreviewers.Object = [
++  function TypedArray({obj, threadActor}, aGrip) {
++    if (TYPED_ARRAY_CLASSES.indexOf(obj.class) == -1) {
++      return false;
++    }
++
++    let length = DevToolsUtils.getProperty(obj, "length");
++    if (typeof length != "number") {
++      return false;
++    }
++
++    aGrip.preview = {
++      kind: "ArrayLike",
++      length: length,
++    };
++
++    if (threadActor._gripDepth > 1) {
++      return true;
++    }
++
++    let raw = obj.unsafeDereference();
++    let global = Cu.getGlobalForObject(DebuggerServer);
++    let classProto = global[obj.class].prototype;
++    let safeView = classProto.subarray.call(raw, 0, OBJECT_PREVIEW_MAX_ITEMS);
++    let items = aGrip.preview.items = [];
++    for (let i = 0; i < safeView.length; i++) {
++      items.push(safeView[i]);
++    }
++
++    return true;
++  }, // TypedArray
++
 +  function Error({obj, threadActor}, aGrip) {
 +    switch (obj.class) {
 +      case "Error":
@@ -536,8 +618,8 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      return false;
 +    }
 +    aGrip.preview = {
-+      kind: "CSSMediaRule",
-+      conditionText: threadActor.createValueGrip(aRawObj.conditionText),
++      kind: "ObjectWithText",
++      text: threadActor.createValueGrip(aRawObj.conditionText),
 +    };
 +    return true;
 +  },
@@ -547,53 +629,33 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      return false;
 +    }
 +    aGrip.preview = {
-+      kind: "CSSStyleRule",
-+      selectorText: threadActor.createValueGrip(aRawObj.selectorText),
++      kind: "ObjectWithText",
++      text: threadActor.createValueGrip(aRawObj.selectorText),
 +    };
 +    return true;
 +  },
 +
-+  function CSSImportRule({obj, threadActor}, aGrip, aRawObj) {
-+    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSImportRule)) {
++  function ObjectWithURL({obj, threadActor}, aGrip, aRawObj) {
++    if (!aRawObj ||
++        !(aRawObj instanceof Ci.nsIDOMCSSImportRule ||
++          aRawObj instanceof Ci.nsIDOMCSSStyleSheet ||
++          aRawObj instanceof Ci.nsIDOMLocation ||
++          aRawObj instanceof Ci.nsIDOMWindow)) {
 +      return false;
 +    }
-+    aGrip.preview = {
-+      kind: "CSSImportRule",
-+      href: threadActor.createValueGrip(aRawObj.href),
-+    };
-+    return true;
-+  },
 +
-+  function CSSStyleSheet({obj, threadActor}, aGrip, aRawObj) {
-+    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleSheet)) {
-+      return false;
++    let url;
++    if (aRawObj instanceof Ci.nsIDOMWindow) {
++      url = aRawObj.location.href;
++    } else {
++      url = aRawObj.href;
 +    }
-+    aGrip.preview = {
-+      kind: "CSSStyleSheet",
-+      href: threadActor.createValueGrip(aRawObj.href),
-+    };
-+    return true;
-+  },
 +
-+  function DOMLocation({obj, threadActor}, aGrip, aRawObj) {
-+    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMLocation)) {
-+      return false;
-+    }
 +    aGrip.preview = {
-+      kind: "DOMLocation",
-+      href: threadActor.createValueGrip(aRawObj.href),
++      kind: "ObjectWithURL",
++      url: threadActor.createValueGrip(url),
 +    };
-+    return true;
-+  },
 +
-+  function DOMWindow({obj, threadActor}, aGrip, aRawObj) {
-+    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMWindow)) {
-+      return false;
-+    }
-+    aGrip.preview = {
-+      kind: "DOMWindow",
-+      location: threadActor.createValueGrip(aRawObj.location.href),
-+    };
 +    return true;
 +  },
 +
@@ -647,10 +709,10 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    aGrip.preview = {
 +      kind: "MapLike",
-+      entries: [],
 +      size: aRawObj.length,
 +    };
-+    let entries = aGrip.preview.entries;
++
++    let entries = aGrip.preview.entries = [];
 +
 +    for (let i = 0; i < OBJECT_PREVIEW_MAX_ITEMS &&
 +                    i < aRawObj.length; i++) {
@@ -817,6 +879,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    let i = 0, names = [];
 +    let preview = aGrip.preview = {
++      kind: "Object",
 +      ownProperties: Object.create(null),
 +    };
 +
@@ -824,7 +887,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      names = obj.getOwnPropertyNames();
 +    } catch (ex) {
 +      // Calling getOwnPropertyNames() on wrapped native prototypes is not
-+      // allowed: "cannot modify properties of a WrappedNative".
++      // allowed: "cannot modify properties of a WrappedNative". See bug 560072.
 +    }
 +
 +    preview.ownPropertiesLength = names.length;
@@ -850,11 +913,58 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    return true;
 +  }, // GenericObject
 +]; // DebuggerServer.ObjectActorPreviewers.Object
- 
- /**
++
++/**
   * Creates a pause-scoped actor for the specified object.
   * @see ObjectActor
   */
  function PauseScopedObjectActor()
  {
    ObjectActor.apply(this, arguments);
+ }
+ 
+diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
+--- a/toolkit/devtools/server/actors/webconsole.js
++++ b/toolkit/devtools/server/actors/webconsole.js
+@@ -56,16 +56,17 @@ function WebConsoleActor(aConnection, aP
+   this.conn.addActorPool(this._actorPool);
+ 
+   this._prefs = {};
+ 
+   this.dbg = new Debugger();
+ 
+   this._protoChains = new Map();
+   this._netEvents = new Map();
++  this._gripDepth = 0;
+ 
+   this._onObserverNotification = this._onObserverNotification.bind(this);
+   if (this.parentActor.isRootActor) {
+     Services.obs.addObserver(this._onObserverNotification,
+                              "last-pb-context-exited", false);
+   }
+ }
+ 
+@@ -76,16 +77,23 @@ WebConsoleActor.prototype =
+   /**
+    * Debugger instance.
+    *
+    * @see jsdebugger.jsm
+    */
+   dbg: null,
+ 
+   /**
++   * This is used by the ObjectActor to keep track of the depth of grip() calls.
++   * @private
++   * @type number
++   */
++  _gripDepth: null,
++
++  /**
+    * Actor pool for all of the actors we send to the client.
+    * @private
+    * @type object
+    * @see ActorPool
+    */
+   _actorPool: null,
+ 
+   /**

@@ -1,14 +1,34 @@
 # HG changeset patch
-# Parent 7133d773329b77508ba741dac02bb7a56c36800b
+# Parent 6824be8b3fd16b0f9a06bcc5e7d9eba4f5b58038
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1386710910 -7200
+# Date 1386790747 -7200
 
 Bug 843004 - Part 3: VariablesView ObjectActor pretty output; r=benvie,vporof
 
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -2343,17 +2343,20 @@ Variable.prototype = Heritage.extend(Sco
+@@ -21,16 +21,19 @@ Cu.import("resource://gre/modules/Servic
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
+ Cu.import("resource:///modules/devtools/shared/event-emitter.js");
+ Cu.import("resource://gre/modules/devtools/DevToolsUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "devtools",
+   "resource://gre/modules/devtools/Loader.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
++  "resource://gre/modules/PluralForm.jsm");
++
+ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
+   "@mozilla.org/widget/clipboardhelper;1",
+   "nsIClipboardHelper");
+ 
+ Object.defineProperty(this, "WebConsoleUtils", {
+   get: function() {
+     return devtools.require("devtools/toolkit/webconsole/utils").Utils;
+   },
+@@ -2343,17 +2346,20 @@ Variable.prototype = Heritage.extend(Sco
        return;
      }
  
@@ -30,7 +50,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
  
    /**
     * Initializes this variable's id, view and binds event listeners.
-@@ -3084,55 +3087,381 @@ VariablesView.getGrip = function(aValue)
+@@ -3084,55 +3090,399 @@ VariablesView.getGrip = function(aValue)
    }
  };
  
@@ -69,7 +89,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +        let stringifier = VariablesView.stringifiers.byType[aGrip.type];
 +        if (stringifier) {
 +          let result = stringifier(aGrip, aOptions);
-+          if (result) {
++          if (result != null) {
 +            return result;
 +          }
          }
@@ -108,8 +128,8 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 + * Some objects share identical ways for previews, for example Arrays, Sets and
 + * NodeLists.
 + *
-+ * Any stringifier function must return a string. If a falsy result is returned,
-+ * then the default stringifier will be used. When invoked, the stringifier is
++ * Any stringifier function must return a string. If null is returned, * then
++ * the default stringifier will be used. When invoked, the stringifier is
 + * given the same two arguments as those given to VariablesView.getString().
 + */
 +VariablesView.stringifiers = {};
@@ -196,7 +216,8 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +    }
 +
 +    if (result.length < preview.length) {
-+      result.push((preview.length - result.length) + " more\u2026"); // TODO: localize
++      let n = preview.length - result.length;
++      result.push(VariablesView.stringifiers._getNMoreString(n));
 +    }
 +
 +    let prefix = aGrip.class == "Array" ? "" : aGrip.class + " ";
@@ -282,7 +303,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +      let previewLength = Object.keys(preview.ownProperties).length;
 +      let diff = preview.ownPropertiesLength - previewLength;
 +      if (diff > 0) {
-+        props.push(diff + " more\u2026"); // TODO: localize
++        props.push(VariablesView.stringifiers._getNMoreString(diff));
 +      }
 +    }
 +
@@ -300,7 +321,8 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +              ": " +
 +              VariablesView.getString(preview.message, { noStringQuotes: true });
 +    if (!VariablesView.isFalsy({ value: preview.stack })) {
-+      msg += "\nStack trace:\n" + preview.stack; // TODO: localize
++      msg += "\n" + STR.GetStringFromName("variablesViewErrorStacktrace") +
++             "\n" + preview.stack;
 +    }
 +
 +    return msg;
@@ -312,6 +334,8 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +      return preview.name || aGrip.class;
 +    }
 +
++    // XXX; should we localize 'code", "result" and/or "location"? i'm tempted
++    // to say yes...
 +    let msg = aGrip.class + " [" + preview.name + ": " +
 +              VariablesView.getString(preview.message) + "\n" +
 +              "code: " + preview.code + "\n" +
@@ -412,6 +436,20 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +  }, // DOMNode
 +}; // VariablesView.stringifiers.byObjectKind
 +
++
++/**
++ * Get the "N more…" formatted string, given an N. This is used for displaying
++ * how many elements are not displayed in an object preview (eg. an array).
++ *
++ * @private
++ * @param number aNumber
++ * @return string
++ */
++VariablesView.stringifiers._getNMoreString = function(aNumber) {
++  let str = STR.GetStringFromName("variablesViewMoreObjects");
++  return PluralForm.get(aNumber, str).replace("#1", aNumber);
++};
++
 +/**
   * Returns a custom class style for a grip.
   *
@@ -421,7 +459,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
   *         The custom class style.
   */
  VariablesView.getClass = function(aGrip) {
-@@ -3174,16 +3503,29 @@ VariablesView.getClass = function(aGrip)
+@@ -3174,16 +3524,29 @@ VariablesView.getClass = function(aGrip)
   */
  let generateId = (function() {
    let count = 0;
@@ -480,6 +518,25 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
  
  
+@@ -1214,17 +1216,17 @@ Widgets.JSObject.prototype = Heritage.ex
+ 
+   /**
+    * The click event handler for objects shown inline.
+    * @private
+    */
+   _onClick: function()
+   {
+     this.output.openVariablesView({
+-      label: this.element.textContent,
++      label: VariablesView.getString(this.objectActor, { concise: true }),
+       objectActor: this.objectActor,
+       autofocus: true,
+     });
+   },
+ }); // Widgets.JSObject.prototype
+ 
+ /**
+  * The long string widget.
 @@ -1268,21 +1270,20 @@ Widgets.LongString.prototype = Heritage.
    /**
     * Render the long string in the widget element.
@@ -530,523 +587,71 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        case "trace": {
          let filename = WebConsoleUtils.abbreviateSourceURL(aMessage.filename);
          let functionName = aMessage.functionName ||
-diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
---- a/toolkit/devtools/server/actors/script.js
-+++ b/toolkit/devtools/server/actors/script.js
-@@ -1,16 +1,24 @@
- /* -*- Mode: javascript; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2; js-indent-level: 2; -*- */
- /* vim: set ft=javascript ts=2 et sw=2 tw=80: */
- /* This Source Code Form is subject to the terms of the Mozilla Public
-  * License, v. 2.0. If a copy of the MPL was not distributed with this
-  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+@@ -3098,17 +3094,17 @@ JSTerm.prototype = {
+         case "inspectObject":
+           if (aAfterMessage) {
+             if (!aAfterMessage._objectActors) {
+               aAfterMessage._objectActors = new Set();
+             }
+             aAfterMessage._objectActors.add(helperResult.object.actor);
+           }
+           this.openVariablesView({
+-            label: VariablesView.getString(helperResult.object),
++            label: VariablesView.getString(helperResult.object, { concise: true }),
+             objectActor: helperResult.object,
+           });
+           break;
+         case "error":
+           try {
+             errorMessage = l10n.getStr(helperResult.message);
+           }
+           catch (ex) {
+diff --git a/browser/locales/en-US/chrome/browser/devtools/debugger.properties b/browser/locales/en-US/chrome/browser/devtools/debugger.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/debugger.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/debugger.properties
+@@ -189,18 +189,18 @@ breakpointMenuItem.deleteAll=Remove all 
+ # editor when the loading process has started but there is no file to display
+ # yet.
+ loadingText=Loading\u2026
  
- "use strict";
+ # LOCALIZATION NOTE (errorLoadingText): The text that is displayed in the debugger
+ # viewer when there is an error loading a file
+ errorLoadingText=Error loading source:\n
  
-+const TYPED_ARRAY_CLASSES = ["Uint8Array", "Uint8ClampedArray", "Uint16Array",
-+      "Uint32Array", "Int8Array", "Int16Array", "Int32Array", "Float32Array",
-+      "Float64Array"];
+-# LOCALIZATION NOTE (emptyStackText): The text that is displayed in the watch
+-# expressions list to add a new item.
++# LOCALIZATION NOTE (addWatchExpressionText): The text that is displayed in the
++# watch expressions list to add a new item.
+ addWatchExpressionText=Add watch expression
+ 
+ # LOCALIZATION NOTE (emptyVariablesText): The text that is displayed in the
+ # variables pane when there are no variables to display.
+ emptyVariablesText=No variables to display
+ 
+ # LOCALIZATION NOTE (scopeLabel): The text that is displayed in the variables
+ # pane as a header for each variable scope (e.g. "Global scope, "With scope",
+@@ -247,8 +247,21 @@ watchExpressionsSeparatorLabel=\ →
+ functionSearchSeparatorLabel=←
+ 
+ # LOCALIZATION NOTE (resumptionOrderPanelTitle): This is the text that appears
+ # as a description in the notification panel popup, when multiple debuggers are
+ # open in separate tabs and the user tries to resume them in the wrong order.
+ # The substitution parameter is the URL of the last paused window that must be
+ # resumed first.
+ resumptionOrderPanelTitle=There are one or more paused debuggers. Please resume the most-recently paused debugger first at: %S
 +
-+// Number of items to preview in objects, arrays, maps, sets, lists,
-+// collections, etc.
-+const OBJECT_PREVIEW_MAX_ITEMS = 10;
++# LOCALIZATION NOTE (variablesViewErrorStacktrace): This is the text that is
++# shown before the stack trace in an error.
++variablesViewErrorStacktrace=Stack trace:
 +
- /**
-  * BreakpointStore objects keep track of all breakpoints that get set so that we
-  * can reset them when the same script is introduced to the thread again (such
-  * as after a refresh).
-  */
- function BreakpointStore() {
-   // If we have a whole-line breakpoint set at LINE in URL, then
-   //
-@@ -435,25 +443,30 @@ function ThreadActor(aHooks, aGlobal)
-   this.findGlobals = this.globalManager.findGlobals.bind(this);
-   this.onNewGlobal = this.globalManager.onNewGlobal.bind(this);
-   this.onNewSource = this.onNewSource.bind(this);
-   this._allEventsListener = this._allEventsListener.bind(this);
- 
-   this._options = {
-     useSourceMaps: false
-   };
-+
-+  this._gripDepth = 0;
- }
- 
- /**
-  * The breakpoint store must be shared across instances of ThreadActor so that
-  * page reloads don't blow away all of our breakpoints.
-  */
- ThreadActor.breakpointStore = new BreakpointStore();
- 
- ThreadActor.prototype = {
-+  // Used by the ObjectActor to keep track of the depth of grip() calls.
-+  _gripDepth: null,
-+
-   actorPrefix: "context",
- 
-   get state() { return this._state; },
-   get attached() this.state == "attached" ||
-                  this.state == "running" ||
-                  this.state == "paused",
- 
-   get breakpointStore() { return ThreadActor.breakpointStore; },
-@@ -2815,20 +2828,16 @@ let stringifiers = {
-  *        The debuggee object.
-  * @param aThreadActor ThreadActor
-  *        The parent thread actor for this object.
-  */
- function ObjectActor(aObj, aThreadActor)
- {
-   this.obj = aObj;
-   this.threadActor = aThreadActor;
--
--  if (!("_gripDepth" in this.threadActor)) {
--    this.threadActor._gripDepth = 0;
--  }
- }
- 
- ObjectActor.prototype = {
-   actorPrefix: "obj",
- 
-   /**
-    * Returns a grip for this actor for returning in a protocol message.
-    */
-@@ -3050,17 +3059,17 @@ ObjectActor.prototype = {
-     }
- 
-     let getters = new Set();
-     let names = [];
-     try {
-       names = aObject.getOwnPropertyNames()
-     } catch (ex) {
-       // Calling getOwnPropertyNames() on wrapped native prototypes is not
--      // allowed: "cannot modify properties of a WrappedNative".
-+      // allowed: "cannot modify properties of a WrappedNative". See bug 560072.
-     }
- 
-     for (let name of names) {
-       let desc = null;
-       try {
-         desc = aObject.getOwnPropertyDescriptor(name);
-       } catch (e) {
-         // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
-@@ -3118,18 +3127,25 @@ ObjectActor.prototype = {
-     return { from: this.actorID,
-              displayString: this.threadActor.createValueGrip(string) };
-   },
- 
-   /**
-    * A helper method that creates a property descriptor for the provided object,
-    * properly formatted for sending in a protocol response.
-    *
-+   * @private
-    * @param string aName
-    *        The property that the descriptor is generated for.
-+   * @param boolean aOnlyEnumerable
-+   *        True if you want a descriptor only for an enumerable property, false
-+   *        otherwise.
-+   * @return object|undefined
-+   *         The property descriptor, or undefined if this is not an enumerable
-+   *         property and aOnlyEnumerable=true.
-    */
-   _propertyDescriptor: function (aName, aOnlyEnumerable) {
-     let desc;
-     try {
-       desc = this.obj.getOwnPropertyDescriptor(aName);
-     } catch (e) {
-       // Calling getOwnPropertyDescriptor on wrapped native prototypes is not
-       // allowed (bug 560072). Inform the user with a bogus, but hopefully
-@@ -3241,19 +3257,16 @@ ObjectActor.prototype.requestTypes = {
-   "property": ObjectActor.prototype.onProperty,
-   "displayString": ObjectActor.prototype.onDisplayString,
-   "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
-   "decompile": ObjectActor.prototype.onDecompile,
-   "release": ObjectActor.prototype.onRelease,
-   "scope": ObjectActor.prototype.onScope,
- };
- 
--// Number of items to preview in objects, arrays, maps, sets, lists,
--// collections, etc.
--const OBJECT_PREVIEW_MAX_ITEMS = 10;
- 
- /**
-  * Functions for adding information to ObjectActor grips for the purpose of
-  * having customized output. This object holds arrays mapped by
-  * DebuggerObject.class.
-  *
-  * In each array you can add functions that take two
-  * arguments:
-@@ -3268,55 +3281,59 @@ const OBJECT_PREVIEW_MAX_ITEMS = 10;
-  */
- DebuggerServer.ObjectActorPreviewers = {
-   Function: [function({obj, threadActor}, aGrip) {
-     if (obj.name) {
-       aGrip.name = obj.name;
-     }
- 
-     if (obj.displayName) {
--      aGrip.displayName = obj.displayName;
-+      aGrip.displayName = obj.displayName.substr(0, 500);
-     }
- 
-     if (obj.parameterNames) {
-       aGrip.parameterNames = obj.parameterNames;
-     }
- 
-     // Check if the developer has added a de-facto standard displayName
-     // property for us to use.
-+    let userDisplayName;
-     try {
--      let desc = obj.getOwnPropertyDescriptor("displayName");
--      if (desc && desc.value && typeof desc.value == "string") {
--        aGrip.userDisplayName = threadActor.createValueGrip(desc.value);
--      }
-+      userDisplayName = obj.getOwnPropertyDescriptor("displayName");
-     } catch (e) {
-       // Calling getOwnPropertyDescriptor with displayName might throw
-       // with "permission denied" errors for some functions.
-       dumpn(e);
-     }
- 
-+    if (userDisplayName && userDisplayName.value &&
-+        typeof userDisplayName.value == "string") {
-+      aGrip.userDisplayName = threadActor.createValueGrip(userDisplayName.value);
-+    }
-+
-     return true;
-   }], // Function
- 
-   RegExp: [function({obj, threadActor}, aGrip) {
-+    // Avoid having any special preview for the RegExp.prototype itself.
-     if (!obj.proto || obj.proto.class != "RegExp") {
-       return false;
-     }
- 
--    let raw = obj.unsafeDereference();
--    let str = RegExp.prototype.toString.call(raw);
-+    let str = RegExp.prototype.toString.call(obj.unsafeDereference());
-     aGrip.displayString = threadActor.createValueGrip(str);
-     return true;
-   }],
- 
-   Date: [function({obj, threadActor}, aGrip) {
-+    if (!obj.proto || obj.proto.class != "Date") {
-+      return false;
-+    }
-+
-     let time = Date.prototype.getTime.call(obj.unsafeDereference());
--    if (isNaN(time)) {
--      return false;
--    }
- 
-     aGrip.preview = {
-       timestamp: threadActor.createValueGrip(time),
-     };
-     return true;
-   }],
- 
-   Array: [function({obj, threadActor}, aGrip) {
-@@ -3332,26 +3349,26 @@ DebuggerServer.ObjectActorPreviewers = {
- 
-     if (threadActor._gripDepth > 1) {
-       return true;
-     }
- 
-     let raw = obj.unsafeDereference();
-     let items = aGrip.preview.items = [];
- 
--    Array.some(raw, (item) => {
--      let value = item;
-+    for (let [, value] of Array.prototype.entries.call(raw)) {
-       if (value && typeof value == "object") {
--        value = obj.makeDebuggeeValue(item);
-+        value = obj.makeDebuggeeValue(value);
-       }
-       items.push(threadActor.createValueGrip(value));
- 
--      // Stop iterating the array once we have enough items.
--      return items.length == OBJECT_PREVIEW_MAX_ITEMS;
--    });
-+      if (items.length == OBJECT_PREVIEW_MAX_ITEMS) {
-+        break;
-+      }
-+    }
- 
-     return true;
-   }], // Array
- 
-   Set: [function({obj, threadActor}, aGrip) {
-     let size = DevToolsUtils.getProperty(obj, "size");
-     if (typeof size != "number") {
-       return false;
-@@ -3419,25 +3436,24 @@ DebuggerServer.ObjectActorPreviewers = {
-   DOMStringMap: [function({obj, threadActor}, aGrip, aRawObj) {
-     if (!aRawObj) {
-       return false;
-     }
- 
-     let keys = obj.getOwnPropertyNames();
-     aGrip.preview = {
-       kind: "MapLike",
--      entries: [],
-       size: keys.length,
-     };
- 
-     if (threadActor._gripDepth > 1) {
--      return false;
--    }
--
--    let entries = aGrip.preview.entries;
-+      return true;
-+    }
-+
-+    let entries = aGrip.preview.entries = [];
-     for (let key of keys) {
-       let value = aRawObj[key];
-       if (value && typeof value == "object") {
-         value = obj.makeDebuggeeValue(value);
-       }
-       entries.push([key, threadActor.createValueGrip(value)]);
-       if (entries.length == OBJECT_PREVIEW_MAX_ITEMS) {
-         break;
-@@ -3445,16 +3461,47 @@ DebuggerServer.ObjectActorPreviewers = {
-     }
- 
-     return true;
-   }], // DOMStringMap
- }; // DebuggerServer.ObjectActorPreviewers
- 
- // Preview functions that do not rely on the object class.
- DebuggerServer.ObjectActorPreviewers.Object = [
-+  function TypedArray({obj, threadActor}, aGrip) {
-+    if (TYPED_ARRAY_CLASSES.indexOf(obj.class) == -1) {
-+      return false;
-+    }
-+
-+    let length = DevToolsUtils.getProperty(obj, "length");
-+    if (typeof length != "number") {
-+      return false;
-+    }
-+
-+    aGrip.preview = {
-+      kind: "ArrayLike",
-+      length: length,
-+    };
-+
-+    if (threadActor._gripDepth > 1) {
-+      return true;
-+    }
-+
-+    let raw = obj.unsafeDereference();
-+    let global = Cu.getGlobalForObject(DebuggerServer);
-+    let classProto = global[obj.class].prototype;
-+    let safeView = classProto.subarray.call(raw, 0, OBJECT_PREVIEW_MAX_ITEMS);
-+    let items = aGrip.preview.items = [];
-+    for (let i = 0; i < safeView.length; i++) {
-+      items.push(safeView[i]);
-+    }
-+
-+    return true;
-+  }, // TypedArray
-+
-   function Error({obj, threadActor}, aGrip) {
-     switch (obj.class) {
-       case "Error":
-       case "EvalError":
-       case "RangeError":
-       case "ReferenceError":
-       case "SyntaxError":
-       case "TypeError":
-@@ -3480,74 +3527,54 @@ DebuggerServer.ObjectActorPreviewers.Obj
-     }
-   },
- 
-   function CSSMediaRule({obj, threadActor}, aGrip, aRawObj) {
-     if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSMediaRule)) {
-       return false;
-     }
-     aGrip.preview = {
--      kind: "CSSMediaRule",
--      conditionText: threadActor.createValueGrip(aRawObj.conditionText),
-+      kind: "ObjectWithText",
-+      text: threadActor.createValueGrip(aRawObj.conditionText),
-     };
-     return true;
-   },
- 
-   function CSSStyleRule({obj, threadActor}, aGrip, aRawObj) {
-     if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleRule)) {
-       return false;
-     }
-     aGrip.preview = {
--      kind: "CSSStyleRule",
--      selectorText: threadActor.createValueGrip(aRawObj.selectorText),
-+      kind: "ObjectWithText",
-+      text: threadActor.createValueGrip(aRawObj.selectorText),
-     };
-     return true;
-   },
- 
--  function CSSImportRule({obj, threadActor}, aGrip, aRawObj) {
--    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSImportRule)) {
-+  function ObjectWithURL({obj, threadActor}, aGrip, aRawObj) {
-+    if (!aRawObj ||
-+        !(aRawObj instanceof Ci.nsIDOMCSSImportRule ||
-+          aRawObj instanceof Ci.nsIDOMCSSStyleSheet ||
-+          aRawObj instanceof Ci.nsIDOMLocation ||
-+          aRawObj instanceof Ci.nsIDOMWindow)) {
-       return false;
-     }
-+
-+    let url;
-+    if (aRawObj instanceof Ci.nsIDOMWindow) {
-+      url = aRawObj.location.href;
-+    } else {
-+      url = aRawObj.href;
-+    }
-+
-     aGrip.preview = {
--      kind: "CSSImportRule",
--      href: threadActor.createValueGrip(aRawObj.href),
-+      kind: "ObjectWithURL",
-+      url: threadActor.createValueGrip(url),
-     };
--    return true;
--  },
--
--  function CSSStyleSheet({obj, threadActor}, aGrip, aRawObj) {
--    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleSheet)) {
--      return false;
--    }
--    aGrip.preview = {
--      kind: "CSSStyleSheet",
--      href: threadActor.createValueGrip(aRawObj.href),
--    };
--    return true;
--  },
--
--  function DOMLocation({obj, threadActor}, aGrip, aRawObj) {
--    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMLocation)) {
--      return false;
--    }
--    aGrip.preview = {
--      kind: "DOMLocation",
--      href: threadActor.createValueGrip(aRawObj.href),
--    };
--    return true;
--  },
--
--  function DOMWindow({obj, threadActor}, aGrip, aRawObj) {
--    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMWindow)) {
--      return false;
--    }
--    aGrip.preview = {
--      kind: "DOMWindow",
--      location: threadActor.createValueGrip(aRawObj.location.href),
--    };
-+
-     return true;
-   },
- 
-   function ArrayLike({obj, threadActor}, aGrip, aRawObj) {
-     if (!aRawObj ||
-         obj.class != "DOMTokenList" &&
-         !(aRawObj instanceof Ci.nsIDOMMozNamedAttrMap ||
-           aRawObj instanceof Ci.nsIDOMCSSRuleList ||
-@@ -3591,20 +3618,20 @@ DebuggerServer.ObjectActorPreviewers.Obj
- 
-   function CSSStyleDeclaration({obj, threadActor}, aGrip, aRawObj) {
-     if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMCSSStyleDeclaration)) {
-       return false;
-     }
- 
-     aGrip.preview = {
-       kind: "MapLike",
--      entries: [],
-       size: aRawObj.length,
-     };
--    let entries = aGrip.preview.entries;
-+
-+    let entries = aGrip.preview.entries = [];
- 
-     for (let i = 0; i < OBJECT_PREVIEW_MAX_ITEMS &&
-                     i < aRawObj.length; i++) {
-       let prop = aRawObj[i];
-       let value = aRawObj.getPropertyValue(prop);
-       entries.push([prop, threadActor.createValueGrip(value)]);
-     }
- 
-@@ -3761,24 +3788,25 @@ DebuggerServer.ObjectActorPreviewers.Obj
-   function GenericObject(aObjectActor, aGrip) {
-     let {obj, threadActor} = aObjectActor;
-     if (aGrip.preview || aGrip.displayString || threadActor._gripDepth > 1) {
-       return false;
-     }
- 
-     let i = 0, names = [];
-     let preview = aGrip.preview = {
-+      kind: "Object",
-       ownProperties: Object.create(null),
-     };
- 
-     try {
-       names = obj.getOwnPropertyNames();
-     } catch (ex) {
-       // Calling getOwnPropertyNames() on wrapped native prototypes is not
--      // allowed: "cannot modify properties of a WrappedNative".
-+      // allowed: "cannot modify properties of a WrappedNative". See bug 560072.
-     }
- 
-     preview.ownPropertiesLength = names.length;
- 
-     for (let name of names) {
-       let desc = aObjectActor._propertyDescriptor(name, true);
-       if (!desc) {
-         continue;
-diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
---- a/toolkit/devtools/server/actors/webconsole.js
-+++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -56,16 +56,17 @@ function WebConsoleActor(aConnection, aP
-   this.conn.addActorPool(this._actorPool);
- 
-   this._prefs = {};
- 
-   this.dbg = new Debugger();
- 
-   this._protoChains = new Map();
-   this._netEvents = new Map();
-+  this._gripDepth = 0;
- 
-   this._onObserverNotification = this._onObserverNotification.bind(this);
-   if (this.parentActor.isRootActor) {
-     Services.obs.addObserver(this._onObserverNotification,
-                              "last-pb-context-exited", false);
-   }
- }
- 
-@@ -76,16 +77,23 @@ WebConsoleActor.prototype =
-   /**
-    * Debugger instance.
-    *
-    * @see jsdebugger.jsm
-    */
-   dbg: null,
- 
-   /**
-+   * This is used by the ObjectActor to keep track of the depth of grip() calls.
-+   * @private
-+   * @type number
-+   */
-+  _gripDepth: null,
-+
-+  /**
-    * Actor pool for all of the actors we send to the client.
-    * @private
-    * @type object
-    * @see ActorPool
-    */
-   _actorPool: null,
- 
-   /**
++# LOCALIZATION NOTE (variablesViewMoreObjects): the text that is displayed
++# when you have an object preview that does not show all of the elements. At the end of the list
++# you see "N more..." in the web console output.
++# This is a semi-colon list of plural forms.
++# See: http://developer.mozilla.org/en/docs/Localization_and_Plurals
++# #1 number of remaining items in the object
++# example: 3 more…
++variablesViewMoreObjects=#1 more…;#1 more…
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
