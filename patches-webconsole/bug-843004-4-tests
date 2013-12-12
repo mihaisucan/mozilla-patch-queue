@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 73854abb8b3533ec53e39e7e72c138f5b83d4c7c
+# Parent 0a5d5278fed3949c993ce6828726c2a4eff9ceaf
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1386798141 -7200
+# Date 1386862962 -7200
 
 Bug 843004 - Part 4: test fixes; r=benvie
 
@@ -287,46 +287,719 @@ diff --git a/browser/devtools/webconsole/test/browser_result_format_as_string.js
      finishTest();
    });
  }
-diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
---- a/toolkit/devtools/server/actors/script.js
-+++ b/toolkit/devtools/server/actors/script.js
-@@ -3650,16 +3650,17 @@ DebuggerServer.ObjectActorPreviewers.Obj
-     };
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_598357_jsterm_output.js
+@@ -1,267 +1,286 @@
+-/* vim:set ts=2 sw=2 sts=2 et: */
+-/* ***** BEGIN LICENSE BLOCK *****
++/*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+- *
+- * Contributor(s):
+- *  Mihai Șucan <mihai.sucan@gmail.com>
+- *
+- * ***** END LICENSE BLOCK ***** */
++ */
  
-     if (aRawObj instanceof Ci.nsIDOMDocument) {
-       preview.location = threadActor.createValueGrip(aRawObj.location.href);
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console.html";
+ 
+-let testEnded = false;
+-let pos = -1;
++let dateNow = Date.now();
++let DebuggerServer = Cu.import("resource://gre/modules/devtools/dbg-server.jsm", {}).DebuggerServer;
++let longString = (new Array(DebuggerServer.LONG_STRING_LENGTH + 4)).join("a");
++let initialString = longString.substring(0, DebuggerServer.LONG_STRING_INITIAL_LENGTH);
++DebuggerServer = null;
+ 
+-let dateNow = Date.now();
++// Each input test object has the following properties:
++//
++// - input: string, JS input value to execute.
++//
++// - output: string, expected JS eval result.
++//
++// - inspectable: boolean, tells if the result is expected to be an object you
++// can click on to inspect.
++//
++// - printOutput: string, optional, expected output for |print(input)|. If this
++// is not provided, printOutput = output.
++//
++// - consoleLogInput: string, optional, JS input value to use for the
++// console.log() call. If this is not provided, then |input| is used,
++// |console.log(input)|.
++//
++// - consoleLogOutput: string, optional, expected output for
++// |console.log(consoleLogInput)|. If this is not provided, consoleLogOutput
++// = output.
+ 
+-let tempScope = {};
+-Cu.import("resource://gre/modules/devtools/dbg-server.jsm", tempScope);
+-
+-let longString = (new Array(tempScope.DebuggerServer.LONG_STRING_LENGTH + 4)).join("a");
+-let initialString = longString.substring(0,
+-  tempScope.DebuggerServer.LONG_STRING_INITIAL_LENGTH);
+-
+-let inputValues = [
+-  // [showsVariablesView?, input value, expected output format,
+-  //    print() output, console API output, optional console API test]
+-
++let inputTests = [
+   // 0
+-  [false, "'hello \\nfrom \\rthe \\\"string world!'",
+-    '"hello \nfrom \rthe "string world!"',
+-    "hello \nfrom \rthe \"string world!"],
++  {
++    input: "'hello \\nfrom \\rthe \\\"string world!'",
++    output: "\"hello \\nfrom \\rthe \\\"string world!\"",
++  },
+ 
+   // 1
+-  [false, "'\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165'",
+-    "\"\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165\"",
+-    "\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165"],
++  {
++    // unicode test
++    input: "'\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165'",
++    output: "\"\\xFA\\u1E47\\u0129\\xE7\\xF6d\\xEA \\u021B\\u0115\\u0219\\u0165\"",
++  },
+ 
+   // 2
+-  [false, "window.location.href", '"' + TEST_URI + '"', TEST_URI],
++  {
++    input: "window.location.href",
++    output: '"' + TEST_URI + '"',
++  },
+ 
+   // 3
+-  [false, "0", "0"],
++  {
++    input: "10-10",
++    output: "0",
++  },
+ 
+   // 4
+-  [false, "'0'", '"0"', "0"],
++  {
++    input: "'0'",
++    output: '"0"',
++  },
+ 
+   // 5
+-  [false, "42", "42"],
++  {
++    input: "42",
++    output: "42",
++  },
+ 
+   // 6
+-  [false, "'42'", '"42"', "42"],
++  {
++    input: "'42'",
++    output: '"42"',
++  },
+ 
+   // 7
+-  [true, "/foobar/", "[object RegExp]", '"/foobar/"', "[object RegExp]"],
++  {
++    input: "/foobar/",
++    output: "/foobar/",
++    inspectable: true,
++  },
+ 
+   // 8
+-  [false, "null", "null"],
++  {
++    input: "null",
++    output: "null",
++  },
+ 
+   // 9
+-  [false, "undefined", "undefined"],
++  {
++    input: "undefined",
++    output: "undefined",
++  },
+ 
+   // 10
+-  [false, "true", "true"],
++  {
++    input: "true",
++    output: "true",
++  },
+ 
+   // 11
+-  [true, "document.getElementById", "[object Function]",
+-    "function getElementById() {\n    [native code]\n}",
+-    "[object Function]"],
++  {
++    input: "document.getElementById",
++    output: "function getElementById()",
++    printOutput: "function getElementById() {\\n    [native code]\\n}",
++    inspectable: true,
++    variablesViewLabel: "getElementById()",
++  },
+ 
+   // 12
+-  [true, "(function() { return 42; })", "[object Function]",
+-    "function () { return 42; }", "[object Function]"],
++  {
++    input: "(function() { return 42; })",
++    output: "function ()",
++    printOutput: "function () { return 42; }",
++    inspectable: true,
++  },
+ 
+   // 13
+-  [true, "new Date(" + dateNow + ")", "[object Date]", (new Date(dateNow)).toString(), "[object Date]"],
++  {
++    input: "new Date(" + dateNow + ")",
++    output: "Date " + (new Date(dateNow)).toISOString(),
++    printOutput: (new Date(dateNow)).toString(),
++    inspectable: true,
++  },
+ 
+   // 14
+-  [true, "document.body", "[object HTMLBodyElement]"],
++  {
++    input: "document.body",
++    output: "<body>",
++    printOutput: "[object HTMLBodyElement]",
++    inspectable: true,
++  },
+ 
+   // 15
+-  [true, "window.location", "[object Location]", TEST_URI, "[object Location]"],
++  {
++    input: "window.location",
++    output: "Location " + TEST_URI,
++    printOutput: TEST_URI,
++    inspectable: true,
++    variablesViewLabel: "Location test-console.html",
++  },
+ 
+   // 16
+-  [true, "[1,2,3,'a','b','c','4','5']", '[object Array]',
+-    '1,2,3,a,b,c,4,5',
+-    "[object Array]"],
++  {
++    input: "[1,2,3,'a','b','c','4','5']",
++    output: '[1, 2, 3, "a", "b", "c", "4", "5"]',
++    printOutput: "1,2,3,a,b,c,4,5",
++    inspectable: true,
++    variablesViewLabel: "Array[8]",
++  },
+ 
+   // 17
+-  [true, "({a:'b', c:'d', e:1, f:'2'})", "[object Object]"],
++  {
++    input: "({a:'b', c:'d', e:1, f:'2'})",
++    output: '{a: "b", c: "d", e: 1, f: "2"}',
++    printOutput: "[object Object]",
++    inspectable: true,
++    variablesViewLabel: "Object",
++  },
+ 
+   // 18
+-  [false, "'" + longString + "'",
+-    '"' + initialString + "\"[\u2026]", initialString],
++  {
++    input: "'" + longString + "'",
++    output: '"' + initialString + "\"[\u2026]",
++    printOutput: initialString,
++  },
+ ];
+ 
+-longString = null;
+-initialString = null;
+-tempScope = null;
++longString = initialString = null;
+ 
+-let eventHandlers = [];
+-let popupShown = [];
+-let HUD;
+-let testDriver;
++function test() {
++  let hud;
++  let eventHandlers = new Set();
+ 
+-function tabLoad(aEvent) {
+-  browser.removeEventListener(aEvent.type, tabLoad, true);
++  requestLongerTimeout(2);
+ 
+-  waitForFocus(function () {
+-    openConsole(null, function(aHud) {
+-      HUD = aHud;
+-      testNext();
+-    });
+-  }, content);
+-}
++  addTab(TEST_URI);
++  browser.addEventListener("load", function onLoad() {
++    browser.removeEventListener("load", onLoad, true);
++    Task.spawn(runner);
++  }, true);
+ 
+-function subtestNext() {
+-  testDriver.next();
+-}
++  function runner()
++  {
++    hud = yield openConsole();
++    for (let [i, entry] of inputTests.entries()) {
++      yield checkInput(i, entry);
++    }
+ 
+-function testNext() {
+-  pos++;
+-  if (pos == inputValues.length) {
+-    testEnd();
+-    return;
++    for (let fn of eventHandlers) {
++      hud.jsterm.off("variablesview-open", fn);
++    }
++
++    inputTests = null;
++    finishTest();
+   }
+ 
+-  testDriver = testGen();
+-  testDriver.next();
+-}
++  function checkInput(i, entry)
++  {
++    info("checkInput(" + i + "): " + entry.input);
++    hud.jsterm.clearOutput();
+ 
+-function testGen() {
+-  let cpos = pos;
++    // Test the console.log() output.
+ 
+-  let showsVariablesView = inputValues[cpos][0];
+-  let inputValue = inputValues[cpos][1];
+-  let expectedOutput = inputValues[cpos][2];
++    let consoleLogInput = entry.consoleLogInput || entry.input;
++    let consoleLogOutput = entry.consoleLogOutput || entry.output;
++    hud.jsterm.execute("console.log(" + consoleLogInput + ")");
+ 
+-  let printOutput = inputValues[cpos].length >= 4 ?
+-    inputValues[cpos][3] : expectedOutput;
++    yield waitForMessages({
++      webconsole: hud,
++      messages: [{
++        name: "console.log() output: " + consoleLogOutput,
++        text: consoleLogOutput,
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++      }],
++    });
+ 
+-  let consoleOutput = inputValues[cpos].length >= 5 ?
+-    inputValues[cpos][4] : printOutput;
++    hud.jsterm.clearOutput();
+ 
+-  let consoleTest = inputValues[cpos][5] || inputValue;
++    // Test jsterm print() output.
+ 
+-  HUD.jsterm.clearOutput();
++    let printOutput = entry.printOutput || entry.output;
++    hud.jsterm.execute("print(" + entry.input + ")");
+ 
+-  // Test the console.log() output.
++    yield waitForMessages({
++      webconsole: hud,
++      messages: [{
++        name: "print() output: " + printOutput,
++        text: printOutput,
++        category: CATEGORY_OUTPUT,
++      }],
++    });
+ 
+-  let outputItem;
+-  function onExecute(msg) {
+-    outputItem = msg;
+-    subtestNext();
+-  }
++    // Test jsterm execution output.
+ 
+-  HUD.jsterm.execute("console.log(" + consoleTest + ")");
++    hud.jsterm.clearOutput();
++    hud.jsterm.execute(entry.input);
+ 
+-  waitForMessages({
+-    webconsole: HUD,
+-    messages: [{
+-      name: "console API output is correct for inputValues[" + cpos + "]",
+-      text: consoleOutput,
+-      category: CATEGORY_WEBDEV,
+-      severity: SEVERITY_LOG,
+-    }],
+-  }).then(subtestNext);
++    let [result] = yield waitForMessages({
++      webconsole: hud,
++      messages: [{
++        name: "JS eval output: " + entry.output,
++        text: entry.output,
++        category: CATEGORY_OUTPUT,
++      }],
++    });
+ 
+-  yield undefined;
++    let msg = [...result.matched][0];
++    let body = msg.querySelector(".body a") || msg.querySelector(".body");
++    ok(body, "the message body");
+ 
+-  HUD.jsterm.clearOutput();
++    // Test click on output.
++    let deferred = promise.defer();
+ 
+-  // Test jsterm print() output.
++    let variablesViewShown = function(aEvent, aView, aOptions) {
++      let label = entry.variablesViewLabel || entry.output;
++      if (aOptions.label != label) {
++        return;
++      }
+ 
+-  HUD.jsterm.setInputValue("print(" + inputValue + ")");
+-  HUD.jsterm.execute(null, onExecute);
++      hud.jsterm.off("variablesview-open", variablesViewShown);
+ 
+-  yield undefined;
++      eventHandlers.delete(variablesViewShown);
+ 
+-  ok(outputItem,
+-    "found the jsterm print() output line for inputValues[" + cpos + "]");
+-  ok(outputItem.textContent.indexOf(printOutput) > -1,
+-    "jsterm print() output is correct for inputValues[" + cpos + "]");
++      ok(entry.inspectable, "variables view was shown");
+ 
+-  // Test jsterm execution output.
++      if (entry.inspectable) {
++        deferred.resolve(null);
++      }
++    };
+ 
+-  HUD.jsterm.clearOutput();
+-  HUD.jsterm.setInputValue(inputValue);
+-  HUD.jsterm.execute(null, onExecute);
++    hud.jsterm.on("variablesview-open", variablesViewShown);
+ 
+-  yield undefined;
++    eventHandlers.add(variablesViewShown);
+ 
+-  ok(outputItem, "found the jsterm output line for inputValues[" + cpos + "]");
+-  ok(outputItem.textContent.indexOf(expectedOutput) > -1,
+-    "jsterm output is correct for inputValues[" + cpos + "]");
++    EventUtils.synthesizeMouse(body, 2, 2, {}, hud.iframeWindow);
+ 
+-  let messageBody = outputItem.querySelector(".body a") ||
+-                    outputItem.querySelector(".body");
+-  ok(messageBody, "we have the message body for inputValues[" + cpos + "]");
+-
+-  // Test click on output.
+-  let eventHandlerID = eventHandlers.length + 1;
+-
+-  let variablesViewShown = function(aEvent, aView, aOptions) {
+-    if (aOptions.label.indexOf(expectedOutput) == -1) {
+-      return;
+-    }
+-
+-    HUD.jsterm.off("variablesview-open", variablesViewShown);
+-
+-    eventHandlers[eventHandlerID] = null;
+-
+-    ok(showsVariablesView,
+-      "the variables view shown for inputValues[" + cpos + "]");
+-
+-    popupShown[cpos] = true;
+-
+-    if (showsVariablesView) {
+-      executeSoon(subtestNext);
+-    }
+-  };
+-
+-  HUD.jsterm.on("variablesview-open", variablesViewShown);
+-
+-  eventHandlers.push(variablesViewShown);
+-
+-  EventUtils.synthesizeMouse(messageBody, 2, 2, {}, HUD.iframeWindow);
+-
+-  if (showsVariablesView) {
+-    info("messageBody tagName '" + messageBody.tagName +  "' className '" + messageBody.className + "'");
+-    yield undefined; // wait for the panel to open if we need to.
+-  }
+-
+-  testNext();
+-
+-  yield undefined;
+-}
+-
+-function testEnd() {
+-  if (testEnded) {
+-    return;
+-  }
+-
+-  testEnded = true;
+-
+-  for (let i = 0; i < eventHandlers.length; i++) {
+-    if (eventHandlers[i]) {
+-      HUD.jsterm.off("variablesview-open", eventHandlers[i]);
++    if (entry.inspectable) {
++      info("message body tagName '" + body.tagName +  "' className '" + body.className + "'");
++      yield deferred.promise; // wait for the panel to open if we need to.
      }
+   }
+-
+-  for (let i = 0; i < inputValues.length; i++) {
+-    if (inputValues[i][0] && !popupShown[i]) {
+-      ok(false, "the variables view failed to show for inputValues[" + i + "]");
+-    }
+-  }
+-
+-  HUD = inputValues = testDriver = null;
+-  executeSoon(finishTest);
+ }
+-
+-function test() {
+-  requestLongerTimeout(2);
+-  addTab(TEST_URI);
+-  browser.addEventListener("load", tabLoad, true);
+-}
+-
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+@@ -52,42 +52,37 @@ function autocompletePopupHidden()
+   let jsterm = gHUD.jsterm;
+   let popup = jsterm.autocompletePopup;
+   let completeNode = jsterm.completeNode;
+   let inputNode = jsterm.inputNode;
  
-     // Add preview for DOM element attributes.
-     if (aRawObj instanceof Ci.nsIDOMElement) {
-+      preview.nodeName = preview.nodeName.toLowerCase();
-       let i = 0;
-       preview.attributes = {};
-       preview.attributesLength = aRawObj.attributes.length;
-       for (let attr of aRawObj.attributes) {
-         preview.attributes[attr.nodeName] = threadActor.createValueGrip(attr.value);
-         if (++i == OBJECT_PREVIEW_MAX_ITEMS) {
-           break;
-         }
-diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
---- a/toolkit/devtools/webconsole/utils.js
-+++ b/toolkit/devtools/webconsole/utils.js
-@@ -194,17 +194,17 @@ let WebConsoleUtils = {
-    *        should only remove the query parameters and the hash fragment from
-    *        the given URL.
-    * @return string
-    *         The abbreviated form of the source URL.
-    */
-   abbreviateSourceURL:
-   function WCU_abbreviateSourceURL(aSourceURL, aOptions = {})
+   popup._panel.removeEventListener("popuphidden", autocompletePopupHidden, false);
+ 
+   ok(!popup.isOpen, "popup is not open");
++
++  jsterm.once("autocomplete-updated", function() {
++    is(completeNode.value, testStr + "dy", "autocomplete shows document.body");
++    testPropertyPanel();
++  });
++
+   let inputStr = "document.b";
+   jsterm.setInputValue(inputStr);
+   EventUtils.synthesizeKey("o", {});
+   let testStr = inputStr.replace(/./g, " ") + " ";
+-
+-  waitForSuccess({
+-    name: "autocomplete shows document.body",
+-    validatorFn: function()
+-    {
+-      return completeNode.value == testStr + "dy";
+-    },
+-    successFn: testPropertyPanel,
+-    failureFn: finishTest,
+-  });
+ }
+ 
+ function testPropertyPanel()
+ {
+   let jsterm = gHUD.jsterm;
+   jsterm.clearOutput();
+   jsterm.execute("document", (msg) => {
+     jsterm.once("variablesview-fetched", onVariablesViewReady);
+     let anchor = msg.querySelector(".body a");
+     EventUtils.synthesizeMouse(anchor, 2, 2, {}, gHUD.iframeWindow);
+   });
+ }
+ 
+ function onVariablesViewReady(aEvent, aView)
+ {
+   findVariableViewProperties(aView, [
+-    { name: "body", value: "HTMLBodyElement" },
++    { name: "body", value: "<body>" },
+   ], { webconsole: gHUD }).then(finishTest);
+ }
+-
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+@@ -83,18 +83,17 @@ function performWebConsoleTests(hud)
+   let jsterm = hud.jsterm;
+   outputNode = hud.outputNode;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("$0", onNodeOutput);
+ 
+   function onNodeOutput(node)
    {
--    if (aSourceURL.substr(0, 5) == "data:") {
-+    if (!aOptions.onlyCropQuery && aSourceURL.substr(0, 5) == "data:") {
-       let commaIndex = aSourceURL.indexOf(",");
-       if (commaIndex > -1) {
-         aSourceURL = "data:" + aSourceURL.substring(commaIndex + 1);
-       }
+-    isnot(node.textContent.indexOf("[object HTMLHeadingElement"), -1,
+-          "correct output for $0");
++    isnot(node.textContent.indexOf("<h1>"), -1, "correct output for $0");
+ 
+     jsterm.clearOutput();
+     jsterm.execute("$0.textContent = 'bug653531'", onNodeUpdate);
+   }
+ 
+   function onNodeUpdate(node)
+   {
+     isnot(node.textContent.indexOf("bug653531"), -1,
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_659907_console_dir.js
+@@ -17,13 +17,13 @@ function test() {
+ 
+ function consoleOpened(hud) {
+   hud.jsterm.execute("console.dir(document)");
+   hud.jsterm.once("variablesview-fetched", testConsoleDir.bind(null, hud));
+ }
+ 
+ function testConsoleDir(hud, ev, view) {
+   findVariableViewProperties(view, [
+-    { name: "__proto__.__proto__.querySelectorAll", value: "Function" },
+-    { name: "location", value: "Location" },
+-    { name: "__proto__.write", value: "Function" },
++    { name: "__proto__.__proto__.querySelectorAll", value: "querySelectorAll()" },
++    { name: "location", value: /Location data:Web/ },
++    { name: "__proto__.write", value: "write()" },
+   ], { webconsole: hud }).then(finishTest);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_closure_inspection.js b/browser/devtools/webconsole/test/browser_webconsole_closure_inspection.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_closure_inspection.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_closure_inspection.js
+@@ -49,17 +49,17 @@ function consoleOpened(hud)
+ {
+   gWebConsole = hud;
+   gJSTerm = hud.jsterm;
+   gJSTerm.execute("window.george.getName");
+ 
+   waitForMessages({
+     webconsole: gWebConsole,
+     messages: [{
+-      text: "[object Function]",
++      text: "function _pfactory/<.getName()",
+       category: CATEGORY_OUTPUT,
+       objects: true,
+     }],
+   }).then(onExecuteGetName);
+ }
+ 
+ function onExecuteGetName(aResults)
+ {
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+@@ -113,17 +113,17 @@ function testJSTerm(hud)
+ 
+   let output = jsterm.outputNode.querySelector(".message[category='output']");
+   ok(!output, "no output for help() calls");
+   is(openedLinks, 3, "correct number of pages opened by the help calls");
+   hud.openLink = oldOpenLink;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("pprint({b:2, a:1})");
+-  checkResult('"  b: 2\n  a: 1"', "pprint()");
++  checkResult("\"  b: 2\\n  a: 1\"", "pprint()");
+   yield undefined;
+ 
+   // check instanceof correctness, bug 599940
+   jsterm.clearOutput();
+   jsterm.execute("[] instanceof Array");
+   checkResult("true", "[] instanceof Array == true");
+   yield undefined;
+ 
+@@ -149,17 +149,17 @@ function testJSTerm(hud)
+   jsterm.clearOutput();
+   jsterm.execute("keys(window)");
+   checkResult(null, "keys(window)");
+   yield undefined;
+ 
+   // bug 614561
+   jsterm.clearOutput();
+   jsterm.execute("pprint('hi')");
+-  checkResult('"  0: "h"\n  1: "i""', "pprint('hi')");
++  checkResult("\"  0: \\\"h\\\"\\n  1: \\\"i\\\"\"", "pprint('hi')");
+   yield undefined;
+ 
+   // check that pprint(function) shows function source, bug 618344
+   jsterm.clearOutput();
+   jsterm.execute("pprint(print)");
+   checkResult(function(node) {
+     return node.textContent.indexOf("aOwner.helperResult") > -1;
+   }, "pprint(function) shows source");
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -1,19 +1,20 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+-let WebConsoleUtils, gDevTools, TargetFactory, console, promise, require;
++let WebConsoleUtils, gDevTools, TargetFactory, console, promise, require, Task;
+ 
+ (() => {
+   gDevTools = Cu.import("resource:///modules/devtools/gDevTools.jsm", {}).gDevTools;
+   console = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).console;
+   promise = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {}).Promise;
++  Task = Cu.import("resource://gre/modules/Task.jsm", {}).Task;
+ 
+   let tools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
+   let utils = tools.require("devtools/toolkit/webconsole/utils");
+   TargetFactory = tools.TargetFactory;
+   WebConsoleUtils = utils.Utils;
+   require = tools.require;
+ })();
+ // promise._reportErrors = true; // please never leave me.
+@@ -147,25 +148,30 @@ function findLogEntry(aString)
+  * Open the Web Console for the given tab.
+  *
+  * @param nsIDOMElement [aTab]
+  *        Optional tab element for which you want open the Web Console. The
+  *        default tab is taken from the global variable |tab|.
+  * @param function [aCallback]
+  *        Optional function to invoke after the Web Console completes
+  *        initialization (web-console-created).
++ * @return object
++ *         A promise that is resolved once the web console is open.
+  */
+ function openConsole(aTab, aCallback = function() { })
+ {
++  let deferred = promise.defer();
+   let target = TargetFactory.forTab(aTab || tab);
+   gDevTools.showToolbox(target, "webconsole").then(function(toolbox) {
+     let hud = toolbox.getCurrentPanel().hud;
+     hud.jsterm._lazyVariablesView = false;
+     aCallback(hud);
++    deferred.resolve(hud);
+   });
++  return deferred.promise;
+ }
+ 
+ /**
+  * Close the Web Console for the given tab.
+  *
+  * @param nsIDOMElement [aTab]
+  *        Optional tab element for which you want close the Web Console. The
+  *        default tab is taken from the global variable |tab|.
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -4257,16 +4257,17 @@ JSTerm.prototype = {
+     }
+     else if (completionType == this.COMPLETE_BACKWARD) {
+       popup.selectPreviousItem();
+     }
+     else if (completionType == this.COMPLETE_FORWARD) {
+       popup.selectNextItem();
      }
  
-     // Remove any query parameters.
-     let hookIndex = aSourceURL.indexOf("?");
++    this.emit("autocomplete-updated");
+     aCallback && aCallback(this);
+   },
+ 
+   onAutocompleteSelect: function JSTF_onAutocompleteSelect()
+   {
+     // Render the suggestion only if the cursor is at the end of the input.
+     if (this.inputNode.selectionStart != this.inputNode.value.length) {
+       return;

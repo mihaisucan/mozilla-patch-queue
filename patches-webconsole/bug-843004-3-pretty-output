@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 6824be8b3fd16b0f9a06bcc5e7d9eba4f5b58038
+# Parent 4d5588e3f4fba9505f62c4245ca34a9d43d957c5
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1386790747 -7200
+# Date 1386884774 -7200
 
 Bug 843004 - Part 3: VariablesView ObjectActor pretty output; r=benvie,vporof
 
@@ -50,7 +50,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
  
    /**
     * Initializes this variable's id, view and binds event listeners.
-@@ -3084,55 +3090,399 @@ VariablesView.getGrip = function(aValue)
+@@ -3084,55 +3090,415 @@ VariablesView.getGrip = function(aValue)
    }
  };
  
@@ -147,7 +147,11 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +    if (noStringQuotes) {
 +      return initial + ellipsis;
 +    }
-+    return uneval(initial) + ellipsis;
++    let result = uneval(initial);
++    if (!ellipsis) {
++      return result;
++    }
++    return result.substr(0, result.length - 1) + ellipsis + '"';
 +  },
 +
 +  object: function(aGrip, aOptions) {
@@ -179,7 +183,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +    if (!concise) {
 +      return "function " + name + "(" + params + ")";
 +    }
-+    return (name || "function") + "(" + params + ")";
++    return (name || "function ") + "(" + params + ")";
 +  },
 +
 +  RegExp: function({displayString}) {
@@ -210,14 +214,28 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +      return null;
 +    }
 +
-+    let result = [];
++    let shown = 0, result = [], lastHole = null;
 +    for (let item of preview.items) {
-+      result.push(VariablesView.getString(item, { concise: true }));
++      if (item === null) {
++        if (lastHole !== null) {
++          result[lastHole] += ",";
++        } else {
++          result.push("");
++        }
++        lastHole = result.length - 1;
++      } else {
++        lastHole = null;
++        result.push(VariablesView.getString(item, { concise: true }));
++      }
++      shown++;
 +    }
 +
-+    if (result.length < preview.length) {
-+      let n = preview.length - result.length;
++    if (shown < preview.length) {
++      let n = preview.length - shown;
 +      result.push(VariablesView.stringifiers._getNMoreString(n));
++    } else if (lastHole !== null) {
++      // make sure we have the right number of commas...
++      result[lastHole] += ",";
 +    }
 +
 +    let prefix = aGrip.class == "Array" ? "" : aGrip.class + " ";
@@ -334,8 +352,6 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +      return preview.name || aGrip.class;
 +    }
 +
-+    // XXX; should we localize 'code", "result" and/or "location"? i'm tempted
-+    // to say yes...
 +    let msg = aGrip.class + " [" + preview.name + ": " +
 +              VariablesView.getString(preview.message) + "\n" +
 +              "code: " + preview.code + "\n" +
@@ -459,7 +475,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
   *         The custom class style.
   */
  VariablesView.getClass = function(aGrip) {
-@@ -3174,16 +3524,29 @@ VariablesView.getClass = function(aGrip)
+@@ -3174,16 +3540,29 @@ VariablesView.getClass = function(aGrip)
   */
  let generateId = (function() {
    let count = 0;
@@ -655,7 +671,7 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/debugger.properties b
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
-@@ -183,20 +183,26 @@ let WebConsoleUtils = {
+@@ -183,22 +183,28 @@ let WebConsoleUtils = {
    },
  
    /**
@@ -676,13 +692,16 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
 +  abbreviateSourceURL:
 +  function WCU_abbreviateSourceURL(aSourceURL, aOptions = {})
    {
-     if (aSourceURL.substr(0, 5) == "data:") {
+-    if (aSourceURL.substr(0, 5) == "data:") {
++    if (!aOptions.onlyCropQuery && aSourceURL.substr(0, 5) == "data:") {
        let commaIndex = aSourceURL.indexOf(",");
        if (commaIndex > -1) {
          aSourceURL = "data:" + aSourceURL.substring(commaIndex + 1);
        }
      }
  
+     // Remove any query parameters.
+     let hookIndex = aSourceURL.indexOf("?");
 @@ -209,23 +215,25 @@ let WebConsoleUtils = {
      // Remove any hash fragments.
      let hashIndex = aSourceURL.indexOf("#");

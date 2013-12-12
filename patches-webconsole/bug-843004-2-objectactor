@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 1c7402403124dc848840130b2629bb159847104b
+# Parent 552e506ce21dd8ee3412f788a1294174dd0e408f
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1386436448 -7200
 Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output; r=jimb,benvie
@@ -341,7 +341,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        enumerable: desc.enumerable
      };
  
-@@ -3228,16 +3259,581 @@ ObjectActor.prototype.requestTypes = {
+@@ -3228,16 +3259,575 @@ ObjectActor.prototype.requestTypes = {
    "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
    "decompile": ObjectActor.prototype.onDecompile,
    "release": ObjectActor.prototype.onRelease,
@@ -440,11 +440,13 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    let raw = obj.unsafeDereference();
 +    let items = aGrip.preview.items = [];
 +
-+    for (let [, value] of Array.prototype.entries.call(raw)) {
-+      if (value && typeof value == "object") {
-+        value = obj.makeDebuggeeValue(value);
++    for (let [i, value] of Array.prototype.entries.call(raw)) {
++      if (Object.hasOwnProperty.call(raw, i)) {
++        value = makeDebuggeeValueIfNeeded(obj, value);
++        items.push(threadActor.createValueGrip(value));
++      } else {
++        items.push(null);
 +      }
-+      items.push(threadActor.createValueGrip(value));
 +
 +      if (items.length == OBJECT_PREVIEW_MAX_ITEMS) {
 +        break;
@@ -473,9 +475,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    let raw = obj.unsafeDereference();
 +    let items = aGrip.preview.items = [];
 +    for (let item of Set.prototype.values.call(raw)) {
-+      if (item && typeof item == "object") {
-+        item = obj.makeDebuggeeValue(item);
-+      }
++      item = makeDebuggeeValueIfNeeded(obj, item);
 +      items.push(threadActor.createValueGrip(item));
 +      if (items.length == OBJECT_PREVIEW_MAX_ITEMS) {
 +        break;
@@ -503,12 +503,8 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    let raw = obj.unsafeDereference();
 +    let entries = aGrip.preview.entries = [];
 +    for (let [key, value] of Map.prototype.entries.call(raw)) {
-+      if (key && typeof key == "object") {
-+        key = obj.makeDebuggeeValue(key);
-+      }
-+      if (value && typeof value == "object") {
-+        value = obj.makeDebuggeeValue(value);
-+      }
++      key = makeDebuggeeValueIfNeeded(obj, key);
++      value = makeDebuggeeValueIfNeeded(obj, value);
 +      entries.push([threadActor.createValueGrip(key),
 +                    threadActor.createValueGrip(value)]);
 +      if (entries.length == OBJECT_PREVIEW_MAX_ITEMS) {
@@ -536,10 +532,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    let entries = aGrip.preview.entries = [];
 +    for (let key of keys) {
-+      let value = aRawObj[key];
-+      if (value && typeof value == "object") {
-+        value = obj.makeDebuggeeValue(value);
-+      }
++      let value = makeDebuggeeValueIfNeeded(obj, aRawObj[key]);
 +      entries.push([key, threadActor.createValueGrip(value)]);
 +      if (entries.length == OBJECT_PREVIEW_MAX_ITEMS) {
 +        break;
@@ -692,10 +685,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    for (let i = 0; i < aRawObj.length &&
 +                    items.length < OBJECT_PREVIEW_MAX_ITEMS; i++) {
-+      let value = aRawObj[i];
-+      if (value && typeof value == "object") {
-+        value = obj.makeDebuggeeValue(value);
-+      }
++      let value = makeDebuggeeValueIfNeeded(obj, aRawObj[i]);
 +      items.push(threadActor.createValueGrip(value));
 +    }
 +
@@ -741,6 +731,10 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    // Add preview for DOM element attributes.
 +    if (aRawObj instanceof Ci.nsIDOMElement) {
++      if (aRawObj instanceof Ci.nsIDOMHTMLElement) {
++        preview.nodeName = preview.nodeName.toLowerCase();
++      }
++
 +      let i = 0;
 +      preview.attributes = {};
 +      preview.attributesLength = aRawObj.attributes.length;
@@ -817,7 +811,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    // Add event-specific properties.
 +    for (let prop of props) {
 +      let value = aRawObj[prop];
-+      if (value && typeof value == "object") {
++      if (value && (typeof value == "object" || typeof value == "function")) {
 +        // Skip properties pointing to objects.
 +        if (threadActor._gripDepth > 1) {
 +          continue;
@@ -923,6 +917,30 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
    ObjectActor.apply(this, arguments);
  }
  
+@@ -4512,8 +5102,23 @@ function findCssSelector(ele) {
+ function positionInNodeList(element, nodeList) {
+   for (var i = 0; i < nodeList.length; i++) {
+     if (element === nodeList[i]) {
+       return i;
+     }
+   }
+   return -1;
+ }
++
++/**
++ * Make a debuggee value for the given object, if needed. Primitive values
++ * are left the same.
++ *
++ * @param Debugger.Object obj
++ * @param any value
++ * @return object
++ */
++function makeDebuggeeValueIfNeeded(obj, value) {
++  if (value && (typeof value == "object" || typeof value == "function")) {
++    return obj.makeDebuggeeValue(value);
++  }
++  return value;
++}
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js
