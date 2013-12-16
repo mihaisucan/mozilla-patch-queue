@@ -1,0 +1,86 @@
+# HG changeset patch
+# Parent 276ef51f6731acf2dc5ac04d9a71de9cfc6914f2
+# User Jeff Walden <jwalden@mit.edu>
+Bug 843004 - Make detecting-ful evaluations of undefined properties in self-hosted code not warn, so that self-hosted code can use that pattern when it wants to.  NOT REVIEWED YET
+
+diff --git a/js/src/jsobj.cpp b/js/src/jsobj.cpp
+--- a/js/src/jsobj.cpp
++++ b/js/src/jsobj.cpp
+@@ -1627,7 +1627,7 @@ Detecting(JSContext *cx, JSScript *scrip
+         return false;
+     }
+ 
+-    if (op == JSOP_GETGNAME || op == JSOP_NAME) {
++    if (op == JSOP_GETGNAME || op == JSOP_NAME || op == JSOP_GETINTRINSIC) {
+         /*
+          * Special case #2: handle (document.all == undefined).  Don't worry
+          * about a local variable named |undefined| shadowing the immutable
+diff --git a/js/src/tests/Intl/extensions/browser.js b/js/src/tests/Intl/extensions/browser.js
+new file mode 100644
+diff --git a/js/src/tests/Intl/extensions/options-value-emulates-undefined.js b/js/src/tests/Intl/extensions/options-value-emulates-undefined.js
+new file mode 100644
+--- /dev/null
++++ b/js/src/tests/Intl/extensions/options-value-emulates-undefined.js
+@@ -0,0 +1,28 @@
++// Any copyright is dedicated to the Public Domain.
++// http://creativecommons.org/licenses/publicdomain/
++
++//-----------------------------------------------------------------------------
++var BUGNUMBER = 843004;
++var summary =
++  "Use of an object that emulates |undefined| as the sole option must " +
++  "preclude imputing default values";
++
++print(BUGNUMBER + ": " + summary);
++
++/**************
++ * BEGIN TEST *
++ **************/
++
++var opt = objectEmulatingUndefined();
++opt.toString = function() { return "long"; };
++
++var str = new Date(2013, 12 - 1, 14).toLocaleString("en-US", { weekday: opt });
++
++// Because "weekday" was present and not undefined (stringifying to "long"),
++// this must be a string like "Saturday" (in this implementation, that is).
++assertEq(str, "Saturday");
++
++if (typeof reportCompare === "function")
++  reportCompare(true, true);
++
++print("Tests complete");
+diff --git a/js/src/tests/Intl/extensions/shell.js b/js/src/tests/Intl/extensions/shell.js
+new file mode 100644
+diff --git a/js/src/tests/js1_8_5/extensions/selfhosted-detecting-strict.js b/js/src/tests/js1_8_5/extensions/selfhosted-detecting-strict.js
+new file mode 100644
+--- /dev/null
++++ b/js/src/tests/js1_8_5/extensions/selfhosted-detecting-strict.js
+@@ -0,0 +1,27 @@
++// Any copyright is dedicated to the Public Domain.
++// http://creativecommons.org/licenses/publicdomain/
++
++//-----------------------------------------------------------------------------
++var BUGNUMBER = 843004;
++var summary =
++  "Don't emit a strict warning for the undefined-property detection pattern in self-hosted code";
++
++print(BUGNUMBER + ": " + summary);
++
++/**************
++ * BEGIN TEST *
++ **************/
++
++options("strict", "werror");
++
++// Don't strict-warn (and throw, because of strict) when self-hosted code uses
++// detecting-safe undefined-property accesses (|options.weekday !== undefined|
++// and similar in ToDateTimeOptions, to be precise).
++new Date().toLocaleString("en-US", {});
++
++// If we get here, the test passed.
++
++if (typeof reportCompare === "function")
++  reportCompare(true, true);
++
++print("Tests complete");

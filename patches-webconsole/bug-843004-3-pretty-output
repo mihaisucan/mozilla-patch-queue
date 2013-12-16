@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 6bb044dec4a5edf21506c0453fb50edfc2ca1b5d
+# Parent a712ac059cfe789f2fcc3e9a94f0b10c46f9f801
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1386938642 -7200
 
@@ -8,7 +8,7 @@ Bug 843004 - Part 3: VariablesView ObjectActor pretty output; r=benvie,vporof
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
-@@ -22,16 +22,19 @@ Cu.import("resource://gre/modules/Servic
+@@ -22,20 +22,27 @@ Cu.import("resource://gre/modules/Servic
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
  Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
  Cu.import("resource:///modules/devtools/shared/event-emitter.js");
@@ -24,11 +24,19 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
    "@mozilla.org/widget/clipboardhelper;1",
    "nsIClipboardHelper");
  
++// An ellipsis symbol (usually "…") used for localization.
++XPCOMUtils.defineLazyGetter(Scope, "ellipsis", () =>
++  Services.prefs.getComplexValue("intl.ellipsis", Ci.nsIPrefLocalizedString).data);
++
  Object.defineProperty(this, "WebConsoleUtils", {
    get: function() {
      return devtools.require("devtools/toolkit/webconsole/utils").Utils;
    },
-@@ -2361,17 +2364,20 @@ Variable.prototype = Heritage.extend(Sco
+   configurable: true,
+   enumerable: true
+ });
+ 
+@@ -2361,17 +2368,20 @@ Variable.prototype = Heritage.extend(Sco
        return;
      }
  
@@ -50,7 +58,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
  
    /**
     * Marks this variable as overridden.
-@@ -3177,55 +3183,415 @@ VariablesView.getGrip = function(aValue)
+@@ -3177,55 +3187,432 @@ VariablesView.getGrip = function(aValue)
    }
  };
  
@@ -143,7 +151,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +  },
 +
 +  longString: function({initial}, {noStringQuotes, noEllipsis}) {
-+    let ellipsis = noEllipsis ? "" : "\u2026";
++    let ellipsis = noEllipsis ? "" : Scope.ellipsis;
 +    if (noStringQuotes) {
 +      return initial + ellipsis;
 +    }
@@ -252,16 +260,17 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +
 +    let entries = [];
 +    for (let [key, value] of preview.entries) {
-+      key = VariablesView.getString(key, {
++      let keyString = VariablesView.getString(key, {
 +        concise: true,
 +        noStringQuotes: true,
 +      });
-+      value = VariablesView.getString(value, { concise: true });
-+      entries.push(key + ": " + value);
++      let valueString = VariablesView.getString(value, { concise: true });
++      entries.push(keyString + ": " + valueString);
 +    }
 +
 +    if (typeof preview.size == "number" && preview.size > entries.length) {
-+      entries.push((preview.size - entries.length) + " more\u2026");
++      let n = preview.size - entries.length;
++      entries.push(VariablesView.stringifiers._getNMoreString(n));
 +    }
 +
 +    return aGrip.class + " {" + entries.join(", ") + "}";
@@ -279,8 +288,8 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +    let result = aGrip.class;
 +    let url = aGrip.preview.url;
 +    if (!VariablesView.isFalsy({ value: url })) {
-+      result += " " + WebConsoleUtils.abbreviateSourceURL(url,
-+                                                          { onlyCropQuery: !concise });
++      result += " \u2192 " + WebConsoleUtils.abbreviateSourceURL(url,
++                             { onlyCropQuery: !concise });
 +    }
 +    return result;
 +  },
@@ -338,6 +347,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +    let msg = VariablesView.getString(preview.name, { noStringQuotes: true }) +
 +              ": " +
 +              VariablesView.getString(preview.message, { noStringQuotes: true });
++
 +    if (!VariablesView.isFalsy({ value: preview.stack })) {
 +      msg += "\n" + STR.GetStringFromName("variablesViewErrorStacktrace") +
 +             "\n" + preview.stack;
@@ -360,7 +370,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +    if (preview.filename) {
 +      msg += "\nlocation: " + preview.filename;
 +      if (preview.lineNumber) {
-+        msg += "@" + preview.lineNumber;
++        msg += ":" + preview.lineNumber;
 +      }
 +    }
 +
@@ -405,7 +415,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +      case Ci.nsIDOMNode.DOCUMENT_NODE: {
 +        let location = WebConsoleUtils.abbreviateSourceURL(preview.location,
 +                                                           { onlyCropQuery: !concise });
-+        return aGrip.class + " " + location;
++        return aGrip.class + " \u2192 " + location;
 +      }
 +
 +      case Ci.nsIDOMNode.ATTRIBUTE_NODE: {
@@ -423,6 +433,21 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +        return "<!--" + comment + "-->";
 +      }
 +
++      case Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE: {
++        if (concise || !preview.childNodes) {
++          return aGrip.class + "[" + preview.childNodesLength + "]";
++        }
++        let nodes = [];
++        for (let node of preview.childNodes) {
++          nodes.push(VariablesView.getString(node));
++        }
++        if (nodes.length < preview.childNodesLength) {
++          let n = preview.childNodesLength - nodes.length;
++          nodes.push(VariablesView.stringifiers._getNMoreString(n));
++        }
++        return aGrip.class + " [" + nodes.join(", ") + "]";
++      }
++
 +      case Ci.nsIDOMNode.ELEMENT_NODE: {
 +        let attrs = preview.attributes;
 +        if (!concise) {
@@ -434,7 +459,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 +            n++;
 +          }
 +          if (preview.attributesLength > n) {
-+            result += " \u2026";
++            result += " " + Scope.ellipsis;
 +          }
 +          return result + ">";
 +        }
@@ -475,7 +500,7 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
   *         The custom class style.
   */
  VariablesView.getClass = function(aGrip) {
-@@ -3267,16 +3633,29 @@ VariablesView.getClass = function(aGrip)
+@@ -3267,16 +3654,31 @@ VariablesView.getClass = function(aGrip)
   */
  let generateId = (function() {
    let count = 0;
@@ -485,7 +510,9 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
  })();
  
 +/**
-+ * Escape HTML special characters.
++ * Escape some HTML special characters. We do not need full HTML serialization
++ * here, we just want to make strings safe to display in HTML attributes, for
++ * the stringifiers.
 + *
 + * @param string aString
 + * @return string
@@ -646,16 +673,15 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/debugger.properties b
  
  # LOCALIZATION NOTE (scopeLabel): The text that is displayed in the variables
  # pane as a header for each variable scope (e.g. "Global scope, "With scope",
-@@ -264,8 +264,21 @@ watchExpressionsSeparatorLabel=\ →
- functionSearchSeparatorLabel=←
+@@ -212,16 +212,29 @@ scopeLabel=%S scope
+ # the watch expressions scope.
+ watchExpressionsScopeLabel=Watch expressions
  
- # LOCALIZATION NOTE (resumptionOrderPanelTitle): This is the text that appears
- # as a description in the notification panel popup, when multiple debuggers are
- # open in separate tabs and the user tries to resume them in the wrong order.
- # The substitution parameter is the URL of the last paused window that must be
- # resumed first.
- resumptionOrderPanelTitle=There are one or more paused debuggers. Please resume the most-recently paused debugger first at: %S
-+
+ # LOCALIZATION NOTE (globalScopeLabel): The name of the global scope. This text
+ # is added to scopeLabel and displayed in the variables pane as a header for
+ # the global scope.
+ globalScopeLabel=Global
+ 
 +# LOCALIZATION NOTE (variablesViewErrorStacktrace): This is the text that is
 +# shown before the stack trace in an error.
 +variablesViewErrorStacktrace=Stack trace:
@@ -668,6 +694,15 @@ diff --git a/browser/locales/en-US/chrome/browser/devtools/debugger.properties b
 +# #1 number of remaining items in the object
 +# example: 3 more…
 +variablesViewMoreObjects=#1 more…;#1 more…
++
+ # LOCALIZATION NOTE (variablesEditableNameTooltip): The text that is displayed
+ # in the variables list on an item with an editable name.
+ variablesEditableNameTooltip=Double click to edit
+ 
+ # LOCALIZATION NOTE (variablesEditableValueTooltip): The text that is displayed
+ # in the variables list on an item with an editable value.
+ variablesEditableValueTooltip=Click to change value
+ 
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
