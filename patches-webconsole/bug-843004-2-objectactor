@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent ae5d8b396299a497e7b22b91ce8e5626a9a30c6d
+# Parent 89c1a04bede15e4c9536eb789de595268e53db4b
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1386436448 -7200
+# Date 1387458299 -7200
 Bug 843004 - Part 2: ObjectActor grip changes to allow pretty output; r=jimb,benvie
 
 diff --git a/toolkit/devtools/DevToolsUtils.js b/toolkit/devtools/DevToolsUtils.js
@@ -25,7 +25,7 @@ diff --git a/toolkit/devtools/DevToolsUtils.js b/toolkit/devtools/DevToolsUtils.
   */
  this.safeErrorString = function safeErrorString(aError) {
    try {
-@@ -206,8 +207,29 @@ this.getProperty = function getProperty(
+@@ -232,8 +233,29 @@ this.getProperty = function getProperty(
   * @return Boolean
   *         Whether a safe getter was found.
   */
@@ -58,10 +58,10 @@ diff --git a/toolkit/devtools/DevToolsUtils.js b/toolkit/devtools/DevToolsUtils.
 diff --git a/toolkit/devtools/DevToolsUtils.jsm b/toolkit/devtools/DevToolsUtils.jsm
 --- a/toolkit/devtools/DevToolsUtils.jsm
 +++ b/toolkit/devtools/DevToolsUtils.jsm
-@@ -22,9 +22,10 @@ this.DevToolsUtils = {
-   safeErrorString: safeErrorString,
+@@ -23,9 +23,10 @@ this.DevToolsUtils = {
    reportException: reportException,
    makeInfallible: makeInfallible,
+   zip: zip,
    yieldingEach: yieldingEach,
    reportingDisabled: false , // Used by tests.
    defineLazyPrototypeGetter: defineLazyPrototypeGetter,
@@ -282,8 +282,8 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    try {
 +      names = aObject.getOwnPropertyNames()
 +    } catch (ex) {
-+      // Calling getOwnPropertyNames() on wrapped native prototypes is not
-+      // allowed: "cannot modify properties of a WrappedNative". See bug 560072.
++      // Calling getOwnPropertyNames() on some wrapped native prototypes is not
++      // allowed: "cannot modify properties of a WrappedNative". See bug 952093.
 +    }
 +
 +    for (let name of names) {
@@ -307,9 +307,9 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +   * @private
     * @param string aName
     *        The property that the descriptor is generated for.
-+   * @param boolean aOnlyEnumerable
-+   *        True if you want a descriptor only for an enumerable property, false
-+   *        otherwise.
++   * @param boolean [aOnlyEnumerable]
++   *        Optional: true if you want a descriptor only for an enumerable
++   *        property, false otherwise.
 +   * @return object|undefined
 +   *         The property descriptor, or undefined if this is not an enumerable
 +   *         property and aOnlyEnumerable=true.
@@ -341,7 +341,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
        enumerable: desc.enumerable
      };
  
-@@ -3228,16 +3259,589 @@ ObjectActor.prototype.requestTypes = {
+@@ -3228,16 +3259,575 @@ ObjectActor.prototype.requestTypes = {
    "ownPropertyNames": ObjectActor.prototype.onOwnPropertyNames,
    "decompile": ObjectActor.prototype.onDecompile,
    "release": ObjectActor.prototype.onRelease,
@@ -352,7 +352,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
  /**
 + * Functions for adding information to ObjectActor grips for the purpose of
 + * having customized output. This object holds arrays mapped by
-+ * DebuggerObject.class.
++ * Debugger.Object.prototype.class.
 + *
 + * In each array you can add functions that take two
 + * arguments:
@@ -390,13 +390,13 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      dumpn(e);
 +    }
 +
-+    if (userDisplayName && userDisplayName.value &&
-+        typeof userDisplayName.value == "string") {
++    if (userDisplayName && typeof userDisplayName.value == "string" &&
++        userDisplayName.value) {
 +      aGrip.userDisplayName = threadActor.createValueGrip(userDisplayName.value);
 +    }
 +
 +    return true;
-+  }], // Function
++  }],
 +
 +  RegExp: [function({obj, threadActor}, aGrip) {
 +    // Avoid having any special preview for the RegExp.prototype itself.
@@ -574,7 +574,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    }
 +
 +    return true;
-+  }, // TypedArray
++  },
 +
 +  function Error({obj, threadActor}, aGrip) {
 +    switch (obj.class) {
@@ -711,7 +711,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    }
 +
 +    return true;
-+  }, // CSSStyleDeclaration
++  },
 +
 +  function DOMNode({obj, threadActor}, aGrip, aRawObj) {
 +    if (!aRawObj || !(aRawObj instanceof Ci.nsIDOMNode)) {
@@ -726,9 +726,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +
 +    if (aRawObj instanceof Ci.nsIDOMDocument) {
 +      preview.location = threadActor.createValueGrip(aRawObj.location.href);
-+    }
-+
-+    if (aRawObj instanceof Ci.nsIDOMDocumentFragment) {
++    } else if (aRawObj instanceof Ci.nsIDOMDocumentFragment) {
 +      preview.childNodesLength = aRawObj.childNodes.length;
 +
 +      if (threadActor._gripDepth < 2) {
@@ -741,10 +739,8 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +          }
 +        }
 +      }
-+    }
-+
-+    // Add preview for DOM element attributes.
-+    if (aRawObj instanceof Ci.nsIDOMElement) {
++    } else if (aRawObj instanceof Ci.nsIDOMElement) {
++      // Add preview for DOM element attributes.
 +      if (aRawObj instanceof Ci.nsIDOMHTMLElement) {
 +        preview.nodeName = preview.nodeName.toLowerCase();
 +      }
@@ -758,14 +754,10 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +          break;
 +        }
 +      }
-+    }
-+
-+    if (aRawObj instanceof Ci.nsIDOMAttr) {
++    } else if (aRawObj instanceof Ci.nsIDOMAttr) {
 +      preview.value = threadActor.createValueGrip(aRawObj.value);
-+    }
-+
-+    if (aRawObj instanceof Ci.nsIDOMText ||
-+        aRawObj instanceof Ci.nsIDOMComment) {
++    } else if (aRawObj instanceof Ci.nsIDOMText ||
++               aRawObj instanceof Ci.nsIDOMComment) {
 +      preview.textContent = threadActor.createValueGrip(aRawObj.textContent);
 +    }
 +
@@ -791,9 +783,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    let props = [];
 +    if (aRawObj instanceof Ci.nsIDOMMouseEvent) {
 +      props.push("buttons", "clientX", "clientY", "layerX", "layerY");
-+    }
-+
-+    if (aRawObj instanceof Ci.nsIDOMKeyEvent) {
++    } else if (aRawObj instanceof Ci.nsIDOMKeyEvent) {
 +      let modifiers = [];
 +      if (aRawObj.altKey) {
 +        modifiers.push("Alt");
@@ -811,14 +801,10 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +      preview.modifiers = modifiers;
 +
 +      props.push("key", "charCode", "keyCode");
-+    }
-+
-+    if (aRawObj instanceof Ci.nsIDOMTransitionEvent ||
-+        aRawObj instanceof Ci.nsIDOMAnimationEvent) {
++    } else if (aRawObj instanceof Ci.nsIDOMTransitionEvent ||
++               aRawObj instanceof Ci.nsIDOMAnimationEvent) {
 +      props.push("animationName", "pseudoElement");
-+    }
-+
-+    if (aRawObj instanceof Ci.nsIDOMClipboardEvent) {
++    } else if (aRawObj instanceof Ci.nsIDOMClipboardEvent) {
 +      props.push("clipboardData");
 +    }
 +
@@ -894,8 +880,8 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +    try {
 +      names = obj.getOwnPropertyNames();
 +    } catch (ex) {
-+      // Calling getOwnPropertyNames() on wrapped native prototypes is not
-+      // allowed: "cannot modify properties of a WrappedNative". See bug 560072.
++      // Calling getOwnPropertyNames() on some wrapped native prototypes is not
++      // allowed: "cannot modify properties of a WrappedNative". See bug 952093.
 +    }
 +
 +    preview.ownPropertiesLength = names.length;
@@ -931,7 +917,7 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
    ObjectActor.apply(this, arguments);
  }
  
-@@ -4512,8 +5116,23 @@ function findCssSelector(ele) {
+@@ -4512,8 +5102,28 @@ function findCssSelector(ele) {
  function positionInNodeList(element, nodeList) {
    for (var i = 0; i < nodeList.length; i++) {
      if (element === nodeList[i]) {
@@ -944,6 +930,11 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
 +/**
 + * Make a debuggee value for the given object, if needed. Primitive values
 + * are left the same.
++ *
++ * Use case: you have a raw JS object (after unsafe dereference) and you want to
++ * send it to the client. In that case you need to use an ObjectActor which
++ * requires a debuggee value. The Debugger.Object.prototype.makeDebuggeeValue()
++ * method works only for JS objects and functions.
 + *
 + * @param Debugger.Object obj
 + * @param any value
