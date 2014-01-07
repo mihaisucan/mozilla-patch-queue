@@ -1,0 +1,194 @@
+# HG changeset patch
+# Parent 19a7e3bd47c31ca1a1c3197f81a6013b70960698
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1389127830 -7200
+
+Bug 952708 - console.log escapes special characters; r=vporof; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-o,mochitest-bc -t none
+
+diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
+--- a/browser/devtools/shared/widgets/VariablesView.jsm
++++ b/browser/devtools/shared/widgets/VariablesView.jsm
+@@ -3214,25 +3214,25 @@ VariablesView.getString = function(aGrip
+  */
+ VariablesView.stringifiers = {};
+ 
+ VariablesView.stringifiers.byType = {
+   string: function(aGrip, {noStringQuotes}) {
+     if (noStringQuotes) {
+       return aGrip;
+     }
+-    return uneval(aGrip);
++    return '"' + aGrip + '"';
+   },
+ 
+   longString: function({initial}, {noStringQuotes, noEllipsis}) {
+     let ellipsis = noEllipsis ? "" : Scope.ellipsis;
+     if (noStringQuotes) {
+       return initial + ellipsis;
+     }
+-    let result = uneval(initial);
++    let result = '"' + initial + '"';
+     if (!ellipsis) {
+       return result;
+     }
+     return result.substr(0, result.length - 1) + ellipsis + '"';
+   },
+ 
+   object: function(aGrip, aOptions) {
+     let {preview} = aGrip;
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+@@ -113,17 +113,17 @@ function testJSTerm(hud)
+ 
+   let output = jsterm.outputNode.querySelector(".message[category='output']");
+   ok(!output, "no output for help() calls");
+   is(openedLinks, 3, "correct number of pages opened by the help calls");
+   hud.openLink = oldOpenLink;
+ 
+   jsterm.clearOutput();
+   jsterm.execute("pprint({b:2, a:1})");
+-  checkResult("\"  b: 2\\n  a: 1\"", "pprint()");
++  checkResult("\"  b: 2\n  a: 1\"", "pprint()");
+   yield undefined;
+ 
+   // check instanceof correctness, bug 599940
+   jsterm.clearOutput();
+   jsterm.execute("[] instanceof Array");
+   checkResult("true", "[] instanceof Array == true");
+   yield undefined;
+ 
+@@ -149,17 +149,17 @@ function testJSTerm(hud)
+   jsterm.clearOutput();
+   jsterm.execute("keys(window)");
+   checkResult(null, "keys(window)");
+   yield undefined;
+ 
+   // bug 614561
+   jsterm.clearOutput();
+   jsterm.execute("pprint('hi')");
+-  checkResult("\"  0: \\\"h\\\"\\n  1: \\\"i\\\"\"", "pprint('hi')");
++  checkResult("\"  0: \"h\"\n  1: \"i\"\"", "pprint('hi')");
+   yield undefined;
+ 
+   // check that pprint(function) shows function source, bug 618344
+   jsterm.clearOutput();
+   jsterm.execute("pprint(print)");
+   checkResult(function(node) {
+     return node.textContent.indexOf("aOwner.helperResult") > -1;
+   }, "pprint(function) shows source");
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_01.js b/browser/devtools/webconsole/test/browser_webconsole_output_01.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_01.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_01.js
+@@ -17,24 +17,24 @@ DebuggerServer.LONG_STRING_INITIAL_LENGT
+ 
+ let longString = (new Array(DebuggerServer.LONG_STRING_LENGTH + 4)).join("a");
+ let initialString = longString.substring(0, DebuggerServer.LONG_STRING_INITIAL_LENGTH);
+ 
+ let inputTests = [
+   // 0
+   {
+     input: "'hello \\nfrom \\rthe \\\"string world!'",
+-    output: "\"hello \\nfrom \\rthe \\\"string world!\"",
++    output: "\"hello \nfrom \rthe \"string world!\"",
+   },
+ 
+   // 1
+   {
+     // unicode test
+     input: "'\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165'",
+-    output: "\"\\xFA\\u1E47\\u0129\\xE7\\xF6d\\xEA \\u021B\\u0115\\u0219\\u0165\"",
++    output: "\"\xFA\u1E47\u0129\xE7\xF6d\xEA \u021B\u0115\u0219\u0165\"",
+   },
+ 
+   // 2
+   {
+     input: "'" + longString + "'",
+     output: '"' + initialString + "\"[\u2026]",
+     printOutput: initialString,
+   },
+@@ -76,17 +76,17 @@ let inputTests = [
+     output: "/foobar/",
+     inspectable: true,
+   },
+ 
+   // 9
+   {
+     input: "/foo?b*\\s\"ar/igym",
+     output: "/foo?b*\\s\"ar/gimy",
+-    printOutput: "/foo?b*\\\\s\\\"ar/gimy",
++    printOutput: "/foo?b*\\s\"ar/gimy",
+     inspectable: true,
+   },
+ 
+   // 10
+   {
+     input: "null",
+     output: "null",
+   },
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_02.js b/browser/devtools/webconsole/test/browser_webconsole_output_02.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_02.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_02.js
+@@ -7,17 +7,17 @@
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console-output-02.html";
+ 
+ let inputTests = [
+   // 0 - native named function
+   {
+     input: "document.getElementById",
+     output: "function getElementById()",
+-    printOutput: "function getElementById() {\\n    [native code]\\n}",
++    printOutput: "function getElementById() {\n    [native code]\n}",
+     inspectable: true,
+     variablesViewLabel: "getElementById()",
+   },
+ 
+   // 1 - anonymous function
+   {
+     input: "(function() { return 42; })",
+     output: "function ()",
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_03.js b/browser/devtools/webconsole/test/browser_webconsole_output_03.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_03.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_03.js
+@@ -121,17 +121,17 @@ let inputTests = [
+     printOutput: "[object HTMLBodyElement]",
+     inspectable: true,
+     noClick: true,
+   },
+ 
+   // 13
+   {
+     input: "document.body.dataset",
+-    output: 'DOMStringMap {preview: "zuzu\\"<a>foo"}',
++    output: 'DOMStringMap {preview: "zuzu"<a>foo"}',
+     printOutput: "[object DOMStringMap]",
+     inspectable: true,
+     variablesViewLabel: "DOMStringMap[1]",
+   },
+ 
+   // 14
+   {
+     input: "document.body.attributes",
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_04.js b/browser/devtools/webconsole/test/browser_webconsole_output_04.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_04.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_04.js
+@@ -45,17 +45,17 @@ let inputTests = [
+     inspectable: true,
+     variablesViewLabel: "TypeError",
+   },
+ 
+   // 4
+   {
+     input: "testDOMException()",
+     output: 'DOMException [SyntaxError: "An invalid or illegal string was specified"',
+-    printOutput: '[Exception... \\"An invalid or illegal string was specified\\"',
++    printOutput: '[Exception... "An invalid or illegal string was specified"',
+     inspectable: true,
+     variablesViewLabel: "SyntaxError",
+   },
+ 
+   // 5
+   {
+     input: "testCSSStyleDeclaration()",
+     output: 'CSS2Properties {color: "green", font-size: "2em"}',
