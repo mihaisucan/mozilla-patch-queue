@@ -1,0 +1,310 @@
+# HG changeset patch
+# Parent 125b24bb78d9cdef5821e4b9f1bddf547f231d89
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1389282934 -7200
+
+Bug 917227 - Network monitor doesn't work with Firefox OS
+
+diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/server/actors/childtab.js
+--- a/toolkit/devtools/server/actors/childtab.js
++++ b/toolkit/devtools/server/actors/childtab.js
+@@ -14,20 +14,23 @@
+  * Creates a tab actor for handling requests to the single tab, like
+  * attaching and detaching. ContentAppActor respects the actor factories
+  * registered with DebuggerServer.addTabActor.
+  *
+  * @param connection DebuggerServerConnection
+  *        The conection to the client.
+  * @param browser browser
+  *        The browser instance that contains this tab.
++ * @param number appId
++ *        The web application ID for the content app actor.
+  */
+-function ContentAppActor(connection, browser)
++function ContentAppActor(connection, browser, appId)
+ {
+   BrowserTabActor.call(this, connection, browser);
++  this.appId = appId;
+ }
+ 
+ ContentAppActor.prototype = Object.create(BrowserTabActor.prototype);
+ 
+ ContentAppActor.prototype.constructor = ContentAppActor;
+ 
+ Object.defineProperty(ContentAppActor.prototype, "title", {
+   get: function() {
+diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
+--- a/toolkit/devtools/server/actors/webconsole.js
++++ b/toolkit/devtools/server/actors/webconsole.js
+@@ -31,31 +31,38 @@ for (let name of ["WebConsoleUtils", "Co
+       }
+       return devtools.require("devtools/toolkit/webconsole/utils")[prop];
+     }.bind(null, name),
+     configurable: true,
+     enumerable: true
+   });
+ }
+ 
++function log() {
++  if ("console" in this) {
++    console.log.apply(console, arguments);
++  }
++  dump(Array.join(arguments, " ") + "\n");
++}
+ 
+ /**
+  * The WebConsoleActor implements capabilities needed for the Web Console
+  * feature.
+  *
+  * @constructor
+  * @param object aConnection
+  *        The connection to the client, DebuggerServerConnection.
+  * @param object [aParentActor]
+  *        Optional, the parent actor.
+  */
+ function WebConsoleActor(aConnection, aParentActor)
+ {
+   this.conn = aConnection;
+   this.parentActor = aParentActor;
++  log("WebConsoleActor constructor", this.conn, this.parentActor, "parent actor ID", this.parentActor.actorID, "appId", this.parentActor.appId);
+ 
+   this._actorPool = new ActorPool(this.conn);
+   this.conn.addActorPool(this._actorPool);
+ 
+   this._prefs = {};
+ 
+   this.dbg = new Debugger();
+ 
+@@ -451,16 +458,25 @@ WebConsoleActor.prototype =
+    *        The JSON request object received from the Web Console client.
+    * @return object
+    *         The response object which holds the startedListeners array.
+    */
+   onStartListeners: function WCA_onStartListeners(aRequest)
+   {
+     let startedListeners = [];
+     let window = !this.parentActor.isRootActor ? this.window : null;
++    let appId = null;
++
++    if ("ContentAppActor" in DebuggerServer &&
++        this.parentActor instanceof DebuggerServer.ContentAppActor) {
++      // Filter network requests by appId on Firefox OS devices.
++      appId = this.parentActor.appId;
++      window = null;
++    }
++    log("WCA_onStartListeners window " + window, "appId", appId);
+ 
+     while (aRequest.listeners.length > 0) {
+       let listener = aRequest.listeners.shift();
+       switch (listener) {
+         case "PageError":
+           if (!this.consoleServiceListener) {
+             this.consoleServiceListener =
+               new ConsoleServiceListener(window, this);
+@@ -474,17 +490,17 @@ WebConsoleActor.prototype =
+               new ConsoleAPIListener(window, this);
+             this.consoleAPIListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "NetworkActivity":
+           if (!this.networkMonitor) {
+             this.networkMonitor =
+-              new NetworkMonitor(window, this);
++              new NetworkMonitor(window, appId, this);
+             this.networkMonitor.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "FileActivity":
+           if (!this.consoleProgressListener) {
+             this.consoleProgressListener =
+               new ConsoleProgressListener(this.window, this);
+diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
+--- a/toolkit/devtools/server/child.js
++++ b/toolkit/devtools/server/child.js
+@@ -15,17 +15,17 @@ let onConnect = DevToolsUtils.makeInfall
+   removeMessageListener("debug:connect", onConnect);
+ 
+   let mm = msg.target;
+ 
+   let prefix = msg.data.prefix + docShell.appId;
+ 
+   let conn = DebuggerServer.connectToParent(prefix, mm);
+ 
+-  let actor = new DebuggerServer.ContentAppActor(conn, content);
++  let actor = new DebuggerServer.ContentAppActor(conn, content, docShell.appId);
+   let actorPool = new ActorPool(conn);
+   actorPool.addActor(actor);
+   conn.addActorPool(actorPool);
+ 
+   sendAsyncMessage("debug:actor", {actor: actor.grip(),
+                                    appId: docShell.appId,
+                                    prefix: prefix});
+ });
+diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/webconsole/network-helper.js
+--- a/toolkit/devtools/webconsole/network-helper.js
++++ b/toolkit/devtools/webconsole/network-helper.js
+@@ -184,16 +184,28 @@ let NetworkHelper = {
+ 
+         return this.readAndConvertFromStream(descriptor, aCharset);
+       }
+     }
+     return null;
+   },
+ 
+   /**
++   * Gets the web appId that is associated with aRequest.
++   *
++   * @param nsIHttpChannel aRequest
++   * @returns number
++   *          The appId for the given request.
++   */
++  getAppIdForRequest: function NH_getAppIdForRequest(aRequest)
++  {
++    return this.getRequestLoadContext(aRequest).appId;
++  },
++
++  /**
+    * Gets the nsIDOMWindow that is associated with aRequest.
+    *
+    * @param nsIHttpChannel aRequest
+    * @returns nsIDOMWindow or null
+    */
+   getWindowForRequest: function NH_getWindowForRequest(aRequest)
+   {
+     try {
+diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
+--- a/toolkit/devtools/webconsole/utils.js
++++ b/toolkit/devtools/webconsole/utils.js
+@@ -21,16 +21,21 @@ loader.lazyServiceGetter(this, "gActivit
+ 
+ // TODO: Bug 842672 - toolkit/ imports modules from browser/.
+ // Note that these are only used in JSTermHelpers, see $0 and pprint().
+ loader.lazyImporter(this, "gDevTools", "resource:///modules/devtools/gDevTools.jsm");
+ loader.lazyImporter(this, "devtools", "resource://gre/modules/devtools/Loader.jsm");
+ loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
+ loader.lazyImporter(this, "DevToolsUtils", "resource://gre/modules/devtools/DevToolsUtils.jsm");
+ 
++function log() {
++  console.log.apply(console, arguments);
++  dump(Array.join(arguments, " ") + "\n");
++}
++
+ // Match the function name from the result of toString() or toSource().
+ //
+ // Examples:
+ // (function foobar(a, b) { ...
+ // function foobar2(a) { ...
+ // function() { ...
+ const REGEX_MATCH_FUNCTION_NAME = /^\(?function\s+([^(\s]+)\s*\(/;
+ 
+@@ -1890,35 +1895,38 @@ NetworkResponseListener.prototype = {
+ /**
+  * The network monitor uses the nsIHttpActivityDistributor to monitor network
+  * requests. The nsIObserverService is also used for monitoring
+  * http-on-examine-response notifications. All network request information is
+  * routed to the remote Web Console.
+  *
+  * @constructor
+  * @param nsIDOMWindow aWindow
+- *        Optional, the window that we monitor network requests for. If no
+- *        window is given, all browser network requests are logged.
++ *        Optional, filter network requests by the associated window object.
++ * @param number aAppId
++ *        Optional, filter network requests by the associated web app ID.
+  * @param object aOwner
+  *        The network monitor owner. This object needs to hold:
+  *        - onNetworkEvent(aRequestInfo, aChannel). This method is invoked once for
+  *        every new network request and it is given two arguments: the initial network
+  *        request information, and the channel. onNetworkEvent() must return an object
+  *        which holds several add*() methods which are used to add further network
+  *        request/response information.
+  *        - saveRequestAndResponseBodies property which tells if you want to log
+  *        request and response bodies.
+  */
+-function NetworkMonitor(aWindow, aOwner)
++function NetworkMonitor(aWindow, aAppId, aOwner)
+ {
+   this.window = aWindow;
++  this.appId = aAppId;
+   this.owner = aOwner;
+   this.openRequests = {};
+   this.openResponses = {};
+   this._httpResponseExaminer = this._httpResponseExaminer.bind(this);
++  log("NetworkMonitor constructor window " + this.window, "appId", this.appId);
+ }
+ 
+ NetworkMonitor.prototype = {
+   httpTransactionCodes: {
+     0x5001: "REQUEST_HEADER",
+     0x5002: "REQUEST_BODY_SENT",
+     0x5003: "RESPONSE_START",
+     0x5004: "RESPONSE_HEADER",
+@@ -1989,22 +1997,35 @@ NetworkMonitor.prototype = {
+     // NetworkResponseListener is responsible with updating the httpActivity
+     // object with the data from the new object in openResponses.
+ 
+     if (!this.owner || aTopic != "http-on-examine-response" ||
+         !(aSubject instanceof Ci.nsIHttpChannel)) {
+       return;
+     }
+ 
++    log("NM__httpResponseExaminer start");
+     let channel = aSubject.QueryInterface(Ci.nsIHttpChannel);
+ 
+     if (this.window) {
+       // Try to get the source window of the request.
+       let win = NetworkHelper.getWindowForRequest(channel);
++      log("NM__httpResponseExaminer getWindowForRequest() result " + win);
+       if (!win || win.top !== this.window) {
++        log("NM__httpResponseExaminer window does not match");
++        return;
++      }
++    }
++
++    if (this.appId) {
++      // Try to get the source appId of the request.
++      let appId = NetworkHelper.getAppIdForRequest(channel);
++      log("NM__httpResponseExaminer getAppIdForRequest() result", appId);
++      if (!appId || appId !== this.appId) {
++        log("NM__httpResponseExaminer appId does not match");
+         return;
+       }
+     }
+ 
+     let response = {
+       id: gSequenceId(),
+       channel: channel,
+       headers: [],
+@@ -2139,19 +2160,30 @@ NetworkMonitor.prototype = {
+    */
+   _onRequestHeader:
+   function NM__onRequestHeader(aChannel, aTimestamp, aExtraStringData)
+   {
+     let win = NetworkHelper.getWindowForRequest(aChannel);
+ 
+     // Try to get the source window of the request.
+     if (this.window && (!win || win.top !== this.window)) {
++      log("NM__onRequestHeader window does not match");
+       return;
+     }
+ 
++    if (this.appId) {
++      // Try to get the source appId of the request.
++      let appId = NetworkHelper.getAppIdForRequest(channel);
++      log("NM__onRequestHeader getAppIdForRequest() result", appId);
++      if (!appId || appId !== this.appId) {
++        log("NM__onRequestHeader appId does not match");
++        return;
++      }
++    }
++
+     let httpActivity = this.createActivityObject(aChannel);
+ 
+     // see NM__onRequestBodySent()
+     httpActivity.charset = win ? win.document.characterSet : null;
+     httpActivity.private = win ? PrivateBrowsingUtils.isWindowPrivate(win) : false;
+ 
+     httpActivity.timings.REQUEST_HEADER = {
+       first: aTimestamp,

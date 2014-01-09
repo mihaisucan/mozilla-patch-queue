@@ -1,0 +1,77 @@
+# HG changeset patch
+# Parent f2ccc53b8b645ad2f695a871d47f0b0aa0c25ec9
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1389303657 -7200
+
+diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
+--- a/toolkit/devtools/server/actors/webconsole.js
++++ b/toolkit/devtools/server/actors/webconsole.js
+@@ -465,17 +465,24 @@ WebConsoleActor.prototype =
+     let window = !this.parentActor.isRootActor ? this.window : null;
+     let appId = null;
+ 
+     if ("ContentAppActor" in DebuggerServer &&
+         this.parentActor instanceof DebuggerServer.ContentAppActor) {
+       // Filter network requests by appId on Firefox OS devices.
+       appId = this.parentActor.appId;
+       window = null;
++      ne
+     }
++
++    let netmon = NetworkMonitor.bind(window, null, this);
++    if (appId) {
++      netmon = DebuggerServer.NetworkMonitorChild(appId, this);
++    }
++
+     log("WCA_onStartListeners window " + window, "appId", appId);
+ 
+     while (aRequest.listeners.length > 0) {
+       let listener = aRequest.listeners.shift();
+       switch (listener) {
+         case "PageError":
+           if (!this.consoleServiceListener) {
+             this.consoleServiceListener =
+@@ -489,18 +496,17 @@ WebConsoleActor.prototype =
+             this.consoleAPIListener =
+               new ConsoleAPIListener(window, this);
+             this.consoleAPIListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "NetworkActivity":
+           if (!this.networkMonitor) {
+-            this.networkMonitor =
+-              new NetworkMonitor(window, appId, this);
++            this.networkMonitor = new netmon();
+             this.networkMonitor.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "FileActivity":
+           if (!this.consoleProgressListener) {
+             this.consoleProgressListener =
+               new ConsoleProgressListener(this.window, this);
+diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
+--- a/toolkit/devtools/server/child.js
++++ b/toolkit/devtools/server/child.js
+@@ -26,8 +26,20 @@ let onConnect = DevToolsUtils.makeInfall
+   conn.addActorPool(actorPool);
+ 
+   sendAsyncMessage("debug:actor", {actor: actor.grip(),
+                                    appId: docShell.appId,
+                                    prefix: prefix});
+ });
+ 
+ addMessageListener("debug:connect", onConnect);
++
++DebuggerServer.NetworkMonitorChild = function(appId, owner) {
++  this.appId = appId;
++  this.owner = owner;
++};
++
++DebuggerServer.NetworkMonitorChild.prototype = {
++  init: function() {
++  },
++  destroy: function() {
++  }
++};
