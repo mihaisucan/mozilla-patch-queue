@@ -1,0 +1,209 @@
+# HG changeset patch
+# Parent 155f0898e8317d9e55199c06e2a2b628a8ef0933
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1389888488 -7200
+
+Bug 945489 - Fix for intermittent browser_webconsole_bug_642615_autocomplete.js | Timed out while waiting for: completion value for 'docu'; r=me; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_642615_autocomplete.js
+@@ -30,72 +30,57 @@ function consoleOpened(HUD) {
+       function() {
+         clipboardHelper.copyString(stringToCopy, document);
+       },
+       onClipboardCopy,
+       finishTest);
+   }
+ 
+   function onClipboardCopy() {
++    info("wait for completion update after clipboard paste");
++    jsterm.once("autocomplete-updated", onClipboardPaste);
++
+     updateEditUIVisibility();
+     goDoCommand("cmd_paste");
+-
+-    waitForSuccess(waitForPaste);
+   }
+ 
+-  let waitForPaste = {
+-    name: "no completion value after paste",
+-    validatorFn: function()
+-    {
+-      return !jsterm.completeNode.value;
+-    },
+-    successFn: onClipboardPaste,
+-    failureFn: finishTest,
+-  };
++  function onClipboardPaste() {
++    ok(!jsterm.completeNode.value, "no completion value after paste");
+ 
+-  function onClipboardPaste() {
+-    goDoCommand("cmd_undo");
+-    waitForSuccess({
+-      name: "completion value for 'docu' after undo",
+-      validatorFn: function()
+-      {
+-        return !!jsterm.completeNode.value;
+-      },
+-      successFn: onCompletionValueAfterUndo,
+-      failureFn: finishTest,
++    info("wait for completion update after undo");
++    jsterm.once("autocomplete-updated", onCompletionValueAfterUndo);
++
++    // Get out of the webconsole event loop.
++    executeSoon(() => {
++      goDoCommand("cmd_undo");
+     });
+   }
+ 
+   function onCompletionValueAfterUndo() {
+     is(jsterm.completeNode.value, completionValue,
+        "same completeNode.value after undo");
+ 
+-    EventUtils.synthesizeKey("v", {accelKey: true});
+-    waitForSuccess({
+-      name: "no completion after ctrl-v (paste)",
+-      validatorFn: function()
+-      {
+-        return !jsterm.completeNode.value;
+-      },
+-      successFn: finishTest,
+-      failureFn: finishTest,
++    info("wait for completion update after clipboard paste (ctrl-v)");
++    jsterm.once("autocomplete-updated", () => {
++      ok(!jsterm.completeNode.value, "no completion value after paste (ctrl-v)");
++
++      // using executeSoon() to get out of the webconsole event loop.
++      executeSoon(finishTest);
++    });
++
++    // Get out of the webconsole event loop.
++    executeSoon(() => {
++      EventUtils.synthesizeKey("v", {accelKey: true});
+     });
+   }
+ 
++  info("wait for completion value after typing 'docu'");
++  jsterm.once("autocomplete-updated", onCompletionValue);
++
+   EventUtils.synthesizeKey("u", {});
+-
+-  waitForSuccess({
+-    name: "completion value for 'docu'",
+-    validatorFn: function()
+-    {
+-      return !!jsterm.completeNode.value;
+-    },
+-    successFn: onCompletionValue,
+-    failureFn: finishTest,
+-  });
+ }
+ 
+ function test() {
+   addTab(TEST_URI);
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+     openConsole(null, consoleOpened);
+   }, true);
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -4073,22 +4073,26 @@ JSTerm.prototype = {
+   {
+     let inputNode = this.inputNode;
+     let inputValue = inputNode.value;
+     let frameActor = this.getFrameActor(this.SELECTED_FRAME);
+ 
+     // If the inputNode has no value, then don't try to complete on it.
+     if (!inputValue) {
+       this.clearCompletion();
++      aCallback && aCallback(this);
++      this.emit("autocomplete-updated");
+       return false;
+     }
+ 
+     // Only complete if the selection is empty.
+     if (inputNode.selectionStart != inputNode.selectionEnd) {
+       this.clearCompletion();
++      aCallback && aCallback(this);
++      this.emit("autocomplete-updated");
+       return false;
+     }
+ 
+     // Update the completion results.
+     if (this.lastCompletion.value != inputValue || frameActor != this._lastFrameActorId) {
+       this._updateCompletionResult(aType, aCallback);
+       return false;
+     }
+@@ -4103,16 +4107,17 @@ JSTerm.prototype = {
+     else if (aType == this.COMPLETE_BACKWARD) {
+       popup.selectPreviousItem();
+     }
+     else if (aType == this.COMPLETE_FORWARD) {
+       popup.selectNextItem();
+     }
+ 
+     aCallback && aCallback(this);
++    this.emit("autocomplete-updated");
+     return accepted || popup.itemCount > 0;
+   },
+ 
+   /**
+    * Update the completion result. This operation is performed asynchronously by
+    * fetching updated results from the content process.
+    *
+    * @private
+@@ -4201,30 +4206,31 @@ JSTerm.prototype = {
+   function JST__receiveAutocompleteProperties(aRequestId, aCallback, aMessage)
+   {
+     let inputNode = this.inputNode;
+     let inputValue = inputNode.value;
+     if (this.lastCompletion.value == inputValue ||
+         aRequestId != this.lastCompletion.requestId) {
+       return;
+     }
+-
+     // Cache whatever came from the server if the last char is alphanumeric or '.'
+     let cursor = inputNode.selectionStart;
+     let inputUntilCursor = inputValue.substring(0, cursor);
+ 
+     if (aRequestId != null && /[a-zA-Z0-9.]$/.test(inputUntilCursor)) {
+       this._autocompleteCache = aMessage.matches;
+       this._autocompleteQuery = inputUntilCursor;
+     }
+ 
+     let matches = aMessage.matches;
+     let lastPart = aMessage.matchProp;
+     if (!matches.length) {
+       this.clearCompletion();
++      aCallback && aCallback(this);
++      this.emit("autocomplete-updated");
+       return;
+     }
+ 
+     let items = matches.reverse().map(function(aMatch) {
+       return { preLabel: lastPart, label: aMatch };
+     });
+ 
+     let popup = this.autocompletePopup;
+@@ -4259,18 +4265,18 @@ JSTerm.prototype = {
+     }
+     else if (completionType == this.COMPLETE_BACKWARD) {
+       popup.selectPreviousItem();
+     }
+     else if (completionType == this.COMPLETE_FORWARD) {
+       popup.selectNextItem();
+     }
+ 
++    aCallback && aCallback(this);
+     this.emit("autocomplete-updated");
+-    aCallback && aCallback(this);
+   },
+ 
+   onAutocompleteSelect: function JSTF_onAutocompleteSelect()
+   {
+     // Render the suggestion only if the cursor is at the end of the input.
+     if (this.inputNode.selectionStart != this.inputNode.value.length) {
+       return;
+     }

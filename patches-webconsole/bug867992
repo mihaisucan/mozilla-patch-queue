@@ -1,0 +1,85 @@
+# HG changeset patch
+# Parent 647072336c9e4f5f1e3d876eda5fb0345b537728
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1389876237 -7200
+
+Bug 867992 - Fix for intermittent browser_webconsole_bug_630733_response_redirect_headers.js | Timed out while waiting for: 301 and 404 responses; r=me; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser.ini b/browser/devtools/webconsole/test/browser.ini
+--- a/browser/devtools/webconsole/test/browser.ini
++++ b/browser/devtools/webconsole/test/browser.ini
+@@ -187,17 +187,16 @@ skip-if = os == "linux" # Intermittent f
+ [browser_webconsole_bug_614793_jsterm_scroll.js]
+ [browser_webconsole_bug_618078_network_exceptions.js]
+ [browser_webconsole_bug_618311_close_panels.js]
+ [browser_webconsole_bug_621644_jsterm_dollar.js]
+ [browser_webconsole_bug_622303_persistent_filters.js]
+ [browser_webconsole_bug_623749_ctrl_a_select_all_winnt.js]
+ run-if = os == "win"
+ [browser_webconsole_bug_630733_response_redirect_headers.js]
+-skip-if = os == "linux" # Intermittent failures, bug 867992
+ [browser_webconsole_bug_632275_getters_document_width.js]
+ [browser_webconsole_bug_632347_iterators_generators.js]
+ [browser_webconsole_bug_632817.js]
+ [browser_webconsole_bug_642108_pruneTest.js]
+ [browser_webconsole_bug_642615_autocomplete.js]
+ [browser_webconsole_bug_644419_log_limits.js]
+ [browser_webconsole_bug_646025_console_file_location.js]
+ [browser_webconsole_bug_651501_document_body_autocomplete.js]
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_630733_response_redirect_headers.js
+@@ -7,44 +7,36 @@
+  *   Mihai Sucan <mihai.sucan@gmail.com>
+  */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-630733-response-redirect-headers.sjs";
+ 
+ let lastFinishedRequests = {};
+ let webConsoleClient;
+ 
+-function requestDoneCallback(aHttpRequest )
+-{
+-  let status = aHttpRequest.response.status;
+-  lastFinishedRequests[status] = aHttpRequest;
+-}
+-
+ function consoleOpened(hud)
+ {
+   webConsoleClient = hud.ui.webConsoleClient;
+   hud.ui.setSaveRequestAndResponseBodies(true).then(() => {
+     ok(hud.ui._saveRequestAndResponseBodies,
+       "The saveRequestAndResponseBodies property was successfully set.");
+ 
+     HUDService.lastFinishedRequest.callback = requestDoneCallback;
+-    waitForSuccess(waitForResponses);
+     content.location = TEST_URI;
+   });
++}
+ 
+-  let waitForResponses = {
+-    name: "301 and 404 responses",
+-    validatorFn: function()
+-    {
+-      return "301" in lastFinishedRequests &&
+-             "404" in lastFinishedRequests;
+-    },
+-    successFn: getHeaders,
+-    failureFn: finishTest,
+-  };
++function requestDoneCallback(aHttpRequest)
++{
++  let status = aHttpRequest.response.status;
++  lastFinishedRequests[status] = aHttpRequest;
++  if ("301" in lastFinishedRequests &&
++      "404" in lastFinishedRequests) {
++    getHeaders();
++  }
+ }
+ 
+ function getHeaders()
+ {
+   HUDService.lastFinishedRequest.callback = null;
+ 
+   ok("301" in lastFinishedRequests, "request 1: 301 Moved Permanently");
+   ok("404" in lastFinishedRequests, "request 2: 404 Not found");

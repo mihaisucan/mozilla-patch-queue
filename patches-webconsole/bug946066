@@ -1,0 +1,233 @@
+# HG changeset patch
+# Parent c2593732429980a503552b7b07af00f6d3e20a25
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1389892821 -7200
+
+Bug 946066 - Fix for intermittent browser_webconsole_bug_658368_time_methods.js | Timed out while waiting for: bTimer (or aTimer) started; r=me; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js b/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_658368_time_methods.js
+@@ -6,96 +6,82 @@
+ 
+ // Tests that the Console API implements the time() and timeEnd() methods.
+ 
+ function test() {
+   addTab("http://example.com/browser/browser/devtools/webconsole/" +
+          "test/test-bug-658368-time-methods.html");
+   browser.addEventListener("load", function onLoad() {
+     browser.removeEventListener("load", onLoad, true);
+-    openConsole(null, consoleOpened);
++    Task.spawn(runner);
+   }, true);
+-}
+ 
+-function consoleOpened(hud) {
+-  outputNode = hud.outputNode;
++  function* runner() {
++    let hud1 = yield openConsole();
+ 
+-  waitForSuccess({
+-    name: "aTimer started",
+-    validatorFn: function()
+-    {
+-      return outputNode.textContent.indexOf("aTimer: timer started") > -1;
+-    },
+-    successFn: function()
+-    {
+-      findLogEntry("ms");
+-      // The next test makes sure that timers with the same name but in separate
+-      // tabs, do not contain the same value.
+-      addTab("data:text/html;charset=utf-8,<script type='text/javascript'>" +
+-             "console.timeEnd('bTimer');</script>");
+-      browser.addEventListener("load", function onLoad() {
+-        browser.removeEventListener("load", onLoad, true);
+-        openConsole(null, testTimerIndependenceInTabs);
+-      }, true);
+-    },
+-    failureFn: finishTest,
+-  });
+-}
++    yield waitForMessages({
++      webconsole: hud1,
++      messages: [{
++        name: "aTimer started",
++        consoleTime: "aTimer",
++      }, {
++        name: "aTimer end",
++        consoleTimeEnd: "aTimer",
++      }],
++    });
+ 
+-function testTimerIndependenceInTabs(hud) {
+-  outputNode = hud.outputNode;
++    let deferred = promise.defer();
+ 
+-  executeSoon(function() {
+-    testLogEntry(outputNode, "bTimer: timer started", "bTimer was not started",
+-                 false, true);
++    // The next test makes sure that timers with the same name but in separate
++    // tabs, do not contain the same value.
++    addTab("data:text/html;charset=utf-8,<script>" +
++           "console.timeEnd('bTimer');</script>");
++    browser.addEventListener("load", function onLoad() {
++      browser.removeEventListener("load", onLoad, true);
++      openConsole().then((hud) => {
++        deferred.resolve(hud);
++      });
++    }, true);
++
++    let hud2 = yield deferred.promise;
++
++    testLogEntry(hud2.outputNode, "bTimer: timer started",
++                 "bTimer was not started", false, true);
+ 
+     // The next test makes sure that timers with the same name but in separate
+     // pages, do not contain the same value.
++    content.location = "data:text/html;charset=utf-8,<script>" +
++                       "console.time('bTimer');</script>";
++
++    yield waitForMessages({
++      webconsole: hud2,
++      messages: [{
++        name: "bTimer started",
++        consoleTime: "bTimer",
++      }],
++    });
++
++    hud2.jsterm.clearOutput();
++
++    deferred = promise.defer();
++
++    // Now the following console.timeEnd() call shouldn't display anything,
++    // if the timers in different pages are not related.
+     browser.addEventListener("load", function onLoad() {
+       browser.removeEventListener("load", onLoad, true);
+-      executeSoon(testTimerIndependenceInSameTab);
++      deferred.resolve(null);
+     }, true);
+-    content.location = "data:text/html;charset=utf-8,<script type='text/javascript'>" +
+-           "console.time('bTimer');</script>";
+-  });
++
++    content.location = "data:text/html;charset=utf-8," +
++                       "<script>console.timeEnd('bTimer');</script>";
++
++    yield deferred.promise;
++
++    testLogEntry(hud2.outputNode, "bTimer: timer started",
++                 "bTimer was not started", false, true);
++
++    yield closeConsole(gBrowser.selectedTab);
++
++    gBrowser.removeCurrentTab();
++
++    executeSoon(finishTest);
++  }
+ }
+-
+-function testTimerIndependenceInSameTab() {
+-  let hud = HUDService.getHudByWindow(content);
+-  outputNode = hud.outputNode;
+-
+-  waitForSuccess({
+-    name: "bTimer started",
+-    validatorFn: function()
+-    {
+-      return outputNode.textContent.indexOf("bTimer: timer started") > -1;
+-    },
+-    successFn: function() {
+-      hud.jsterm.clearOutput();
+-
+-      // Now the following console.timeEnd() call shouldn't display anything,
+-      // if the timers in different pages are not related.
+-      browser.addEventListener("load", function onLoad() {
+-        browser.removeEventListener("load", onLoad, true);
+-        executeSoon(testTimerIndependenceInSameTabAgain);
+-      }, true);
+-      content.location = "data:text/html;charset=utf-8," +
+-        "<script type='text/javascript'>" +
+-        "console.timeEnd('bTimer');</script>";
+-    },
+-    failureFn: finishTest,
+-  });
+-}
+-
+-function testTimerIndependenceInSameTabAgain() {
+-  let hud = HUDService.getHudByWindow(content);
+-  outputNode = hud.outputNode;
+-
+-  executeSoon(function() {
+-    testLogEntry(outputNode, "bTimer: timer started", "bTimer was not started",
+-                 false, true);
+-
+-    closeConsole(gBrowser.selectedTab, function() {
+-      gBrowser.removeCurrentTab();
+-      executeSoon(finishTest);
+-    });
+-  });
+-}
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -172,34 +172,34 @@ function openConsole(aTab, aCallback = f
+  * Close the Web Console for the given tab.
+  *
+  * @param nsIDOMElement [aTab]
+  *        Optional tab element for which you want close the Web Console. The
+  *        default tab is taken from the global variable |tab|.
+  * @param function [aCallback]
+  *        Optional function to invoke after the Web Console completes
+  *        closing (web-console-destroyed).
++ * @return object
++ *         A promise that is resolved once the web console is closed.
+  */
+ function closeConsole(aTab, aCallback = function() { })
+ {
+   let target = TargetFactory.forTab(aTab || tab);
+   let toolbox = gDevTools.getToolbox(target);
+   if (toolbox) {
+     let panel = toolbox.getPanel("webconsole");
+     if (panel) {
+       let hudId = panel.hud.hudId;
+-      toolbox.destroy().then(aCallback.bind(null, hudId)).then(null, console.debug);
++      return toolbox.destroy().then(aCallback.bind(null, hudId)).then(null, console.debug);
+     }
+-    else {
+-      toolbox.destroy().then(aCallback.bind(null));
+-    }
++    return toolbox.destroy().then(aCallback.bind(null));
+   }
+-  else {
+-    aCallback();
+-  }
++
++  aCallback();
++  return promise.resolve(null);
+ }
+ 
+ /**
+  * Wait for a context menu popup to open.
+  *
+  * @param nsIDOMElement aPopup
+  *        The XUL popup you expect to open.
+  * @param nsIDOMElement aButton
+@@ -974,17 +974,17 @@ function waitForMessages(aOptions)
+ 
+     return true;
+   }
+ 
+   function checkConsoleTimeEnd(aRule, aElement)
+   {
+     let elemText = aElement.textContent;
+     let time = aRule.consoleTimeEnd;
+-    let regex = new RegExp(time + ": -?\\d+ms");
++    let regex = new RegExp(time + ": -?\\d+([,.]\\d+)?ms");
+ 
+     if (!checkText(regex, elemText)) {
+       return false;
+     }
+ 
+     aRule.category = CATEGORY_WEBDEV;
+     aRule.severity = SEVERITY_LOG;
+ 
