@@ -1,0 +1,122 @@
+# HG changeset patch
+# Parent 1eed783d9a6f7383f55f95120742ba53bcdf5486
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1389984335 -7200
+
+Bug 952865 - Fix for intermittent browser_console.js | Timed out while waiting for: messages displayed | jsterm eval result is displayed - Didn't expect -1, but got it; r=me; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/webconsole/test/browser.ini b/browser/devtools/webconsole/test/browser.ini
+--- a/browser/devtools/webconsole/test/browser.ini
++++ b/browser/devtools/webconsole/test/browser.ini
+@@ -108,17 +108,16 @@ support-files =
+ [browser_bug_638949_copy_link_location.js]
+ [browser_bug_862916_console_dir_and_filter_off.js]
+ [browser_bug_865288_repeat_different_objects.js]
+ [browser_bug_865871_variables_view_close_on_esc_key.js]
+ [browser_bug_869003_inspect_cross_domain_object.js]
+ [browser_bug_871156_ctrlw_close_tab.js]
+ [browser_cached_messages.js]
+ [browser_console.js]
+-skip-if = os == "linux" # Intermittent failures, bug 952865
+ [browser_console_addonsdk_loader_exception.js]
+ [browser_console_clear_on_reload.js]
+ [browser_console_consolejsm_output.js]
+ [browser_console_dead_objects.js]
+ [browser_console_error_source_click.js]
+ [browser_console_filters.js]
+ [browser_console_iframe_messages.js]
+ [browser_console_keyboard_accessibility.js]
+diff --git a/browser/devtools/webconsole/test/browser_console.js b/browser/devtools/webconsole/test/browser_console.js
+--- a/browser/devtools/webconsole/test/browser_console.js
++++ b/browser/devtools/webconsole/test/browser_console.js
+@@ -45,55 +45,44 @@ function consoleOpened(hud)
+   hud.jsterm.execute("document.location.href");
+ 
+   // Check for network requests.
+   let xhr = new XMLHttpRequest();
+   xhr.onload = () => console.log("xhr loaded, status is: " + xhr.status);
+   xhr.open("get", TEST_URI, true);
+   xhr.send();
+ 
+-  let chromeConsole = -1;
+-  let contentConsole = -1;
+-  let execValue = -1;
+-  let exception = -1;
+-  let xhrRequest = false;
+-
+-  let output = hud.outputNode;
+-  function performChecks()
+-  {
+-    let text = output.textContent;
+-    chromeConsole = text.indexOf("bug587757a");
+-    contentConsole = text.indexOf("bug587757b");
+-    execValue = text.indexOf("browser.xul");
+-    exception = text.indexOf("foobarExceptionBug587757");
+-    xhrRequest = text.indexOf("test-console.html");
+-  }
+-
+-  function showResults()
+-  {
+-    isnot(chromeConsole, -1, "chrome window console.log() is displayed");
+-    isnot(contentConsole, -1, "content window console.log() is displayed");
+-    isnot(execValue, -1, "jsterm eval result is displayed");
+-    isnot(exception, -1, "exception is displayed");
+-    isnot(xhrRequest, -1, "xhr request is displayed");
+-  }
+-
+-  waitForSuccess({
+-    name: "messages displayed",
+-    validatorFn: () => {
+-      performChecks();
+-      return chromeConsole > -1 &&
+-             contentConsole > -1 &&
+-             execValue > -1 &&
+-             exception > -1 &&
+-             xhrRequest > -1;
+-    },
+-    successFn: () => {
+-      showResults();
+-      executeSoon(finishTest);
+-    },
+-    failureFn: () => {
+-      showResults();
+-      info("output: " + output.textContent);
+-      executeSoon(finishTest);
+-    },
+-  });
++  waitForMessages({
++    webconsole: hud,
++    messages: [
++      {
++        name: "chrome window console.log() is displayed",
++        text: "bug587757a",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++      },
++      {
++        name: "content window console.log() is displayed",
++        text: "bug587757b",
++        category: CATEGORY_WEBDEV,
++        severity: SEVERITY_LOG,
++      },
++      {
++        name: "jsterm eval result",
++        text: "browser.xul",
++        category: CATEGORY_OUTPUT,
++        severity: SEVERITY_LOG,
++      },
++      {
++        name: "exception message",
++        text: "foobarExceptionBug587757",
++        category: CATEGORY_JS,
++        severity: SEVERITY_ERROR,
++      },
++      {
++        name: "network message",
++        text: "test-console.html",
++        category: CATEGORY_NETWORK,
++        severity: SEVERITY_LOG,
++      },
++    ],
++  }).then(finishTest);
+ }
