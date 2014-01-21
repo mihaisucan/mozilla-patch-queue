@@ -1,0 +1,397 @@
+# HG changeset patch
+# Parent 64e3364098fd3430f434593505e5f9366e2eaf90
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1390340890 -7200
+Bug 939783 - console.trace() group traces even if part of trace is different; r=robcee
+
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -140,16 +140,21 @@ ConsoleOutput.prototype = {
+   /**
+    * Getter for the debugger WebConsoleClient.
+    * @type object
+    */
+   get webConsoleClient() {
+     return this.owner.webConsoleClient;
+   },
+ 
++  _releaseObject: function()
++  {
++    this.owner._releaseObject.apply(this.owner, arguments);
++  },
++
+   /**
+    * Add a message to output.
+    *
+    * @param object ...args
+    *        Any number of Message objects.
+    * @return this
+    */
+   addMessage: function(...args)
+@@ -1072,16 +1077,97 @@ Messages.ConsoleGeneric = function(packe
+ Messages.ConsoleGeneric.prototype = Heritage.extend(Messages.Extended.prototype,
+ {
+   _renderBodyPieceSeparator: function()
+   {
+     return this.document.createTextNode(" ");
+   },
+ }); // Messages.ConsoleGeneric.prototype
+ 
++/**
++ * The ConsoleTrace message is used for console.trace() calls.
++ *
++ * @constructor
++ * @extends Messages.Simple
++ * @param object packet
++ *        The Console API call packet received from the server.
++ */
++Messages.ConsoleTrace = function(packet)
++{
++  let options = {
++    className: "consoleTrace",
++    timestamp: packet.timeStamp,
++    category: "webdev",
++    severity: CONSOLE_API_LEVELS_TO_SEVERITIES[packet.level],
++    private: packet.private,
++    filterDuplicates: true,
++    location: {
++      url: packet.filename,
++      line: packet.lineNumber,
++    },
++  };
++
++  this._renderStack = this._renderStack.bind(this);
++  Messages.Simple.call(this, this._renderStack, options);
++
++  this._repeatID.consoleApiLevel = packet.level;
++  this._stacktrace = this._repeatID.stacktrace = packet.stacktrace;
++  this._arguments = packet.arguments;
++};
++
++Messages.ConsoleTrace.prototype = Heritage.extend(Messages.Simple.prototype,
++{
++  _stacktrace: null,
++  _arguments: null,
++
++  init: function()
++  {
++    let result = Messages.Simple.prototype.init.apply(this, arguments);
++
++    // We ignore console.trace() arguments. Release object actors.
++    if (Array.isArray(this._arguments)) {
++      for (let arg of this._arguments) {
++        if (WebConsoleUtils.isActorGrip(arg)) {
++          this.output._releaseObject(arg.actor);
++        }
++      }
++    }
++    this._arguments = null;
++
++    return result;
++  },
++
++  _renderStack: function()
++  {
++    let title = this.document.createElementNS(XHTML_NS, "span");
++    title.className = "title";
++    title.textContent = "console.trace():";
++
++    let location = Messages.Simple.prototype._renderLocation.call(this);
++
++    // .devtools-monospace sets font-size to 80%, however .body already has
++    // .devtools-monospace. If we keep it here, the location would be rendered
++    // smaller.
++    location.classList.remove("devtools-monospace");
++
++    let widget = new Widgets.Stacktrace(this, this._stacktrace).render();
++
++    let body = this.document.createElementNS(XHTML_NS, "div");
++    body.appendChild(title);
++    body.appendChild(location);
++
++    let frag = this.document.createDocumentFragment();
++    frag.appendChild(body);
++    frag.appendChild(widget.element);
++
++    return frag;
++  },
++
++  _renderLocation: function() { },
++}); // Messages.ConsoleTrace.prototype
+ 
+ let Widgets = {};
+ 
+ /**
+  * The base widget class.
+  *
+  * @constructor
+  * @param object message
+@@ -1349,16 +1435,87 @@ Widgets.LongString.prototype = Heritage.
+       category: "output",
+       severity: "warning",
+     });
+     this.output.addMessage(msg);
+   },
+ }); // Widgets.LongString.prototype
+ 
+ 
++
++/**
++ * The stacktrace widget.
++ *
++ * @constructor
++ * @extends Widgets.BaseWidget
++ * @param object message
++ *        The owning message.
++ * @param array stacktrace
++ *        The stacktrace to display, array of frames as supplied by the server,
++ *        over the remote protocol.
++ */
++Widgets.Stacktrace = function(message, stacktrace)
++{
++  Widgets.BaseWidget.call(this, message);
++  this.stacktrace = stacktrace;
++};
++
++Widgets.Stacktrace.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
++{
++  stacktrace: null,
++
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let result = this.element = this.document.createElementNS(XHTML_NS, "ul");
++    result.className = "stacktrace";
++    for (let i = 0; i <= 30; i++) {
++      let frame = {
++        filename: "foobar" + i + ".js",
++        lineNumber: i,
++        functionName: "zuzu" + i,
++      };
++      //this.stacktrace.push(frame);
++    }
++    for (let frame of this.stacktrace) {
++      result.appendChild(this._renderFrame(frame));
++    }
++
++    return this;
++  },
++
++  _renderFrame: function(frame)
++  {
++    let fn = this.document.createElementNS(XHTML_NS, "span");
++    fn.className = "functionContainer";
++    if (frame.functionName) {
++      fn.classList.add("functionName");
++      fn.textContent = frame.functionName + "()";
++    } else {
++      fn.classList.add("anonymousFunction");
++      fn.textContent = l10n.getStr("stacktrace.anonymousFunction");
++    }
++
++    let location = this.output.owner.createLocationNode(frame.filename,
++                                                        frame.lineNumber);
++    location.classList.remove("devtools-monospace");
++
++    let elem = this.document.createElementNS(XHTML_NS, "li");
++    elem.appendChild(fn);
++    elem.appendChild(location);
++
++    return elem;
++  },
++
++}); // Widgets.Stacktrace.prototype
++
++
+ function gSequenceId()
+ {
+   return gSequenceId.n++;
+ }
+ gSequenceId.n = 0;
+ 
+ exports.ConsoleOutput = ConsoleOutput;
+ exports.Messages = Messages;
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -1173,27 +1173,32 @@ WebConsoleFrame.prototype = {
+       case "error":
+       case "exception":
+       case "assert":
+       case "debug": {
+         let msg = new Messages.ConsoleGeneric(aMessage);
+         node = msg.init(this.output).render().element;
+         break;
+       }
++      case "trace": {
++        let msg = new Messages.ConsoleTrace(aMessage);
++        node = msg.init(this.output).render().element;
++        break;
++      }
+       case "dir": {
+         body = { arguments: args };
+         let clipboardArray = [];
+         args.forEach((aValue) => {
+           clipboardArray.push(VariablesView.getString(aValue));
+         });
+         clipboardText = clipboardArray.join(" ");
+         break;
+       }
+ 
+-      case "trace": {
++      case "trace_": {
+         let filename = WebConsoleUtils.abbreviateSourceURL(aMessage.filename);
+         let functionName = aMessage.functionName ||
+                            l10n.getStr("stacktrace.anonymousFunction");
+ 
+         body = this.document.createElementNS(XHTML_NS, "a");
+         body.setAttribute("aria-haspopup", true);
+         body.href = "#";
+         body.draggable = false;
+@@ -2580,17 +2585,17 @@ WebConsoleFrame.prototype = {
+ 
+     filenameNode.className = "filename";
+     filenameNode.textContent = " " + filename;
+     locationNode.appendChild(filenameNode);
+ 
+     locationNode.href = isScratchpad ? "#" : fullURL;
+     locationNode.draggable = false;
+     locationNode.setAttribute("title", aSourceURL);
+-    locationNode.className = "location theme-link devtools-monospace";
++    locationNode.className = "message-location theme-link devtools-monospace";
+ 
+     // Make the location clickable.
+     this._addMessageLinkCallback(locationNode, () => {
+       if (isScratchpad) {
+         this.owner.viewSourceInScratchpad(aSourceURL);
+       }
+       else if (locationNode.parentNode.category == CATEGORY_CSS) {
+         this.owner.viewSourceInStyleEditor(fullURL, aSourceLine);
+diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
+--- a/browser/themes/shared/devtools/webconsole.inc.css
++++ b/browser/themes/shared/devtools/webconsole.inc.css
+@@ -59,41 +59,41 @@ a {
+   font-size: 0.9em;
+   font-weight: 600;
+ }
+ 
+ .message > .repeats[value="1"] {
+   display: none;
+ }
+ 
+-.message > .location {
++.message-location {
+   -moz-margin-start: 6px;
+   display: flex;
+   flex: 0 0 auto;
+   align-self: flex-start;
+   justify-content: flex-end;
+   width: 10em;
+   margin-top: 4px;
+   color: -moz-nativehyperlinktext;
+   text-decoration: none;
++  white-space: nowrap;
+ }
+ 
+-.message > .location:hover,
+-.message > .location:focus {
++.message-location:hover,
++.message-location:focus {
+   text-decoration: underline;
+ }
+ 
+-.message > .location > .filename {
++.message-location > .filename {
+   text-overflow: ellipsis;
+   text-align: end;
+   overflow: hidden;
+-  white-space: nowrap;
+ }
+ 
+-.message > .location > .line-number {
++.message-location > .line-number {
+   flex: 0 0 auto;
+ }
+ 
+ .jsterm-input-container {
+   border-top-width: 1px;
+   border-top-style: solid;
+ }
+ 
+@@ -331,16 +331,51 @@ a {
+   font-size: 0.9em;
+ }
+ 
+ .navigation-marker .url {
+   -moz-padding-end: 9px;
+   text-decoration: none;
+ }
+ 
++.consoleTrace .body > div {
++  display: flex;
++  margin-bottom: 5px;
++}
++
++.consoleTrace .title {
++  display: block;
++  flex: 1 1 auto;
++}
++
++.consoleTrace .message-location {
++  width: auto;
++}
++
++.stacktrace {
++  list-style: none;
++  padding: 0 1em 0 1.5em;
++  margin: 0;
++  max-height: 10em;
++  overflow-y: auto;
++
++  border: 1px solid rgba(128, 128, 128, .5);
++  border-radius: 3px;
++}
++
++.stacktrace li {
++  display: flex;
++  margin: 0;
++}
++
++.stacktrace .functionContainer {
++  display: block;
++  flex: 1 1 auto;
++}
++
+ /* Replace these values with CSS variables as available */
+ .theme-dark .jsterm-input-container {
+   background-color: #252c33; /* tabToolbarBackgroundColor */
+   border-color: #131c26; /* mainBackgroundColor */
+ }
+ 
+ .theme-dark .jsterm-input-node {
+   color: #8fa1b2; /* textColor */
+@@ -374,16 +409,20 @@ a {
+ .theme-light .navigation-marker .url {
+   background: #fff; /* mainBackgroundColor */
+ }
+ 
+ .theme-light .inlined-variables-view iframe {
+   border-color: #ccc;
+ }
+ 
++.theme-light .stacktrace {
++  border-color: #ccc;
++}
++
+ @media (max-width: 500px) {
+   .message > .timestamp {
+     display: none;
+   }
+   .toolbarbutton-text {
+     display: none;
+   }
+   .hud-console-filter-toolbar .webconsole-filter-button {
