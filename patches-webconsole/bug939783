@@ -1,14 +1,13 @@
 # HG changeset patch
-# Parent 64e3364098fd3430f434593505e5f9366e2eaf90
+# Parent 7b40032d4d181cd2fbaa8ba53a832d5fed6a502d
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1390340890 -7200
-Bug 939783 - console.trace() group traces even if part of trace is different; r=robcee
+# Date 1390423071 -7200
+Bug 939783 - console.trace() group traces even if part of trace is different; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -140,16 +140,21 @@ ConsoleOutput.prototype = {
-   /**
+@@ -141,16 +141,28 @@ ConsoleOutput.prototype = {
     * Getter for the debugger WebConsoleClient.
     * @type object
     */
@@ -16,12 +15,19 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      return this.owner.webConsoleClient;
    },
  
-+  _releaseObject: function()
+   /**
++   * Release an actor.
++   *
++   * @private
++   * @param string actorId
++   *        The actor ID you want to release.
++   */
++  _releaseObject: function(actorId)
 +  {
-+    this.owner._releaseObject.apply(this.owner, arguments);
++    this.owner._releaseObject(actorId);
 +  },
 +
-   /**
++  /**
     * Add a message to output.
     *
     * @param object ...args
@@ -29,7 +35,27 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     * @return this
     */
    addMessage: function(...args)
-@@ -1072,16 +1077,97 @@ Messages.ConsoleGeneric = function(packe
+   {
+@@ -842,17 +854,17 @@ Messages.Simple.prototype = Heritage.ext
+   _renderRepeatNode: function()
+   {
+     if (!this._filterDuplicates) {
+       return null;
+     }
+ 
+     let repeatNode = this.document.createElementNS(XHTML_NS, "span");
+     repeatNode.setAttribute("value", "1");
+-    repeatNode.className = "repeats";
++    repeatNode.className = "message-repeats";
+     repeatNode.textContent = 1;
+     repeatNode._uid = this.getRepeatID();
+     return repeatNode;
+   },
+ 
+   /**
+    * Render the message source location DOM element.
+    * @private
+@@ -1072,16 +1084,144 @@ Messages.ConsoleGeneric = function(packe
  Messages.ConsoleGeneric.prototype = Heritage.extend(Messages.Extended.prototype,
  {
    _renderBodyPieceSeparator: function()
@@ -49,7 +75,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +Messages.ConsoleTrace = function(packet)
 +{
 +  let options = {
-+    className: "consoleTrace",
++    className: "consoleTrace cm-s-mozilla",
 +    timestamp: packet.timeStamp,
 +    category: "webdev",
 +    severity: CONSOLE_API_LEVELS_TO_SEVERITIES[packet.level],
@@ -71,7 +97,22 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +Messages.ConsoleTrace.prototype = Heritage.extend(Messages.Simple.prototype,
 +{
++  /**
++   * Holds the stackframes received from the server.
++   *
++   * @private
++   * @type array
++   */
 +  _stacktrace: null,
++
++  /**
++   * Holds the arguments the content script passed to the console.trace()
++   * method. This array is cleared when the message is initialized, and
++   * associated actors are released.
++   *
++   * @private
++   * @type array
++   */
 +  _arguments: null,
 +
 +  init: function()
@@ -91,24 +132,46 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return result;
 +  },
 +
++  /**
++   * Render the stack frames.
++   *
++   * @private
++   * @return DOMElement
++   */
 +  _renderStack: function()
 +  {
++    let cmvar = this.document.createElementNS(XHTML_NS, "span");
++    cmvar.className = "cm-variable";
++    cmvar.textContent = "console";
++
++    let cmprop = this.document.createElementNS(XHTML_NS, "span");
++    cmprop.className = "cm-property";
++    cmprop.textContent = "trace";
++
 +    let title = this.document.createElementNS(XHTML_NS, "span");
-+    title.className = "title";
-+    title.textContent = "console.trace():";
++    title.className = "title devtools-monospace";
++    title.appendChild(cmvar);
++    title.appendChild(this.document.createTextNode("."));
++    title.appendChild(cmprop);
++    title.appendChild(this.document.createTextNode("():"));
 +
++    let repeatNode = Messages.Simple.prototype._renderRepeatNode.call(this);
 +    let location = Messages.Simple.prototype._renderLocation.call(this);
-+
-+    // .devtools-monospace sets font-size to 80%, however .body already has
-+    // .devtools-monospace. If we keep it here, the location would be rendered
-+    // smaller.
-+    location.classList.remove("devtools-monospace");
++    if (location) {
++      location.target = "jsdebugger";
++    }
 +
 +    let widget = new Widgets.Stacktrace(this, this._stacktrace).render();
 +
 +    let body = this.document.createElementNS(XHTML_NS, "div");
 +    body.appendChild(title);
-+    body.appendChild(location);
++    if (repeatNode) {
++      body.appendChild(repeatNode);
++    }
++    if (location) {
++      body.appendChild(location);
++    }
++    body.appendChild(this.document.createTextNode("\n"));
 +
 +    let frag = this.document.createDocumentFragment();
 +    frag.appendChild(body);
@@ -117,7 +180,17 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return frag;
 +  },
 +
++  _renderBody: function()
++  {
++    let body = Messages.Simple.prototype._renderBody.apply(this, arguments);
++    body.classList.remove("devtools-monospace");
++    return body;
++  },
++
++  // no-op for the message location and .repeats elements.
++  // |this._renderStack| handles customized message output.
 +  _renderLocation: function() { },
++  _renderRepeatNode: function() { },
 +}); // Messages.ConsoleTrace.prototype
  
  let Widgets = {};
@@ -127,7 +200,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   *
   * @constructor
   * @param object message
-@@ -1349,16 +1435,87 @@ Widgets.LongString.prototype = Heritage.
+@@ -1349,16 +1489,101 @@ Widgets.LongString.prototype = Heritage.
        category: "output",
        severity: "warning",
      });
@@ -136,7 +209,6 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  }); // Widgets.LongString.prototype
  
  
-+
 +/**
 + * The stacktrace widget.
 + *
@@ -156,6 +228,10 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +Widgets.Stacktrace.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
 +{
++  /**
++   * The stackframes received from the server.
++   * @type array
++   */
 +  stacktrace: null,
 +
 +  render: function()
@@ -165,15 +241,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    }
 +
 +    let result = this.element = this.document.createElementNS(XHTML_NS, "ul");
-+    result.className = "stacktrace";
-+    for (let i = 0; i <= 30; i++) {
-+      let frame = {
-+        filename: "foobar" + i + ".js",
-+        lineNumber: i,
-+        functionName: "zuzu" + i,
-+      };
-+      //this.stacktrace.push(frame);
-+    }
++    result.className = "stacktrace devtools-monospace";
++
 +    for (let frame of this.stacktrace) {
 +      result.appendChild(this._renderFrame(frame));
 +    }
@@ -181,25 +250,43 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return this;
 +  },
 +
++  /**
++   * Render a frame object received from the server.
++   *
++   * @param object frame
++   *        The stack frame to display. This object should have the following
++   *        properties: functionName, filename and lineNumber.
++   * @return DOMElement
++   *         The DOM element to display for the given frame.
++   */
 +  _renderFrame: function(frame)
 +  {
 +    let fn = this.document.createElementNS(XHTML_NS, "span");
-+    fn.className = "functionContainer";
++    fn.className = "function";
 +    if (frame.functionName) {
-+      fn.classList.add("functionName");
-+      fn.textContent = frame.functionName + "()";
++      let span = this.document.createElementNS(XHTML_NS, "span");
++      span.className = "cm-variable";
++      span.textContent = frame.functionName;
++      fn.appendChild(span);
++      fn.appendChild(this.document.createTextNode("()"));
 +    } else {
-+      fn.classList.add("anonymousFunction");
++      fn.classList.add("cm-comment");
 +      fn.textContent = l10n.getStr("stacktrace.anonymousFunction");
 +    }
 +
 +    let location = this.output.owner.createLocationNode(frame.filename,
-+                                                        frame.lineNumber);
++                                                        frame.lineNumber,
++                                                        "jsdebugger");
++
++    // .devtools-monospace sets font-size to 80%, however .body already has
++    // .devtools-monospace. If we keep it here, the location would be rendered
++    // smaller.
 +    location.classList.remove("devtools-monospace");
 +
 +    let elem = this.document.createElementNS(XHTML_NS, "li");
 +    elem.appendChild(fn);
 +    elem.appendChild(location);
++    elem.appendChild(this.document.createTextNode("\n"));
 +
 +    return elem;
 +  },
@@ -215,10 +302,535 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
  exports.ConsoleOutput = ConsoleOutput;
  exports.Messages = Messages;
+diff --git a/browser/devtools/webconsole/test/browser_console_addonsdk_loader_exception.js b/browser/devtools/webconsole/test/browser_console_addonsdk_loader_exception.js
+--- a/browser/devtools/webconsole/test/browser_console_addonsdk_loader_exception.js
++++ b/browser/devtools/webconsole/test/browser_console_addonsdk_loader_exception.js
+@@ -65,17 +65,17 @@ function test()
+       onMessageFound(results);
+     });
+   }
+ 
+   function onMessageFound(results)
+   {
+     let msg = [...results[0].matched][0];
+     ok(msg, "message element found");
+-    let locationNode = msg.querySelector(".location");
++    let locationNode = msg.querySelector(".message-location");
+     ok(locationNode, "message location element found");
+ 
+     let title = locationNode.getAttribute("title");
+     info("location node title: " + title);
+     isnot(title.indexOf(" -> "), -1, "error comes from a subscript");
+ 
+     let viewSource = browserconsole.viewSource;
+     let URL = null;
+diff --git a/browser/devtools/webconsole/test/browser_console_error_source_click.js b/browser/devtools/webconsole/test/browser_console_error_source_click.js
+--- a/browser/devtools/webconsole/test/browser_console_error_source_click.js
++++ b/browser/devtools/webconsole/test/browser_console_error_source_click.js
+@@ -56,17 +56,17 @@ function test()
+     let viewSourceCalled = false;
+     hud.viewSource = () => viewSourceCalled = true;
+ 
+     for (let result of results) {
+       viewSourceCalled = false;
+ 
+       let msg = [...results[0].matched][0];
+       ok(msg, "message element found for: " + result.text);
+-      let locationNode = msg.querySelector(".location");
++      let locationNode = msg.querySelector(".message-location");
+       ok(locationNode, "message location element found");
+ 
+       EventUtils.synthesizeMouse(locationNode, 2, 2, {}, hud.iframeWindow);
+ 
+       ok(viewSourceCalled, "view source opened");
+     }
+ 
+     hud.viewSource = viewSource;
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js b/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_585956_console_trace.js
+@@ -1,49 +1,46 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-585956-console-trace.html";
+ 
+ function test() {
+-  addTab("data:text/html;charset=utf8,<p>hello");
+-  browser.addEventListener("load", tabLoaded, true);
++  Task.spawn(runner).then(finishTest);
+ 
+-  function tabLoaded() {
+-    browser.removeEventListener("load", tabLoaded, true);
++  function* runner() {
++    let {tab} = yield loadTab("data:text/html;charset=utf8,<p>hello");
++    let hud = yield openConsole(tab);
+ 
+-    openConsole(null, function(hud) {
+-      content.location = TEST_URI;
++    content.location = TEST_URI;
+ 
+-      waitForMessages({
+-        webconsole: hud,
+-        messages: [{
+-          name: "console.trace output",
+-          consoleTrace: {
+-            file: "test-bug-585956-console-trace.html",
+-            fn: "window.foobar585956c",
+-          },
+-        }],
+-      }).then(performChecks);
++    let [result] = yield waitForMessages({
++      webconsole: hud,
++      messages: [{
++        name: "console.trace output",
++        consoleTrace: {
++          file: "test-bug-585956-console-trace.html",
++          fn: "window.foobar585956c",
++        },
++      }],
+     });
+-  }
+ 
+-  function performChecks(results) {
+-    let node = [...results[0].matched][0];
++    let node = [...result.matched][0];
++    ok(node, "found trace log node");
++
++    let obj = node._messageObject;
++    ok(obj, "console.trace message object");
+ 
+     // The expected stack trace object.
+     let stacktrace = [
+       { filename: TEST_URI, lineNumber: 9, functionName: "window.foobar585956c", language: 2 },
+       { filename: TEST_URI, lineNumber: 14, functionName: "foobar585956b", language: 2 },
+       { filename: TEST_URI, lineNumber: 18, functionName: "foobar585956a", language: 2 },
+       { filename: TEST_URI, lineNumber: 21, functionName: null, language: 2 }
+     ];
+ 
+-    ok(node, "found trace log node");
+-    ok(node._stacktrace, "found stacktrace object");
+-    is(node._stacktrace.toSource(), stacktrace.toSource(), "stacktrace is correct");
++    ok(obj._stacktrace, "found stacktrace object");
++    is(obj._stacktrace.toSource(), stacktrace.toSource(), "stacktrace is correct");
+     isnot(node.textContent.indexOf("bug-585956"), -1, "found file name");
+-
+-    finishTest();
+   }
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js b/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_642108_pruneTest.js
+@@ -69,17 +69,17 @@ function testCSSPruning(hudRef) {
+       }],
+     }).then(([result]) => {
+       is(countMessageNodes(), LOG_LIMIT, "number of messages");
+ 
+       is(Object.keys(hudRef.ui._repeatNodes).length, LOG_LIMIT,
+          "repeated nodes pruned from repeatNodes");
+ 
+       let msg = [...result.matched][0];
+-      let repeats = msg.querySelector(".repeats");
++      let repeats = msg.querySelector(".message-repeats");
+       is(repeats.getAttribute("value"), 1,
+          "repeated nodes pruned from repeatNodes (confirmed)");
+ 
+       finishTest();
+     });
+   });
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_766001_JS_Console_in_Debugger.js b/browser/devtools/webconsole/test/browser_webconsole_bug_766001_JS_Console_in_Debugger.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_766001_JS_Console_in_Debugger.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_766001_JS_Console_in_Debugger.js
+@@ -29,18 +29,18 @@ function test() {
+         text: "Blah Blah",
+         category: CATEGORY_WEBDEV,
+         severity: SEVERITY_LOG,
+       }],
+     });
+ 
+     let exceptionMsg = [...exceptionRule.matched][0];
+     let consoleMsg = [...consoleRule.matched][0];
+-    let nodes = [exceptionMsg.querySelector(".location"),
+-                 consoleMsg.querySelector(".location")];
++    let nodes = [exceptionMsg.querySelector(".message-location"),
++                 consoleMsg.querySelector(".message-location")];
+     ok(nodes[0], ".location node for the exception message");
+     ok(nodes[1], ".location node for the console message");
+ 
+     for (let i = 0; i < nodes.length; i++) {
+       yield checkClickOnNode(i, nodes[i]);
+       yield gDevTools.showToolbox(hud.target, "webconsole");
+     }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_782653_CSS_links_in_Style_Editor.js b/browser/devtools/webconsole/test/browser_webconsole_bug_782653_CSS_links_in_Style_Editor.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_782653_CSS_links_in_Style_Editor.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_782653_CSS_links_in_Style_Editor.js
+@@ -36,20 +36,20 @@ function testViewSource(aHud)
+     {
+       text: "'color'",
+       category: CATEGORY_CSS,
+       severity: SEVERITY_WARNING,
+     }],
+   }).then(([error1Rule, error2Rule]) => {
+     let error1Msg = [...error1Rule.matched][0];
+     let error2Msg = [...error2Rule.matched][0];
+-    nodes = [error1Msg.querySelector(".location"),
+-             error2Msg.querySelector(".location")];
+-    ok(nodes[0], ".location node for the first error");
+-    ok(nodes[1], ".location node for the second error");
++    nodes = [error1Msg.querySelector(".message-location"),
++             error2Msg.querySelector(".message-location")];
++    ok(nodes[0], ".message-location node for the first error");
++    ok(nodes[1], ".message-location node for the second error");
+ 
+     let target = TargetFactory.forTab(gBrowser.selectedTab);
+     let toolbox = gDevTools.getToolbox(target);
+     toolbox.once("styleeditor-selected", (event, panel) => {
+       StyleEditorUI = panel.UI;
+ 
+       let count = 0;
+       StyleEditorUI.on("editor-added", function() {
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_scratchpad_panel_link.js b/browser/devtools/webconsole/test/browser_webconsole_scratchpad_panel_link.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_scratchpad_panel_link.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_scratchpad_panel_link.js
+@@ -48,17 +48,17 @@ function runTests(aToolbox)
+       webconsole: hud,
+       messages: [{ text: "foobar-from-scratchpad" }]
+     });
+ 
+     info("Clicking link to switch to and focus Scratchpad");
+ 
+     let [matched] = [...messages[0].matched];
+     ok(matched, "Found logged message from Scratchpad");
+-    let anchor = matched.querySelector("a.location");
++    let anchor = matched.querySelector("a.message-location");
+ 
+     aToolbox.on("scratchpad-selected", function selected() {
+       aToolbox.off("scratchpad-selected", selected);
+ 
+       is(aToolbox.getCurrentPanel(), scratchpadPanel,
+         "Clicking link switches to Scratchpad panel");
+       
+       is(Services.ww.activeWindow, aToolbox.frame.ownerGlobal,
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_view_source.js b/browser/devtools/webconsole/test/browser_webconsole_view_source.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_view_source.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_view_source.js
+@@ -42,17 +42,17 @@ function testViewSource(hud) {
+         }],
+       }).then(onMessage);
+     });
+   });
+ 
+   function onMessage([result]) {
+     let msg = [...result.matched][0];
+     ok(msg, "error message");
+-    let locationNode = msg.querySelector(".location");
++    let locationNode = msg.querySelector(".message-location");
+     ok(locationNode, "location node");
+ 
+     Services.ww.registerNotification(observer);
+ 
+     containsValue = Sources.containsValue;
+     Sources.containsValue = () => {
+       containsValueInvoked = true;
+       return false;
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -1,26 +1,22 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+-let WebConsoleUtils, TargetFactory, require;
+ let {gDevTools} = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
+ let {console} = Cu.import("resource://gre/modules/devtools/Console.jsm", {});
+ let {Promise: promise} = Cu.import("resource://gre/modules/commonjs/sdk/core/promise.js", {});
+ let {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
++let {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
++let {require, TargetFactory} = devtools;
++let {Utils: WebConsoleUtils} = require("devtools/toolkit/webconsole/utils");
++let {Messages} = require("devtools/webconsole/console-output");
+ 
+-(() => {
+-  let {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+-  let utils = devtools.require("devtools/toolkit/webconsole/utils");
+-  TargetFactory = devtools.TargetFactory;
+-  WebConsoleUtils = utils.Utils;
+-  require = devtools.require;
+-})();
+ // promise._reportErrors = true; // please never leave me.
+ 
+ let gPendingOutputTest = 0;
+ 
+ // The various categories of messages.
+ const CATEGORY_NETWORK = 0;
+ const CATEGORY_CSS = 1;
+ const CATEGORY_JS = 2;
+@@ -278,17 +274,17 @@ function dumpConsoles()
+  * Dump to output debug information for the given webconsole message.
+  *
+  * @param nsIDOMNode aMessage
+  *        The message element you want to display.
+  */
+ function dumpMessageElement(aMessage)
+ {
+   let text = aMessage.textContent;
+-  let repeats = aMessage.querySelector(".repeats");
++  let repeats = aMessage.querySelector(".message-repeats");
+   if (repeats) {
+     repeats = repeats.getAttribute("value");
+   }
+   console.debug("id", aMessage.getAttribute("id"),
+                 "date", aMessage.timestamp,
+                 "class", aMessage.className,
+                 "category", aMessage.category,
+                 "severity", aMessage.severity,
+@@ -927,54 +923,54 @@ function waitForMessages(aOptions)
+     return result;
+   }
+ 
+   function checkConsoleTrace(aRule, aElement)
+   {
+     let elemText = aElement.textContent;
+     let trace = aRule.consoleTrace;
+ 
+-    if (!checkText("Stack trace from ", elemText)) {
++    if (!checkText("console.trace():", elemText)) {
+       return false;
+     }
+ 
+-    let clickable = aElement.querySelector(".body a");
+-    if (!clickable) {
+-      ok(false, "console.trace() message is missing .hud-clickable");
+-      displayErrorContext(aRule, aElement);
+-      return false;
+-    }
+-    aRule.clickableElements = [clickable];
+-
+-    if (trace.file &&
+-        !checkText("from " + trace.file + ", ", elemText)) {
+-      ok(false, "console.trace() message is missing the file name: " +
+-                trace.file);
+-      displayErrorContext(aRule, aElement);
+-      return false;
++    let frame = aElement.querySelector(".stacktrace li:first-child");
++    if (trace.file) {
++      let file = frame.querySelector(".message-location").title;
++      if (!checkText(trace.file, file)) {
++        ok(false, "console.trace() message is missing the file name: " +
++                  trace.file);
++        displayErrorContext(aRule, aElement);
++        return false;
++      }
+     }
+ 
+-    if (trace.fn &&
+-        !checkText(", function " + trace.fn + ", ", elemText)) {
+-      ok(false, "console.trace() message is missing the function name: " +
+-                trace.fn);
+-      displayErrorContext(aRule, aElement);
+-      return false;
++    if (trace.fn) {
++      let fn = frame.querySelector(".function").textContent;
++      if (!checkText(trace.fn, fn)) {
++        ok(false, "console.trace() message is missing the function name: " +
++                  trace.fn);
++        displayErrorContext(aRule, aElement);
++        return false;
++      }
+     }
+ 
+-    if (trace.line &&
+-        !checkText(", line " + trace.line + ".", elemText)) {
+-      ok(false, "console.trace() message is missing the line number: " +
+-                trace.line);
+-      displayErrorContext(aRule, aElement);
+-      return false;
++    if (trace.line) {
++      let line = frame.querySelector(".message-location").sourceLine;
++      if (!checkText(trace.line, line)) {
++        ok(false, "console.trace() message is missing the line number: " +
++                  trace.line);
++        displayErrorContext(aRule, aElement);
++        return false;
++      }
+     }
+ 
+     aRule.category = CATEGORY_WEBDEV;
+     aRule.severity = SEVERITY_LOG;
++    aRule.type = Messages.ConsoleTrace;
+ 
+     return true;
+   }
+ 
+   function checkConsoleTime(aRule, aElement)
+   {
+     let elemText = aElement.textContent;
+     let time = aRule.consoleTime;
+@@ -1033,17 +1029,17 @@ function waitForMessages(aOptions)
+     aRule.category = CATEGORY_WEBDEV;
+     aRule.severity = SEVERITY_LOG;
+ 
+     return true;
+   }
+ 
+   function checkSource(aRule, aElement)
+   {
+-    let location = aElement.querySelector(".location");
++    let location = aElement.querySelector(".message-location");
+     if (!location) {
+       return false;
+     }
+ 
+     if (!checkText(aRule.source.url, location.getAttribute("title"))) {
+       return false;
+     }
+ 
+@@ -1085,26 +1081,33 @@ function waitForMessages(aOptions)
+     if (aRule.consoleGroup && !checkConsoleGroup(aRule, aElement)) {
+       return false;
+     }
+ 
+     if (aRule.source && !checkSource(aRule, aElement)) {
+       return false;
+     }
+ 
++    let partialMatch = !!(aRule.consoleTrace || aRule.consoleTime ||
++                          aRule.consoleTimeEnd);
++
+     // The rule tries to match the newer types of messages, based on their
+     // object constructor.
+-    if (aRule.type && (!aElement._messageObject ||
+-                       !(aElement._messageObject instanceof aRule.type))) {
+-      return false;
++    if (aRule.type) {
++      if (!aElement._messageObject ||
++          !(aElement._messageObject instanceof aRule.type)) {
++        if (partialMatch) {
++          ok(false, "message type for rule: " + displayRule(aRule));
++          displayErrorContext(aRule, aElement);
++        }
++        return false;
++      }
++      partialMatch = true;
+     }
+ 
+-    let partialMatch = !!(aRule.consoleTrace || aRule.consoleTime ||
+-                          aRule.consoleTimeEnd || aRule.type);
+-
+     if ("category" in aRule && aElement.category != aRule.category) {
+       if (partialMatch) {
+         is(aElement.category, aRule.category,
+            "message category for rule: " + displayRule(aRule));
+         displayErrorContext(aRule, aElement);
+       }
+       return false;
+     }
+@@ -1119,17 +1122,17 @@ function waitForMessages(aOptions)
+     }
+ 
+     if (aRule.category == CATEGORY_NETWORK && "url" in aRule &&
+         !checkText(aRule.url, aElement.url)) {
+       return false;
+     }
+ 
+     if ("repeats" in aRule) {
+-      let repeats = aElement.querySelector(".repeats");
++      let repeats = aElement.querySelector(".message-repeats");
+       if (!repeats || repeats.getAttribute("value") != aRule.repeats) {
+         return false;
+       }
+     }
+ 
+     if ("groupDepth" in aRule) {
+       let timestamp = aElement.querySelector(".timestamp");
+       let indent = (GROUP_INDENT * aRule.groupDepth) + "px";
+@@ -1175,17 +1178,17 @@ function waitForMessages(aOptions)
+     aRule.matched.add(aElement);
+ 
+     return aRule.matched.size == count;
+   }
+ 
+   function onMessagesAdded(aEvent, aNewElements)
+   {
+     for (let elem of aNewElements) {
+-      let location = elem.querySelector(".location");
++      let location = elem.querySelector(".message-location");
+       if (location) {
+         let url = location.title;
+         // Prevent recursion with the browser console and any potential
+         // messages coming from head.js.
+         if (url.indexOf("browser/devtools/webconsole/test/head.js") != -1) {
+           continue;
+         }
+       }
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
-@@ -1173,27 +1173,32 @@ WebConsoleFrame.prototype = {
+@@ -1051,17 +1051,17 @@ WebConsoleFrame.prototype = {
+    * @param nsIDOMNode aOriginal
+    *        The Original Node. The one being merged into.
+    * @param nsIDOMNode aFiltered
+    *        The node being filtered out because it is repeated.
+    */
+   mergeFilteredMessageNode:
+   function WCF_mergeFilteredMessageNode(aOriginal, aFiltered)
+   {
+-    let repeatNode = aOriginal.getElementsByClassName("repeats")[0];
++    let repeatNode = aOriginal.getElementsByClassName("message-repeats")[0];
+     if (!repeatNode) {
+       return; // no repeat node, return early.
+     }
+ 
+     let occurrences = parseInt(repeatNode.getAttribute("value")) + 1;
+     repeatNode.setAttribute("value", occurrences);
+     repeatNode.textContent = occurrences;
+     let str = l10n.getStr("messageRepeats.tooltip2");
+@@ -1076,17 +1076,17 @@ WebConsoleFrame.prototype = {
+    * @param nsIDOMNode aNode
+    *        The message node to be filtered or not.
+    * @returns nsIDOMNode|null
+    *          Returns the duplicate node if the message was filtered, null
+    *          otherwise.
+    */
+   _filterRepeatedMessage: function WCF__filterRepeatedMessage(aNode)
+   {
+-    let repeatNode = aNode.getElementsByClassName("repeats")[0];
++    let repeatNode = aNode.getElementsByClassName("message-repeats")[0];
+     if (!repeatNode) {
+       return null;
+     }
+ 
+     let uid = repeatNode._uid;
+     let dupeNode = null;
+ 
+     if (aNode.category == CATEGORY_CSS ||
+@@ -1100,17 +1100,17 @@ WebConsoleFrame.prototype = {
+               aNode.category == CATEGORY_JS) &&
+              aNode.category != CATEGORY_NETWORK &&
+              !aNode.classList.contains("inlined-variables-view")) {
+       let lastMessage = this.outputNode.lastChild;
+       if (!lastMessage) {
+         return null;
+       }
+ 
+-      let lastRepeatNode = lastMessage.getElementsByClassName("repeats")[0];
++      let lastRepeatNode = lastMessage.getElementsByClassName("message-repeats")[0];
+       if (lastRepeatNode && lastRepeatNode._uid == uid) {
+         dupeNode = lastMessage;
+       }
+     }
+ 
+     if (dupeNode) {
+       this.mergeFilteredMessageNode(dupeNode, aNode);
+       return dupeNode;
+@@ -1186,58 +1186,31 @@ WebConsoleFrame.prototype = {
        case "error":
        case "exception":
        case "assert":
@@ -243,43 +855,280 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
        }
  
 -      case "trace": {
-+      case "trace_": {
-         let filename = WebConsoleUtils.abbreviateSourceURL(aMessage.filename);
-         let functionName = aMessage.functionName ||
-                            l10n.getStr("stacktrace.anonymousFunction");
+-        let filename = WebConsoleUtils.abbreviateSourceURL(aMessage.filename);
+-        let functionName = aMessage.functionName ||
+-                           l10n.getStr("stacktrace.anonymousFunction");
+-
+-        body = this.document.createElementNS(XHTML_NS, "a");
+-        body.setAttribute("aria-haspopup", true);
+-        body.href = "#";
+-        body.draggable = false;
+-        body.textContent = l10n.getFormatStr("stacktrace.outputMessage",
+-                                             [filename, functionName,
+-                                              sourceLine]);
+-
+-        this._addMessageLinkCallback(body, () => {
+-          this.jsterm.openVariablesView({
+-            rawObject: aMessage.stacktrace,
+-            autofocus: true,
+-          });
+-        });
+-
+-        clipboardText = body.textContent + "\n";
+-
+-        aMessage.stacktrace.forEach(function(aFrame) {
+-          clipboardText += aFrame.filename + " :: " +
+-                           aFrame.functionName + " :: " +
+-                           aFrame.lineNumber + "\n";
+-        });
+-
+-        clipboardText = clipboardText.trimRight();
+-        break;
+-      }
+-
+       case "group":
+       case "groupCollapsed":
+         clipboardText = body = aMessage.groupName;
+         this.groupDepth++;
+         break;
  
-         body = this.document.createElementNS(XHTML_NS, "a");
-         body.setAttribute("aria-haspopup", true);
-         body.href = "#";
-         body.draggable = false;
-@@ -2580,17 +2585,17 @@ WebConsoleFrame.prototype = {
+       case "groupEnd":
+         if (this.groupDepth > 0) {
+@@ -1276,17 +1249,16 @@ WebConsoleFrame.prototype = {
+     }
+ 
+     // Release object actors for arguments coming from console API methods that
+     // we ignore their arguments.
+     switch (level) {
+       case "group":
+       case "groupCollapsed":
+       case "groupEnd":
+-      case "trace":
+       case "time":
+       case "timeEnd":
+         for (let actor of objectActors) {
+           this._releaseObject(actor);
+         }
+         objectActors.clear();
+     }
+ 
+@@ -1302,25 +1274,21 @@ WebConsoleFrame.prototype = {
+         node.setAttribute("private", true);
+       }
+     }
+ 
+     if (objectActors.size > 0) {
+       node._objectActors = objectActors;
+ 
+       if (!node._messageObject) {
+-        let repeatNode = node.getElementsByClassName("repeats")[0];
++        let repeatNode = node.getElementsByClassName("message-repeats")[0];
+         repeatNode._uid += [...objectActors].join("-");
+       }
+     }
+ 
+-    if (level == "trace") {
+-      node._stacktrace = aMessage.stacktrace;
+-    }
+-
+     return node;
+   },
+ 
+   /**
+    * Handle ConsoleAPICall objects received from the server. This method outputs
+    * the window.console API call.
+    *
+    * @param object aMessage
+@@ -2383,17 +2351,17 @@ WebConsoleFrame.prototype = {
+       for (let actor of aNode._objectActors) {
+         this._releaseObject(actor);
+       }
+       aNode._objectActors.clear();
+     }
+ 
+     if (aNode.category == CATEGORY_CSS ||
+         aNode.category == CATEGORY_SECURITY) {
+-      let repeatNode = aNode.getElementsByClassName("repeats")[0];
++      let repeatNode = aNode.getElementsByClassName("message-repeats")[0];
+       if (repeatNode && repeatNode._uid) {
+         delete this._repeatNodes[repeatNode._uid];
+       }
+     }
+     else if (aNode._connectionId &&
+              aNode.category == CATEGORY_NETWORK) {
+       delete this._networkRequests[aNode._connectionId];
+       this._releaseObject(aNode._connectionId);
+@@ -2496,17 +2464,17 @@ WebConsoleFrame.prototype = {
+     // Add the message repeats node only when needed.
+     let repeatNode = null;
+     if (aCategory != CATEGORY_INPUT &&
+         aCategory != CATEGORY_OUTPUT &&
+         aCategory != CATEGORY_NETWORK &&
+         !(aCategory == CATEGORY_CSS && aSeverity == SEVERITY_LOG)) {
+       repeatNode = this.document.createElementNS(XHTML_NS, "span");
+       repeatNode.setAttribute("value", "1");
+-      repeatNode.className = "repeats";
++      repeatNode.className = "message-repeats";
+       repeatNode.textContent = 1;
+       repeatNode._uid = [bodyNode.textContent, aCategory, aSeverity, aLevel,
+                          aSourceURL, aSourceLine].join(":");
+     }
+ 
+     // Create the timestamp.
+     let timestampNode = this.document.createElementNS(XHTML_NS, "span");
+     timestampNode.className = "timestamp devtools-monospace";
+@@ -2562,21 +2530,28 @@ WebConsoleFrame.prototype = {
+    * Creates the anchor that displays the textual location of an incoming
+    * message.
+    *
+    * @param string aSourceURL
+    *        The URL of the source file responsible for the error.
+    * @param number aSourceLine [optional]
+    *        The line number on which the error occurred. If zero or omitted,
+    *        there is no line number associated with this message.
++   * @param string aTarget [optional]
++   *        Tells which tool to open the link with, on click. Supported tools:
++   *        jsdebugger, styleeditor, scratchpad.
+    * @return nsIDOMNode
+    *         The new anchor element, ready to be added to the message node.
+    */
+-  createLocationNode: function WCF_createLocationNode(aSourceURL, aSourceLine)
++  createLocationNode:
++  function WCF_createLocationNode(aSourceURL, aSourceLine, aTarget)
+   {
++    if (!aSourceURL) {
++      aSourceURL = "";
++    }
+     let locationNode = this.document.createElementNS(XHTML_NS, "a");
+     let filenameNode = this.document.createElementNS(XHTML_NS, "span");
+ 
+     // Create the text, which consists of an abbreviated version of the URL
+     // Scratchpad URLs should not be abbreviated.
+     let filename;
+     let fullURL;
+     let isScratchpad = false;
+@@ -2587,40 +2562,49 @@ WebConsoleFrame.prototype = {
+       isScratchpad = true;
+     }
+     else {
+       fullURL = aSourceURL.split(" -> ").pop();
+       filename = WebConsoleUtils.abbreviateSourceURL(fullURL);
+     }
  
      filenameNode.className = "filename";
-     filenameNode.textContent = " " + filename;
+-    filenameNode.textContent = " " + filename;
++    filenameNode.textContent = " " + (filename || l10n.getStr("unknownLocation"));
      locationNode.appendChild(filenameNode);
  
-     locationNode.href = isScratchpad ? "#" : fullURL;
+-    locationNode.href = isScratchpad ? "#" : fullURL;
++    locationNode.href = isScratchpad || !fullURL ? "#" : fullURL;
      locationNode.draggable = false;
++    locationNode.target = aTarget;
      locationNode.setAttribute("title", aSourceURL);
 -    locationNode.className = "location theme-link devtools-monospace";
 +    locationNode.className = "message-location theme-link devtools-monospace";
  
      // Make the location clickable.
-     this._addMessageLinkCallback(locationNode, () => {
-       if (isScratchpad) {
+-    this._addMessageLinkCallback(locationNode, () => {
+-      if (isScratchpad) {
++    let onClick = () => {
++      let target = locationNode.target;
++      if (target == "scratchpad" || isScratchpad) {
          this.owner.viewSourceInScratchpad(aSourceURL);
++        return;
        }
-       else if (locationNode.parentNode.category == CATEGORY_CSS) {
+-      else if (locationNode.parentNode.category == CATEGORY_CSS) {
++
++      let category = locationNode.parentNode.category;
++      if (target == "styleeditor" || category == CATEGORY_CSS) {
          this.owner.viewSourceInStyleEditor(fullURL, aSourceLine);
+       }
+-      else if (locationNode.parentNode.category == CATEGORY_JS ||
+-               locationNode.parentNode.category == CATEGORY_WEBDEV) {
++      else if (target == "jsdebugger" ||
++               category == CATEGORY_JS || category == CATEGORY_WEBDEV) {
+         this.owner.viewSourceInDebugger(fullURL, aSourceLine);
+       }
+       else {
+         this.owner.viewSource(fullURL, aSourceLine);
+       }
+-    });
++    };
++
++    if (fullURL) {
++      this._addMessageLinkCallback(locationNode, onClick);
++    }
+ 
+     if (aSourceLine) {
+       let lineNumberNode = this.document.createElementNS(XHTML_NS, "span");
+       lineNumberNode.className = "line-number";
+       lineNumberNode.textContent = ":" + aSourceLine;
+       locationNode.appendChild(lineNumberNode);
+       locationNode.sourceLine = aSourceLine;
+     }
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -97,25 +97,23 @@ gcliterm.instanceLabel=Instance of %S
+ # The 2nd line, from "function" to the end of the line, is a link to the
+ # JavaScript debugger.
+ reflow.messageWithNoLink=reflow: %Sms
+ reflow.messageWithLink=reflow: %Sms\u0020
+ reflow.messageLinkText=function %1$S, %2$S line %3$S
+ 
+ # LOCALIZATION NOTE (stacktrace.anonymousFunction): this string is used to
+ # display JavaScript functions that have no given name - they are said to be
+-# anonymous. See also stacktrace.outputMessage.
++# anonymous. Test console.trace() in the webconsole.
+ stacktrace.anonymousFunction=<anonymous>
+ 
+-# LOCALIZATION NOTE (stacktrace.outputMessage): this string is used in the Web
+-# Console output to identify a web developer call to console.trace(). The
+-# stack trace of JavaScript function calls is displayed. In this minimal
+-# message we only show the last call. Parameters: %1$S is the file name, %2$S
+-# is the function name, %3$S is the line number.
+-stacktrace.outputMessage=Stack trace from %1$S, function %2$S, line %3$S.
++# LOCALIZATION NOTE (unknownLocation): this string is used to
++# display messages with sources that have an unknown location, eg. from
++# console.trace() calls.
++unknownLocation=<unknown>
+ 
+ # LOCALIZATION NOTE (timerStarted): this string is used to display the result
+ # of the console.time() call. Parameters: %S is the name of the timer.
+ timerStarted=%S: timer started
+ 
+ # LOCALIZATION NOTE (timeEnd): this string is used to display the result of
+ # the console.timeEnd() call. Parameters: %1$S is the name of the timer, %2$S
+ # is the number of milliseconds.
 diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
 --- a/browser/themes/shared/devtools/webconsole.inc.css
 +++ b/browser/themes/shared/devtools/webconsole.inc.css
-@@ -59,41 +59,41 @@ a {
+@@ -41,59 +41,59 @@ a {
+ .message > .body {
+   flex: 1 1 100%;
+   white-space: pre-wrap;
+   word-wrap: break-word;
+   margin-top: 4px;
+ }
+ 
+ /* The red bubble that shows the number of times a message is repeated */
+-.message > .repeats {
++.message-repeats {
+   -moz-user-select: none;
+   flex: 0 0 auto;
+   margin: 2px 6px;
+   padding: 0 6px;
+   height: 1.25em;
+   color: white;
+   background-color: red;
+   border-radius: 40px;
+   font: message-box;
    font-size: 0.9em;
    font-weight: 600;
  }
  
- .message > .repeats[value="1"] {
+-.message > .repeats[value="1"] {
++.message-repeats[value="1"] {
    display: none;
  }
  
@@ -341,10 +1190,6 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 +  flex: 1 1 auto;
 +}
 +
-+.consoleTrace .message-location {
-+  width: auto;
-+}
-+
 +.stacktrace {
 +  list-style: none;
 +  padding: 0 1em 0 1.5em;
@@ -361,9 +1206,13 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 +  margin: 0;
 +}
 +
-+.stacktrace .functionContainer {
++.stacktrace .function {
 +  display: block;
 +  flex: 1 1 auto;
++}
++
++.stacktrace .message-location {
++  width: auto;
 +}
 +
  /* Replace these values with CSS variables as available */
@@ -374,7 +1223,28 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
  
  .theme-dark .jsterm-input-node {
    color: #8fa1b2; /* textColor */
-@@ -374,16 +409,20 @@ a {
+@@ -353,16 +388,20 @@ a {
+ .theme-dark .navigation-marker .url {
+   background: #131c26; /* mainBackgroundColor */
+ }
+ 
+ .theme-dark .inlined-variables-view iframe {
+   border-color: #333;
+ }
+ 
++.theme-dark .stacktrace {
++  border-color: #333;
++}
++
+ .theme-light .jsterm-input-container {
+   background-color: #fff; /* mainBackgroundColor */
+   border-color: ThreeDShadow;
+ }
+ 
+ .theme-light .jsterm-input-node {
+   color: black; /* textColor */
+ }
+@@ -374,16 +413,20 @@ a {
  .theme-light .navigation-marker .url {
    background: #fff; /* mainBackgroundColor */
  }
