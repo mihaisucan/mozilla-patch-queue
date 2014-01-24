@@ -1,0 +1,225 @@
+# HG changeset patch
+# Parent 2552d554372d96baf3e26ddaf66468886b51cbb9
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1390600039 -7200
+
+Bug 823097 - Add support for %c style formatting in console; r=past
+
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -1074,24 +1074,58 @@ Messages.ConsoleGeneric = function(packe
+     filterDuplicates: true,
+     location: {
+       url: packet.filename,
+       line: packet.lineNumber,
+     },
+   };
+   Messages.Extended.call(this, packet.arguments, options);
+   this._repeatID.consoleApiLevel = packet.level;
++  this._repeatID.styles = packet.styles;
++  this._styles = packet.styles;
+ };
+ 
+ Messages.ConsoleGeneric.prototype = Heritage.extend(Messages.Extended.prototype,
+ {
++  _styles: null,
++
+   _renderBodyPieceSeparator: function()
+   {
+     return this.document.createTextNode(" ");
+   },
++
++  render: function()
++  {
++    let lastStyle = null;
++    let result = this.document.createDocumentFragment();
++
++    for (let i = 0; i < this._messagePieces.length; i++) {
++      let separator = i > 0 ? this._renderBodyPieceSeparator() : null;
++      if (separator) {
++        result.appendChild(separator);
++      }
++
++      let style = this._styles[i];
++      if (style && typeof style == "string" /* no long string support */) {
++        let span = this.document.createElementNS(XHTML_NS, "span");
++        span.style = style;
++        result.appendChild(span);
++        lastStyle = span;
++        continue;
++      }
++
++      let piece = this._messagePieces[i];
++      (lastStyle || result).appendChild(this._renderBodyPiece(piece));
++    }
++
++    this._message = result;
++    this._messagePieces = null;
++    this._styles = null;
++    return Messages.Simple.prototype.render.call(this);
++  },
+ }); // Messages.ConsoleGeneric.prototype
+ 
+ /**
+  * The ConsoleTrace message is used for console.trace() calls.
+  *
+  * @constructor
+  * @extends Messages.Simple
+  * @param object packet
+@@ -1142,18 +1176,18 @@ Messages.ConsoleTrace.prototype = Herita
+ 
+   init: function()
+   {
+     let result = Messages.Simple.prototype.init.apply(this, arguments);
+ 
+     // We ignore console.trace() arguments. Release object actors.
+     if (Array.isArray(this._arguments)) {
+       for (let arg of this._arguments) {
+-        if (WebConsoleUtils.isActorGrip(arg)) {
+-          this.output._releaseObject(arg.actor);
++        if (arg.value && WebConsoleUtils.isActorGrip(arg.value)) {
++          this.output._releaseObject(arg.value.actor);
+         }
+       }
+     }
+     this._arguments = null;
+ 
+     return result;
+   },
+ 
+diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
+--- a/dom/base/ConsoleAPI.js
++++ b/dom/base/ConsoleAPI.js
+@@ -8,17 +8,17 @@ let Cu = Components.utils;
+ let Ci = Components.interfaces;
+ let Cc = Components.classes;
+ 
+ // The maximum allowed number of concurrent timers per page.
+ const MAX_PAGE_TIMERS = 10000;
+ 
+ // The regular expression used to parse %s/%d and other placeholders for
+ // variables in strings that need to be interpolated.
+-const ARGUMENT_PATTERN = /%\d*\.?\d*([osdif])\b/g;
++const ARGUMENT_PATTERN = /%\d*\.?\d*([dif])\b|%([oOs])\b|%(c)/g;
+ 
+ // The maximum stacktrace depth when populating the stacktrace array used for
+ // console.trace().
+ const DEFAULT_MAX_STACKTRACE_DEPTH = 200;
+ 
+ // The console API methods are async and their action is executed later. This
+ // delay tells how much later.
+ const CALL_DELAY = 15; // milliseconds
+@@ -298,19 +298,22 @@ ConsoleAPI.prototype = {
+ 
+     switch (method) {
+       case "log":
+       case "info":
+       case "warn":
+       case "error":
+       case "exception":
+       case "debug":
+-      case "assert":
+-        consoleEvent.arguments = this.processArguments(args);
++      case "assert": {
++        let result = this.processArguments(args);
++        consoleEvent.arguments = result.args;
++        consoleEvent.styles = result.styles;
+         break;
++      }
+       case "trace":
+         consoleEvent.stacktrace = meta.stack;
+         break;
+       case "group":
+       case "groupCollapsed":
+       case "groupEnd":
+         try {
+           consoleEvent.groupName = Array.prototype.join.call(args, " ");
+@@ -361,54 +364,59 @@ ConsoleAPI.prototype = {
+    * TODO: object substitution should take into account width and precision
+    * qualifiers (bug 685813).
+    *
+    * @param mixed aArguments
+    *        The arguments given to the console API call.
+    **/
+   processArguments: function CA_processArguments(aArguments) {
+     if (aArguments.length < 2 || typeof aArguments[0] != "string") {
+-      return aArguments;
++      return { args: aArguments };
+     }
+ 
+     let args = Array.prototype.slice.call(aArguments);
+     let format = args.shift();
+-    let splitter = "%" + format.length + Date.now() + "%";
++    let splitter = "!" + format.length + Date.now() + "!";
+     let objects = [];
++    let styles = [];
+ 
+     // Format specification regular expression.
+     let processed = format.replace(ARGUMENT_PATTERN, function CA_PA_substitute(match, submatch) {
+       switch (submatch) {
+         case "o":
++        case "O":
+           objects.push(args.shift());
+           return splitter;
+         case "s":
+           return String(args.shift());
+         case "d":
+         case "i":
+           return parseInt(args.shift());
+         case "f":
+           return parseFloat(args.shift());
++        case "c":
++          styles.push(String(args.shift()));
++          return splitter;
+         default:
+           return submatch;
+       };
+     });
+ 
+     let result = [];
+     let processedArray = processed.split(splitter);
+     processedArray.forEach(function(aValue, aIndex) {
+       if (aValue !== "") {
+         result.push(aValue);
+       }
+       if (objects[aIndex]) {
+         result.push(objects[aIndex]);
+       }
+     });
+ 
+-    return result.concat(args);
++    return { args: result.concat(args), styles: styles };
+   },
+ 
+   /**
+    * Build the stacktrace array for the console.trace() call.
+    *
+    * @param number [aMaxDepth=DEFAULT_MAX_STACKTRACE_DEPTH]
+    *        Optional maximum stacktrace depth.
+    * @return array
+diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
+--- a/toolkit/devtools/server/actors/webconsole.js
++++ b/toolkit/devtools/server/actors/webconsole.js
+@@ -1239,16 +1239,21 @@ WebConsoleActor.prototype =
+     delete result.ID;
+     delete result.innerID;
+ 
+     result.arguments = Array.map(aMessage.arguments || [], (aObj) => {
+       let dbgObj = this.makeDebuggeeValue(aObj, true);
+       return this.createValueGrip(dbgObj);
+     });
+ 
++    result.styles = Array.map(aMessage.styles || [], (aObj) => {
++      let dbgObj = this.makeDebuggeeValue(aObj, true);
++      return this.createValueGrip(dbgObj);
++    });
++
+     return result;
+   },
+ 
+   /**
+    * Find the XUL window that owns the content window.
+    *
+    * @return Window
+    *         The XUL window that owns the content window.
