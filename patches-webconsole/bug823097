@@ -1,14 +1,14 @@
 # HG changeset patch
 # Parent 2552d554372d96baf3e26ddaf66468886b51cbb9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1390600039 -7200
+# Date 1390648303 -7200
 
 Bug 823097 - Add support for %c style formatting in console; r=past
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -1074,24 +1074,58 @@ Messages.ConsoleGeneric = function(packe
+@@ -1074,24 +1074,57 @@ Messages.ConsoleGeneric = function(packe
      filterDuplicates: true,
      location: {
        url: packet.filename,
@@ -47,7 +47,6 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +        span.style = style;
 +        result.appendChild(span);
 +        lastStyle = span;
-+        continue;
 +      }
 +
 +      let piece = this._messagePieces[i];
@@ -67,27 +66,6 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   * @constructor
   * @extends Messages.Simple
   * @param object packet
-@@ -1142,18 +1176,18 @@ Messages.ConsoleTrace.prototype = Herita
- 
-   init: function()
-   {
-     let result = Messages.Simple.prototype.init.apply(this, arguments);
- 
-     // We ignore console.trace() arguments. Release object actors.
-     if (Array.isArray(this._arguments)) {
-       for (let arg of this._arguments) {
--        if (WebConsoleUtils.isActorGrip(arg)) {
--          this.output._releaseObject(arg.actor);
-+        if (arg.value && WebConsoleUtils.isActorGrip(arg.value)) {
-+          this.output._releaseObject(arg.value.actor);
-         }
-       }
-     }
-     this._arguments = null;
- 
-     return result;
-   },
- 
 diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 --- a/dom/base/ConsoleAPI.js
 +++ b/dom/base/ConsoleAPI.js
@@ -135,7 +113,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
        case "groupEnd":
          try {
            consoleEvent.groupName = Array.prototype.join.call(args, " ");
-@@ -361,54 +364,59 @@ ConsoleAPI.prototype = {
+@@ -361,54 +364,64 @@ ConsoleAPI.prototype = {
     * TODO: object substitution should take into account width and precision
     * qualifiers (bug 685813).
     *
@@ -153,10 +131,13 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
 -    let splitter = "%" + format.length + Date.now() + "%";
 +    let splitter = "!" + format.length + Date.now() + "!";
      let objects = [];
-+    let styles = [];
++    let stylesArr = [];
++    let stylesArr2 = [];
  
      // Format specification regular expression.
-     let processed = format.replace(ARGUMENT_PATTERN, function CA_PA_substitute(match, submatch) {
+-    let processed = format.replace(ARGUMENT_PATTERN, function CA_PA_substitute(match, submatch) {
++    let processed = format.replace(ARGUMENT_PATTERN, (match, submatch1, submatch2, submatch3) => {
++      let submatch = submatch1 || submatch2 || submatch3;
        switch (submatch) {
          case "o":
 +        case "O":
@@ -170,7 +151,7 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
          case "f":
            return parseFloat(args.shift());
 +        case "c":
-+          styles.push(String(args.shift()));
++          stylesArr.push(String(args.shift()));
 +          return splitter;
          default:
            return submatch;
@@ -186,10 +167,13 @@ diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
        if (objects[aIndex]) {
          result.push(objects[aIndex]);
        }
++      if (stylesArr[aIndex]) {
++        stylesArr2[result.length] = stylesArr[aIndex];
++      }
      });
  
 -    return result.concat(args);
-+    return { args: result.concat(args), styles: styles };
++    return { args: result.concat(args), styles: stylesArr2 };
    },
  
    /**
