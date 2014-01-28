@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent f576ad4e8391b4b4be5d649d02b96d5ef2b3aa88
+# Parent af499d8627bf959bb4a3c429b2b39941db637eb5
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1390596281 -7200
+# Date 1390945718 -7200
 
 Bug 917227 - Network monitor doesn't work with Firefox OS
 
@@ -10,7 +10,7 @@ diff --git a/browser/devtools/main.js b/browser/devtools/main.js
 +++ b/browser/devtools/main.js
 @@ -218,17 +218,17 @@ Tools.netMonitor = {
    visibilityswitch: "devtools.netmonitor.enabled",
-   icon: "chrome://browser/skin/devtools/tool-network@2x.png",
+   icon: "chrome://browser/skin/devtools/tool-network.svg",
    url: "chrome://browser/content/devtools/netmonitor.xul",
    label: l10n("netmonitor.label", netMonitorStrings),
    tooltip: l10n("netmonitor.tooltip", netMonitorStrings),
@@ -362,7 +362,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 --- a/toolkit/devtools/server/child.js
 +++ b/toolkit/devtools/server/child.js
-@@ -15,19 +15,72 @@ let onConnect = DevToolsUtils.makeInfall
+@@ -15,19 +15,76 @@ let onConnect = DevToolsUtils.makeInfall
    removeMessageListener("debug:connect", onConnect);
  
    let mm = msg.target;
@@ -390,7 +390,7 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 +  this.owner = owner;
 +  this._onNewEvent = this._onNewEvent.bind(this);
 +  this._onUpdateEvent = this._onUpdateEvent.bind(this);
-+  this._netEvents = new WeakMap();
++  this._netEvents = new Map();
 +};
 +
 +DebuggerServer.NetworkMonitorChild.prototype = {
@@ -406,16 +406,20 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 +  },
 +
 +  _onNewEvent: DevToolsUtils.makeInfallible(function _onNewEvent(msg) {
++    dump("NetworkMonitorChild _onNewEvent(1) msg " + msg + "\n");
 +    let {id, event} = msg.data;
-+    dump("NetworkMonitorChild _onNewEvent() " + id + "\n");
++    dump("NetworkMonitorChild _onNewEvent(2) id " + id + " event " + event + "\n");
 +    let actor = this.owner.onNetworkEvent(event);
 +    this._netEvents.set(id, actor);
 +  }),
 +
 +  _onUpdateEvent: DevToolsUtils.makeInfallible(function _onUpdateEvent(msg) {
++    dump("NetworkMonitorChild _onUpdateEvent(1) msg " + msg + "\n");
++    dump("NetworkMonitorChild _onUpdateEvent(2) msg.data " + msg.data + "\n");
 +    let {id, method, args} = msg.data;
++    dump("NetworkMonitorChild _onUpdateEvent(3) id " + id + " method " + method + " args " + args + "\n");
 +    let actor = this._netEvents.get(id);
-+    dump("NetworkMonitorChild _onUpdateEvent() " + id + " " + method + "\n");
++    dump("NetworkMonitorChild _onUpdateEvent(4) actor " + actor + "\n");
 +    if (!actor) {
 +      Cu.reportError("Received debug:netmonitor:updateEvent for unknown event ID: " + id);
 +      return;
@@ -471,7 +475,7 @@ diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/we
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
-@@ -1716,30 +1716,32 @@ NetworkResponseListener.prototype = {
+@@ -1723,30 +1723,32 @@ NetworkResponseListener.prototype = {
     * See documentation at
     * https://developer.mozilla.org/En/NsIRequestObserver
     *
@@ -504,7 +508,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
     * Find the open response object associated to the current request. The
     * NetworkMonitor._httpResponseExaminer() method saves the response headers in
     * NetworkMonitor.openResponses. This method takes the data from the open
-@@ -1777,16 +1779,17 @@ NetworkResponseListener.prototype = {
+@@ -1784,16 +1786,17 @@ NetworkResponseListener.prototype = {
    /**
     * Clean up the response listener once the response input stream is closed.
     * This is called from onStopRequest() or from onInputStreamReady() when the
@@ -522,7 +526,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
  
      this._findOpenResponse();
  
-@@ -1810,16 +1813,17 @@ NetworkResponseListener.prototype = {
+@@ -1817,16 +1820,17 @@ NetworkResponseListener.prototype = {
     * response listener.
     *
     * @param string [aData]
@@ -540,7 +544,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
      response.size = response.text.length;
  
      try {
-@@ -1889,35 +1893,41 @@ NetworkResponseListener.prototype = {
+@@ -1896,35 +1900,41 @@ NetworkResponseListener.prototype = {
  /**
   * The network monitor uses the nsIHttpActivityDistributor to monitor network
   * requests. The nsIObserverService is also used for monitoring
@@ -591,7 +595,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
      0x5002: "REQUEST_BODY_SENT",
      0x5003: "RESPONSE_START",
      0x5004: "RESPONSE_HEADER",
-@@ -1988,26 +1998,41 @@ NetworkMonitor.prototype = {
+@@ -1995,26 +2005,41 @@ NetworkMonitor.prototype = {
      // NetworkResponseListener is responsible with updating the httpActivity
      // object with the data from the new object in openResponses.
  
@@ -633,7 +637,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
      };
  
      let setCookieHeader = null;
-@@ -2017,17 +2042,20 @@ NetworkMonitor.prototype = {
+@@ -2024,17 +2049,20 @@ NetworkMonitor.prototype = {
          let lowerName = aName.toLowerCase();
          if (lowerName == "set-cookie") {
            setCookieHeader = aValue;
@@ -654,7 +658,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
      }
  
      // Determine the HTTP version.
-@@ -2038,52 +2066,59 @@ NetworkMonitor.prototype = {
+@@ -2045,52 +2073,59 @@ NetworkMonitor.prototype = {
      channel.getResponseVersion(httpVersionMaj, httpVersionMin);
  
      response.status = channel.responseStatus;
@@ -717,7 +721,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
          httpActivity = item;
          break;
        }
-@@ -2117,40 +2152,59 @@ NetworkMonitor.prototype = {
+@@ -2124,40 +2159,59 @@ NetworkMonitor.prototype = {
          this._onResponseHeader(httpActivity, aExtraStringData);
          break;
        case gActivityDistributor.ACTIVITY_SUBTYPE_TRANSACTION_CLOSE:
@@ -778,7 +782,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
  
      httpActivity.timings.REQUEST_HEADER = {
        first: aTimestamp,
-@@ -2184,39 +2238,48 @@ NetworkMonitor.prototype = {
+@@ -2191,39 +2245,48 @@ NetworkMonitor.prototype = {
  
      event.discardRequestBody = !this.saveRequestAndResponseBodies;
      event.discardResponseBody = !this.saveRequestAndResponseBodies;
@@ -828,7 +832,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
     *
     * This is a HAR-like object. Conformance to the spec is not guaranteed at
     * this point.
-@@ -2249,16 +2312,17 @@ NetworkMonitor.prototype = {
+@@ -2256,16 +2319,17 @@ NetworkMonitor.prototype = {
     * NetworkResponseListener is responsible for storing the response body.
     *
     * @private
@@ -846,7 +850,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
      // asynchronously.
      // Both ends of the pipe must be blocking.
      let sink = Cc["@mozilla.org/pipe;1"].createInstance(Ci.nsIPipe);
-@@ -2275,16 +2339,17 @@ NetworkMonitor.prototype = {
+@@ -2282,16 +2346,17 @@ NetworkMonitor.prototype = {
      newListener.sink = sink;
  
      let tee = Cc["@mozilla.org/network/stream-listener-tee;1"].
