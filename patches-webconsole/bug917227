@@ -1,7 +1,7 @@
 # HG changeset patch
 # Parent c8ef3bd6322d1dedb48a067ec6a9eaa5a1e9a1a3
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1391016290 -7200
+# Date 1391030403 -7200
 
 Bug 917227 - Network monitor doesn't work with Firefox OS
 
@@ -27,6 +27,42 @@ diff --git a/browser/devtools/main.js b/browser/devtools/main.js
    }
  };
  
+diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/dbg-client.jsm
+--- a/toolkit/devtools/client/dbg-client.jsm
++++ b/toolkit/devtools/client/dbg-client.jsm
+@@ -592,29 +592,32 @@ DebuggerClient.prototype = {
+     if (!aRequest.to) {
+       let type = aRequest.type || "";
+       throw Error("'" + type + "' request packet has no destination.");
+     }
+ 
+     this._pendingRequests.push({ to: aRequest.to,
+                                  request: aRequest,
+                                  onResponse: aOnResponse });
++    let foo = this._pendingRequests[this._pendingRequests.length-1];
++    console.debug("dbg-client request()", foo, "foo.request", foo.request);
+     this._sendRequests();
+   },
+ 
+   /**
+    * Send pending requests to any actors that don't already have an
+    * active request.
+    */
+   _sendRequests: function () {
+     this._pendingRequests = this._pendingRequests.filter((request) => {
+       if (this._activeRequests.has(request.to)) {
+         return true;
+       }
+ 
++      console.debug("dbg-client _sendRequests() request", request, "request.request", request.request);
+       this.expectReply(request.to, request.onResponse);
+       this._transport.send(request.request);
+ 
+       return false;
+     });
+   },
+ 
+   /**
 diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/server/actors/childtab.js
 --- a/toolkit/devtools/server/actors/childtab.js
 +++ b/toolkit/devtools/server/actors/childtab.js
@@ -428,7 +464,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    onSendHTTPRequest: function WCA_onSendHTTPRequest(aMessage)
    {
      let details = aMessage.request;
-+    console.debug("WCA_onSendHTTPRequest 1 details", details, "headers", details.headers);
++    console.debug("WCA_onSendHTTPRequest 1 actor", this.actorID, "msg", aMessage, "details", details, "headers", details.headers);
  
      // send request from target's window
      let request = new this.window.XMLHttpRequest();
@@ -556,10 +592,47 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 +    this.owner = null;
 +  },
 +};
+diff --git a/toolkit/devtools/server/transport.js b/toolkit/devtools/server/transport.js
+--- a/toolkit/devtools/server/transport.js
++++ b/toolkit/devtools/server/transport.js
+@@ -53,29 +53,33 @@ this.DebuggerTransport = function Debugg
+   this._converter.charset = "UTF-8";
+ 
+   this._outgoing = "";
+   this._incoming = "";
+ 
+   this.hooks = null;
+ }
+ 
++let {console} = Cu.import("resource://gre/modules/devtools/Console.jsm", {});
++
+ DebuggerTransport.prototype = {
+   /**
+    * Transmit a packet.
+    *
+    * This method returns immediately, without waiting for the entire
+    * packet to be transmitted, registering event handlers as needed to
+    * transmit the entire packet. Packets are transmitted in the order
+    * they are passed to this method.
+    */
+   send: function DT_send(aPacket) {
++    console.debug("DT_send packet", aPacket);
+     let data = JSON.stringify(aPacket);
+     data = this._converter.ConvertFromUnicode(data);
+     data = data.length + ':' + data;
++    dumpn("Sending: " + data);
+     this._outgoing += data;
+     this._flushOutgoing();
+   },
+ 
+   /**
+    * Close the transport.
+    */
+   close: function DT_close() {
 diff --git a/toolkit/devtools/webconsole/client.js b/toolkit/devtools/webconsole/client.js
 --- a/toolkit/devtools/webconsole/client.js
 +++ b/toolkit/devtools/webconsole/client.js
-@@ -307,16 +307,17 @@ WebConsoleClient.prototype = {
+@@ -307,21 +307,23 @@ WebConsoleClient.prototype = {
     * Send a HTTP request with the given data.
     *
     * @param string aData
@@ -568,15 +641,22 @@ diff --git a/toolkit/devtools/webconsole/client.js b/toolkit/devtools/webconsole
     *        The function invoked when the response is received.
     */
    sendHTTPRequest: function WCC_sendHTTPRequest(aData, aOnResponse) {
-+    console.debug("WCC_sendHTTPRequest data", aData, 'headers', aData.headers);
++    console.debug("WCC_sendHTTPRequest actor", this._actor, "data", aData, 'headers', aData.headers);
      let packet = {
        to: this._actor,
        type: "sendHTTPRequest",
-       request: aData
+-      request: aData
++      request: XPCNativeWrapper.unwrap(aData),
      };
++    console.debug("WCC_sendHTTPRequest packet", packet);
      this._client.request(packet, aOnResponse);
    },
  
+   /**
+    * Start the given Web Console listeners.
+    *
+    * @see this.LISTENERS
+    * @param array aListeners
 diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/webconsole/network-helper.js
 --- a/toolkit/devtools/webconsole/network-helper.js
 +++ b/toolkit/devtools/webconsole/network-helper.js
