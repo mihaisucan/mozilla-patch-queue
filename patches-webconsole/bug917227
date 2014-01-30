@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent c8ef3bd6322d1dedb48a067ec6a9eaa5a1e9a1a3
+# Parent 5a3bc41cd6f18b21659c7938c804f55be39fccea
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1391030403 -7200
+# Date 1391110376 -7200
 
-Bug 917227 - Network monitor doesn't work with Firefox OS
+Bug 917227 - Network monitor doesn't work with Firefox OS; r=ochameau
 
 diff --git a/browser/devtools/main.js b/browser/devtools/main.js
 --- a/browser/devtools/main.js
@@ -27,42 +27,35 @@ diff --git a/browser/devtools/main.js b/browser/devtools/main.js
    }
  };
  
-diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/dbg-client.jsm
---- a/toolkit/devtools/client/dbg-client.jsm
-+++ b/toolkit/devtools/client/dbg-client.jsm
-@@ -592,29 +592,32 @@ DebuggerClient.prototype = {
-     if (!aRequest.to) {
-       let type = aRequest.type || "";
-       throw Error("'" + type + "' request packet has no destination.");
+diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/netmonitor/netmonitor-view.js
+--- a/browser/devtools/netmonitor/netmonitor-view.js
++++ b/browser/devtools/netmonitor/netmonitor-view.js
+@@ -422,19 +422,22 @@ RequestsMenuView.prototype = Heritage.ex
+   },
+ 
+   /**
+    * Send a new HTTP request using the data in the custom request form.
+    */
+   sendCustomRequest: function() {
+     let selected = this.selectedItem.attachment;
+ 
+-    let data = Object.create(selected, {
+-      headers: { value: selected.requestHeaders.headers }
+-    });
++    let data = {
++      method: selected.method,
++      url: selected.url,
++      httpVersion: selected.httpVersion,
++      headers: selected.requestHeaders.headers,
++    };
+ 
+     if (selected.requestPostData) {
+       data.body = selected.requestPostData.postData.text;
      }
  
-     this._pendingRequests.push({ to: aRequest.to,
-                                  request: aRequest,
-                                  onResponse: aOnResponse });
-+    let foo = this._pendingRequests[this._pendingRequests.length-1];
-+    console.debug("dbg-client request()", foo, "foo.request", foo.request);
-     this._sendRequests();
-   },
- 
-   /**
-    * Send pending requests to any actors that don't already have an
-    * active request.
-    */
-   _sendRequests: function () {
-     this._pendingRequests = this._pendingRequests.filter((request) => {
-       if (this._activeRequests.has(request.to)) {
-         return true;
-       }
- 
-+      console.debug("dbg-client _sendRequests() request", request, "request.request", request.request);
-       this.expectReply(request.to, request.onResponse);
-       this._transport.send(request.request);
- 
-       return false;
-     });
-   },
- 
-   /**
+     NetMonitorController.webConsoleClient.sendHTTPRequest(data, aResponse => {
+       let id = aResponse.eventActor.actor;
+       this._preferredItemId = id;
 diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/server/actors/childtab.js
 --- a/toolkit/devtools/server/actors/childtab.js
 +++ b/toolkit/devtools/server/actors/childtab.js
@@ -112,7 +105,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
  }
  
  WebappsActor.prototype = {
-@@ -792,16 +793,58 @@ WebappsActor.prototype = {
+@@ -792,16 +793,57 @@ WebappsActor.prototype = {
    _connectToApp: function (aFrame) {
      let deferred = Promise.defer();
  
@@ -123,7 +116,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
  
 +    let onNetMonitorMessage = makeInfallible(function _onNetMonitorMessage(msg) {
 +      let { action, appId } = msg.json;
-+      dump("***** Got debug:netmonitor " + action + " " + appId + "\n");
++      debug("***** Got debug:netmonitor " + action + " " + appId);
 +
 +      // Pipe network monitor data from parent to child via the message manager.
 +      switch (action) {
@@ -133,7 +126,6 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
 +          netMonitor._messageManager = mm;
 +          netMonitor.init();
 +          this._netMonitorMap.set(mm, netMonitor);
-+          dump("***** network monitoring started\n");
 +          break;
 +        }
 +
@@ -171,7 +163,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
        prefix = msg.json.prefix;
  
        // Pipe Debugger message from/to parent/child via the message manager
-@@ -820,16 +863,18 @@ WebappsActor.prototype = {
+@@ -820,16 +862,18 @@ WebappsActor.prototype = {
  
        deferred.resolve(actor);
      }).bind(this);
@@ -190,7 +182,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
          } else {
            // Otherwise, the app has been closed before the actor
            // had a chance to be created, so we are not able to create
-@@ -840,27 +885,45 @@ WebappsActor.prototype = {
+@@ -840,27 +884,57 @@ WebappsActor.prototype = {
          if (actor) {
            // The ContentAppActor within the child process doesn't necessary
            // have to time to uninitialize itself when the app is closed/killed.
@@ -217,10 +209,22 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
      return deferred.promise;
    },
  
++  /**
++   * Handler for new network requests.
++   *
++   * @param object event
++   *        Object describing the network request.
++   * @param nsIHttpChannel channel
++   *        The request's nsIHttpChannel object.
++   * @param object netMonitor
++   *        The NetworkMonitor instance which notifies us about the new event.
++   * @return object
++   *         A NetworkEventActorProxy instance which is notified when further
++   *         data about the request is available.
++   */
 +  onNetworkEvent: function(event, channel, netMonitor) {
 +    let mm = netMonitor._messageManager;
 +    let proxy = new NetworkEventActorProxy(mm, this);
-+    dump("onNetworkEvent " + proxy.id + "\n");
 +    mm.sendAsyncMessage("debug:netmonitor:newEvent", {
 +      id: proxy.id,
 +      event: event,
@@ -236,7 +240,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
        if (frame.getAttribute("mozapp") == manifestURL) {
          appFrame = frame;
          break;
-@@ -1004,8 +1067,43 @@ if (Services.prefs.getBoolPref("devtools
+@@ -1004,8 +1078,58 @@ if (Services.prefs.getBoolPref("devtools
    requestTypes.listRunningApps = WebappsActor.prototype.listRunningApps;
    requestTypes.getAppActor = WebappsActor.prototype.getAppActor;
    requestTypes.watchApps = WebappsActor.prototype.watchApps;
@@ -246,16 +250,31 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
  
  DebuggerServer.addGlobalActor(WebappsActor, "webappsActor");
 +
++/**
++ * The NetworkEventActorProxy is used to send network request information from
++ * the main process to the child app process. One proxy is used per request.
++ * Similarly, one NetworkEventActor in the child app process is used per
++ * request. The client receives all network logs from the child actors.
++ *
++ * The child process has a NetworkMonitorChild instance that is listening for
++ * all network logging from the main process. The net monitor shim is used to
++ * proxy the data to the WebConsoleActor instance of the child process.
++ *
++ * @constructor
++ * @param nsIMessageManager messageManager
++ *        The message manager for the child app process. This is used for
++ *        communication with the NetworkMonitorChild instance of the process.
++ * @param object owner
++ *        The WebappsActor instance owning this network event.
++ */
 +function NetworkEventActorProxy(messageManager, owner) {
 +  this.id = gSequenceId();
-+  dump("NetworkEventActorProxy constructor " + this.id + "\n");
 +  this.messageManager = messageManager;
 +  this.owner = owner;
 +}
 +
 +NetworkEventActorProxy.methodFactory = function(method) {
 +  return makeInfallible(function() {
-+    dump("NetworkEventActorProxy " + method + " " + this.id + "\n");
 +    let args = Array.slice(arguments);
 +    this.messageManager.sendAsyncMessage("debug:netmonitor:updateEvent", {
 +      id: this.id,
@@ -268,7 +287,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
 +NetworkEventActorProxy.prototype = { };
 +
 +(function() {
-+  // Listeners for new network event data coming from NetworkMonitor.
++  // Listeners for new network event data coming from the NetworkMonitor.
 +  let methods = ["addRequestHeaders", "addRequestCookies", "addRequestPostData",
 +                 "addResponseStart", "addResponseHeaders", "addResponseCookies",
 +                 "addResponseContent", "addEventTimings"];
@@ -283,7 +302,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -31,31 +31,31 @@ for (let name of ["WebConsoleUtils", "Co
+@@ -31,17 +31,16 @@ for (let name of ["WebConsoleUtils", "Co
        }
        return devtools.require("devtools/toolkit/webconsole/utils")[prop];
      }.bind(null, name),
@@ -301,22 +320,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
   * @param object aConnection
   *        The connection to the client, DebuggerServerConnection.
   * @param object [aParentActor]
-  *        Optional, the parent actor.
-  */
- function WebConsoleActor(aConnection, aParentActor)
- {
-   this.conn = aConnection;
-   this.parentActor = aParentActor;
-+  console.log("WebConsoleActor constructor parent actor ID", this.parentActor.actorID, "appId", this.parentActor.appId);
- 
-   this._actorPool = new ActorPool(this.conn);
-   this.conn.addActorPool(this._actorPool);
- 
-   this._prefs = {};
- 
-   this.dbg = new Debugger();
- 
-@@ -237,23 +237,16 @@ WebConsoleActor.prototype =
+@@ -237,23 +236,16 @@ WebConsoleActor.prototype =
  
    /**
     * The JSTerm Helpers names cache.
@@ -340,7 +344,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    },
  
    hasNativeConsoleAPI: BrowserTabActor.prototype.hasNativeConsoleAPI,
-@@ -451,16 +444,25 @@ WebConsoleActor.prototype =
+@@ -451,16 +443,23 @@ WebConsoleActor.prototype =
     *        The JSON request object received from the Web Console client.
     * @return object
     *         The response object which holds the startedListeners array.
@@ -356,8 +360,6 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +      // Filter network requests by appId on Firefox OS devices.
 +      appId = this.parentActor.appId;
 +    }
-+
-+    console.log("WCA_onStartListeners window " + window, "appId", appId, "listeners", aRequest.listeners);
  
      while (aRequest.listeners.length > 0) {
        let listener = aRequest.listeners.shift();
@@ -366,7 +368,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleServiceListener) {
              this.consoleServiceListener =
                new ConsoleServiceListener(window, this);
-@@ -473,18 +475,23 @@ WebConsoleActor.prototype =
+@@ -473,18 +472,23 @@ WebConsoleActor.prototype =
              this.consoleAPIListener =
                new ConsoleAPIListener(window, this);
              this.consoleAPIListener.init();
@@ -392,7 +394,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleProgressListener) {
              this.consoleProgressListener =
                new ConsoleProgressListener(this.window, this);
-@@ -792,16 +799,21 @@ WebConsoleActor.prototype =
+@@ -792,16 +796,21 @@ WebConsoleActor.prototype =
     *
     * @param object aRequest
     *        The request message - which preferences need to be updated.
@@ -414,7 +416,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    // End of request handlers.
    //////////////////
  
-@@ -1101,16 +1113,18 @@ WebConsoleActor.prototype =
+@@ -1101,16 +1110,18 @@ WebConsoleActor.prototype =
     * Handler for network events. This method is invoked when a new network event
     * is about to be recorded.
     *
@@ -433,7 +435,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    {
      let actor = this.getNetworkEventActor(aChannel);
      actor.init(aEvent);
-@@ -1125,18 +1139,20 @@ WebConsoleActor.prototype =
+@@ -1125,18 +1136,20 @@ WebConsoleActor.prototype =
  
      return actor;
    },
@@ -455,48 +457,10 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
        this._netEvents.delete(aChannel);
        actor.channel = null;
        return actor;
-@@ -1151,31 +1167,37 @@ WebConsoleActor.prototype =
-    * Send a new HTTP request from the target's window.
-    *
-    * @param object aMessage
-    *        Object with 'request' - the HTTP request details.
-    */
-   onSendHTTPRequest: function WCA_onSendHTTPRequest(aMessage)
-   {
-     let details = aMessage.request;
-+    console.debug("WCA_onSendHTTPRequest 1 actor", this.actorID, "msg", aMessage, "details", details, "headers", details.headers);
- 
-     // send request from target's window
-     let request = new this.window.XMLHttpRequest();
-     request.open(details.method, details.url, true);
- 
-+    console.log("WCA_onSendHTTPRequest 2 request", request);
-+
-     for (let {name, value} of details.headers) {
-       request.setRequestHeader(name, value);
-     }
-     request.send(details.body);
- 
-     let actor = this.getNetworkEventActor(request.channel);
-+    console.log("WCA_onSendHTTPRequest 3 actor", actor);
- 
-     // map channel to actor so we can associate future events with it
-     this._netEvents.set(request.channel, actor);
- 
-+    console.log("WCA_onSendHTTPRequest end");
-+
-     return {
-       from: this.actorID,
-       eventActor: actor.grip()
-     };
-   },
- 
-   /**
-    * Handler for file activity. This method sends the file request information
 diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 --- a/toolkit/devtools/server/child.js
 +++ b/toolkit/devtools/server/child.js
-@@ -15,19 +15,94 @@ let onConnect = DevToolsUtils.makeInfall
+@@ -15,19 +15,104 @@ let onConnect = DevToolsUtils.makeInfall
    removeMessageListener("debug:connect", onConnect);
  
    let mm = msg.target;
@@ -518,8 +482,26 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
  
  addMessageListener("debug:connect", onConnect);
 +
++/**
++ * The NetworkMonitorChild is used to proxy all of the network activity of the
++ * child app process from the main process. The child WebConsoleActor creates an
++ * instance of this object.
++ *
++ * Network requests for apps happen in the main process. As such,
++ * a NetworkMonitor instance is used by the WebappsActor in the main process to
++ * log the network requests for this child process.
++ *
++ * The main process creates NetworkEventActorProxy instances per request. These
++ * send the data to this object using the nsIMessageManager. Here we proxy the
++ * data to the WebConsoleActor or to a NetworkEventActor.
++ *
++ * @constructor
++ * @param number appId
++ *        The web appId of the child process.
++ * @param object owner
++ *        The WebConsoleActor that is listening for the network requests.
++ */
 +DebuggerServer.NetworkMonitorChild = function(appId, owner) {
-+  dump("NetworkMonitorChild constructor " + appId + "\n");
 +  this.appId = appId;
 +  this.owner = owner;
 +  this._onNewEvent = this._onNewEvent.bind(this);
@@ -539,7 +521,6 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 +
 +  set saveRequestAndResponseBodies(val) {
 +    this._saveRequestAndResponseBodies = val;
-+    dump("NetworkMonitorChild set saveRequestAndResponseBodies " + this._saveRequestAndResponseBodies + "\n");
 +
 +    sendAsyncMessage("debug:netmonitor", {
 +      appId: this.appId,
@@ -551,27 +532,21 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 +  },
 +
 +  init: function() {
-+    dump("NetworkMonitorChild init() " + this.appId + "\n");
 +    addMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
 +    addMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
 +    sendAsyncMessage("debug:netmonitor", { appId: this.appId, action: "start" });
 +  },
 +
 +  _onNewEvent: DevToolsUtils.makeInfallible(function _onNewEvent(msg) {
-+    dump("NetworkMonitorChild _onNewEvent(1) msg " + msg + "\n");
 +    let {id, event} = msg.data;
-+    dump("NetworkMonitorChild _onNewEvent(2) id " + id + " event " + event + "\n");
 +    let actor = this.owner.onNetworkEvent(event);
-+    this._netEvents.set(id, actor);
++    this._netEvents.set(id, Cu.getWeakReference(actor));
 +  }),
 +
 +  _onUpdateEvent: DevToolsUtils.makeInfallible(function _onUpdateEvent(msg) {
-+    dump("NetworkMonitorChild _onUpdateEvent(1) msg " + msg + "\n");
-+    dump("NetworkMonitorChild _onUpdateEvent(2) msg.data " + msg.data + "\n");
 +    let {id, method, args} = msg.data;
-+    dump("NetworkMonitorChild _onUpdateEvent(3) id " + id + " method " + method + " args " + args + "\n");
-+    let actor = this._netEvents.get(id);
-+    dump("NetworkMonitorChild _onUpdateEvent(4) actor " + actor + "\n");
++    let weakActor = this._netEvents.get(id);
++    let actor = weakActor ? weakActor.get() : null;
 +    if (!actor) {
 +      Cu.reportError("Received debug:netmonitor:updateEvent for unknown event ID: " + id);
 +      return;
@@ -584,7 +559,6 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 +  }),
 +
 +  destroy: function() {
-+    dump("NetworkMonitorChild destroy() " + this.appId + "\n");
 +    removeMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
 +    removeMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
 +    sendAsyncMessage("debug:netmonitor", { action: "stop" });
@@ -592,71 +566,6 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 +    this.owner = null;
 +  },
 +};
-diff --git a/toolkit/devtools/server/transport.js b/toolkit/devtools/server/transport.js
---- a/toolkit/devtools/server/transport.js
-+++ b/toolkit/devtools/server/transport.js
-@@ -53,29 +53,33 @@ this.DebuggerTransport = function Debugg
-   this._converter.charset = "UTF-8";
- 
-   this._outgoing = "";
-   this._incoming = "";
- 
-   this.hooks = null;
- }
- 
-+let {console} = Cu.import("resource://gre/modules/devtools/Console.jsm", {});
-+
- DebuggerTransport.prototype = {
-   /**
-    * Transmit a packet.
-    *
-    * This method returns immediately, without waiting for the entire
-    * packet to be transmitted, registering event handlers as needed to
-    * transmit the entire packet. Packets are transmitted in the order
-    * they are passed to this method.
-    */
-   send: function DT_send(aPacket) {
-+    console.debug("DT_send packet", aPacket);
-     let data = JSON.stringify(aPacket);
-     data = this._converter.ConvertFromUnicode(data);
-     data = data.length + ':' + data;
-+    dumpn("Sending: " + data);
-     this._outgoing += data;
-     this._flushOutgoing();
-   },
- 
-   /**
-    * Close the transport.
-    */
-   close: function DT_close() {
-diff --git a/toolkit/devtools/webconsole/client.js b/toolkit/devtools/webconsole/client.js
---- a/toolkit/devtools/webconsole/client.js
-+++ b/toolkit/devtools/webconsole/client.js
-@@ -307,21 +307,23 @@ WebConsoleClient.prototype = {
-    * Send a HTTP request with the given data.
-    *
-    * @param string aData
-    *        The details of the HTTP request.
-    * @param function aOnResponse
-    *        The function invoked when the response is received.
-    */
-   sendHTTPRequest: function WCC_sendHTTPRequest(aData, aOnResponse) {
-+    console.debug("WCC_sendHTTPRequest actor", this._actor, "data", aData, 'headers', aData.headers);
-     let packet = {
-       to: this._actor,
-       type: "sendHTTPRequest",
--      request: aData
-+      request: XPCNativeWrapper.unwrap(aData),
-     };
-+    console.debug("WCC_sendHTTPRequest packet", packet);
-     this._client.request(packet, aOnResponse);
-   },
- 
-   /**
-    * Start the given Web Console listeners.
-    *
-    * @see this.LISTENERS
-    * @param array aListeners
 diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/webconsole/network-helper.js
 --- a/toolkit/devtools/webconsole/network-helper.js
 +++ b/toolkit/devtools/webconsole/network-helper.js
@@ -692,76 +601,7 @@ diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/we
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
-@@ -1723,30 +1723,32 @@ NetworkResponseListener.prototype = {
-    * See documentation at
-    * https://developer.mozilla.org/En/NsIRequestObserver
-    *
-    * @param nsIRequest aRequest
-    * @param nsISupports aContext
-    */
-   onStartRequest: function NRL_onStartRequest(aRequest)
-   {
-+    console.log("NRL_onStartRequest");
-     this.request = aRequest;
-     this._findOpenResponse();
-     // Asynchronously wait for the data coming from the request.
-     this.setAsyncListener(this.sink.inputStream, this);
-   },
- 
-   /**
-    * Handle the onStopRequest by closing the sink output stream.
-    *
-    * For more documentation about nsIRequestObserver go to:
-    * https://developer.mozilla.org/En/NsIRequestObserver
-    */
-   onStopRequest: function NRL_onStopRequest()
-   {
-+    console.log("NRL_onStopRequest");
-     this._findOpenResponse();
-     this.sink.outputStream.close();
-   },
- 
-   /**
-    * Find the open response object associated to the current request. The
-    * NetworkMonitor._httpResponseExaminer() method saves the response headers in
-    * NetworkMonitor.openResponses. This method takes the data from the open
-@@ -1784,16 +1786,17 @@ NetworkResponseListener.prototype = {
-   /**
-    * Clean up the response listener once the response input stream is closed.
-    * This is called from onStopRequest() or from onInputStreamReady() when the
-    * stream is closed.
-    * @return void
-    */
-   onStreamClose: function NRL_onStreamClose()
-   {
-+    console.log("NRL_onStreamClose");
-     if (!this.httpActivity) {
-       return;
-     }
-     // Remove our listener from the request input stream.
-     this.setAsyncListener(this.sink.inputStream, null);
- 
-     this._findOpenResponse();
- 
-@@ -1817,16 +1820,17 @@ NetworkResponseListener.prototype = {
-    * response listener.
-    *
-    * @param string [aData]
-    *        Optional, the received data coming from the response listener or
-    *        from the cache.
-    */
-   _onComplete: function NRL__onComplete(aData)
-   {
-+    console.log("NRL__onComplete");
-     let response = {
-       mimeType: "",
-       text: aData || "",
-     };
- 
-     response.size = response.text.length;
- 
-     try {
-@@ -1896,35 +1900,39 @@ NetworkResponseListener.prototype = {
+@@ -1896,35 +1896,38 @@ NetworkResponseListener.prototype = {
  /**
   * The network monitor uses the nsIHttpActivityDistributor to monitor network
   * requests. The nsIObserverService is also used for monitoring
@@ -803,7 +643,6 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
 -  this._httpResponseExaminer = this._httpResponseExaminer.bind(this);
 +  this._httpResponseExaminer =
 +    DevToolsUtils.makeInfallible(this._httpResponseExaminer).bind(this);
-+  console.log("NetworkMonitor constructor window " + this.window, "appId", this.appId);
  }
  
  NetworkMonitor.prototype = {
@@ -812,7 +651,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
      0x5002: "REQUEST_BODY_SENT",
      0x5003: "RESPONSE_START",
      0x5004: "RESPONSE_HEADER",
-@@ -1944,19 +1952,19 @@ NetworkMonitor.prototype = {
+@@ -1944,19 +1947,19 @@ NetworkMonitor.prototype = {
    // bytes).
    responsePipeSegmentSize: null,
  
@@ -834,24 +673,11 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
  
    /**
     * Object that holds response headers coming from this._httpResponseExaminer.
-@@ -1995,26 +2003,41 @@ NetworkMonitor.prototype = {
-     // NetworkResponseListener is responsible with updating the httpActivity
-     // object with the data from the new object in openResponses.
- 
-     if (!this.owner || aTopic != "http-on-examine-response" ||
-         !(aSubject instanceof Ci.nsIHttpChannel)) {
-       return;
-     }
- 
-+    console.log("NM__httpResponseExaminer start");
-     let channel = aSubject.QueryInterface(Ci.nsIHttpChannel);
- 
+@@ -2005,16 +2008,24 @@ NetworkMonitor.prototype = {
      if (this.window) {
        // Try to get the source window of the request.
        let win = NetworkHelper.getWindowForRequest(channel);
-+      console.log("NM__httpResponseExaminer getWindowForRequest() result " + win);
        if (!win || win.top !== this.window) {
-+        console.log("NM__httpResponseExaminer window does not match");
          return;
        }
      }
@@ -859,14 +685,10 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
 +    if (this.appId) {
 +      // Try to get the source appId of the request.
 +      let appId = NetworkHelper.getAppIdForRequest(channel);
-+      console.log("NM__httpResponseExaminer getAppIdForRequest() result", appId);
 +      if (!appId || appId != this.appId) {
-+        console.log("NM__httpResponseExaminer appId does not match");
 +        return;
 +      }
 +    }
-+
-+    console.log("NM__httpResponseExaminer 2");
 +
      let response = {
        id: gSequenceId(),
@@ -876,44 +698,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
      };
  
      let setCookieHeader = null;
-@@ -2024,17 +2047,20 @@ NetworkMonitor.prototype = {
-         let lowerName = aName.toLowerCase();
-         if (lowerName == "set-cookie") {
-           setCookieHeader = aValue;
-         }
-         response.headers.push({ name: aName, value: aValue });
-       }
-     });
- 
-+    console.log("NM__httpResponseExaminer 3");
-+
-     if (!response.headers.length) {
-+      console.log("NM__httpResponseExaminer no response headers");
-       return; // No need to continue.
-     }
- 
-     if (setCookieHeader) {
-       response.cookies = NetworkHelper.parseSetCookieHeader(setCookieHeader);
-     }
- 
-     // Determine the HTTP version.
-@@ -2045,52 +2071,59 @@ NetworkMonitor.prototype = {
-     channel.getResponseVersion(httpVersionMaj, httpVersionMin);
- 
-     response.status = channel.responseStatus;
-     response.statusText = channel.responseStatusText;
-     response.httpVersion = "HTTP/" + httpVersionMaj.value + "." +
-                                      httpVersionMin.value;
- 
-     this.openResponses[response.id] = response;
-+
-+    console.log("NM__httpResponseExaminer end");
-   },
- 
-   /**
-    * Begin observing HTTP traffic that originates inside the current tab.
-    *
-    * @see https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsIHttpActivityObserver
+@@ -2059,19 +2070,17 @@ NetworkMonitor.prototype = {
     *
     * @param nsIHttpChannel aChannel
     * @param number aActivityType
@@ -927,40 +712,14 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
 -                              aTimestamp, aExtraSizeData, aExtraStringData)
 +  observeActivity: DevToolsUtils.makeInfallible(function NM_observeActivity(aChannel, aActivityType, aActivitySubtype, aTimestamp, aExtraSizeData, aExtraStringData)
    {
-+    console.log("NM_observeActivity start", aActivityType);
      if (!this.owner ||
          aActivityType != gActivityDistributor.ACTIVITY_TYPE_HTTP_TRANSACTION &&
          aActivityType != gActivityDistributor.ACTIVITY_TYPE_SOCKET_TRANSPORT) {
        return;
      }
  
-+    console.log("NM_observeActivity 2");
-+
      if (!(aChannel instanceof Ci.nsIHttpChannel)) {
-       return;
-     }
- 
-+    console.log("NM_observeActivity 3 aActivitySubtype", aActivitySubtype);
-+
-     aChannel = aChannel.QueryInterface(Ci.nsIHttpChannel);
- 
-     if (aActivitySubtype ==
-         gActivityDistributor.ACTIVITY_SUBTYPE_REQUEST_HEADER) {
-       this._onRequestHeader(aChannel, aTimestamp, aExtraStringData);
-       return;
-     }
- 
-+    console.log("NM_observeActivity 4");
-+
-     // Iterate over all currently ongoing requests. If aChannel can't
-     // be found within them, then exit this function.
-     let httpActivity = null;
-     for each (let item in this.openRequests) {
-       if (item.channel === aChannel) {
-         httpActivity = item;
-         break;
-       }
-@@ -2124,40 +2157,59 @@ NetworkMonitor.prototype = {
+@@ -2124,17 +2133,17 @@ NetworkMonitor.prototype = {
          this._onResponseHeader(httpActivity, aExtraStringData);
          break;
        case gActivityDistributor.ACTIVITY_SUBTYPE_TRANSACTION_CLOSE:
@@ -970,8 +729,6 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
          break;
      }
 -  },
-+
-+    console.log("NM_observeActivity end");
 +  }),
  
    /**
@@ -981,37 +738,22 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
     * collected through its lifetime.
     *
     * @private
-    * @param nsIHttpChannel aChannel
-    * @param number aTimestamp
-    * @param string aExtraStringData
-    * @return void
-    */
-   _onRequestHeader:
-   function NM__onRequestHeader(aChannel, aTimestamp, aExtraStringData)
+@@ -2148,16 +2157,24 @@ NetworkMonitor.prototype = {
    {
-+    console.log("NM__onRequestHeader start");
      let win = NetworkHelper.getWindowForRequest(aChannel);
-+    console.log("NM__onRequestHeader start win " + win);
  
      // Try to get the source window of the request.
      if (this.window && (!win || win.top !== this.window)) {
-+      console.log("NM__onRequestHeader window does not match");
        return;
      }
  
-+    console.log("NM__onRequestHeader 2");
-+
 +    if (this.appId) {
 +      // Try to get the source appId of the request.
 +      let appId = NetworkHelper.getAppIdForRequest(aChannel);
-+      console.log("NM__onRequestHeader getAppIdForRequest() result", appId);
 +      if (!appId || appId != this.appId) {
-+        console.log("NM__onRequestHeader appId does not match");
 +        return;
 +      }
 +    }
-+
-+    console.log("NM__onRequestHeader 3");
 +
      let httpActivity = this.createActivityObject(aChannel);
  
@@ -1021,39 +763,17 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
  
      httpActivity.timings.REQUEST_HEADER = {
        first: aTimestamp,
-@@ -2191,39 +2243,48 @@ NetworkMonitor.prototype = {
- 
-     event.discardRequestBody = !this.saveRequestAndResponseBodies;
-     event.discardResponseBody = !this.saveRequestAndResponseBodies;
- 
-     let headers = [];
-     let cookies = [];
-     let cookieHeader = null;
- 
-+    console.log("NM__onRequestHeader 4");
-+
-     // Copy the request header data.
-     aChannel.visitRequestHeaders({
-       visitHeader: function NM__visitHeader(aName, aValue)
-       {
-         if (aName == "Cookie") {
-           cookieHeader = aValue;
-         }
+@@ -2206,17 +2223,17 @@ NetworkMonitor.prototype = {
          headers.push({ name: aName, value: aValue });
        }
      });
  
-+    console.log("NM__onRequestHeader 5");
-+
      if (cookieHeader) {
        cookies = NetworkHelper.parseCookieHeader(cookieHeader);
      }
  
 -    httpActivity.owner = this.owner.onNetworkEvent(event, aChannel);
-+    console.log("NM__onRequestHeader 6");
 +    httpActivity.owner = this.owner.onNetworkEvent(event, aChannel, this);
-+
-+    console.log("NM__onRequestHeader 7");
  
      this._setupResponseListener(httpActivity);
  
@@ -1061,49 +781,4 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
  
      httpActivity.owner.addRequestHeaders(headers);
      httpActivity.owner.addRequestCookies(cookies);
-+
-+    console.log("NM__onRequestHeader end");
    },
- 
-   /**
-    * Create the empty HTTP activity object. This object is used for storing all
-    * the request and response information.
-    *
-    * This is a HAR-like object. Conformance to the spec is not guaranteed at
-    * this point.
-@@ -2256,16 +2317,17 @@ NetworkMonitor.prototype = {
-    * NetworkResponseListener is responsible for storing the response body.
-    *
-    * @private
-    * @param object aHttpActivity
-    *        The HTTP activity object we are tracking.
-    */
-   _setupResponseListener: function NM__setupResponseListener(aHttpActivity)
-   {
-+    console.log("NM__setupResponseListener start");
-     let channel = aHttpActivity.channel;
-     channel.QueryInterface(Ci.nsITraceableChannel);
- 
-     // The response will be written into the outputStream of this pipe.
-     // This allows us to buffer the data we are receiving and read it
-     // asynchronously.
-     // Both ends of the pipe must be blocking.
-     let sink = Cc["@mozilla.org/pipe;1"].createInstance(Ci.nsIPipe);
-@@ -2282,16 +2344,17 @@ NetworkMonitor.prototype = {
-     newListener.sink = sink;
- 
-     let tee = Cc["@mozilla.org/network/stream-listener-tee;1"].
-               createInstance(Ci.nsIStreamListenerTee);
- 
-     let originalListener = channel.setNewListener(tee);
- 
-     tee.init(originalListener, sink.outputStream, newListener);
-+    console.log("NM__setupResponseListener end");
-   },
- 
-   /**
-    * Handler for ACTIVITY_SUBTYPE_REQUEST_BODY_SENT. The request body is logged
-    * here.
-    *
-    * @private
-    * @param object aHttpActivity
