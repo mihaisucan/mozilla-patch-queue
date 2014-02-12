@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent d4e781128dd5d374358fe833e69bbb89a917c890
+# Parent 661af972f1f99600cbe4cfa46352b9a3ceaef254
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1392151403 -7200
+# Date 1392238411 -7200
 
 Bug 917227 - Network monitor doesn't work with Firefox OS; r=ochameau
 
@@ -30,7 +30,7 @@ diff --git a/browser/devtools/main.js b/browser/devtools/main.js
 diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/netmonitor/netmonitor-view.js
 --- a/browser/devtools/netmonitor/netmonitor-view.js
 +++ b/browser/devtools/netmonitor/netmonitor-view.js
-@@ -522,18 +522,22 @@ RequestsMenuView.prototype = Heritage.ex
+@@ -525,18 +525,22 @@ RequestsMenuView.prototype = Heritage.ex
      this.selectedItem = newItem;
    },
  
@@ -85,7 +85,7 @@ diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/serve
 diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server/actors/webapps.js
 --- a/toolkit/devtools/server/actors/webapps.js
 +++ b/toolkit/devtools/server/actors/webapps.js
-@@ -5,16 +5,26 @@
+@@ -5,16 +5,28 @@
  "use strict";
  
  let Cu = Components.utils;
@@ -95,6 +95,8 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
  
  Cu.import("resource://gre/modules/osfile.jsm");
 +Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++
++let {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 +
 +XPCOMUtils.defineLazyGetter(this, "NetworkMonitor", () => {
 +  return devtools.require("devtools/toolkit/webconsole/network-monitor")
@@ -112,7 +114,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
    Cc["@mozilla.org/consoleservice;1"]
      .getService(Ci.nsIConsoleService)
      .logStringMessage("--*-- WebappsActor : " + aMsg);
-@@ -117,16 +127,17 @@ function WebappsActor(aConnection) {
+@@ -117,16 +129,17 @@ function WebappsActor(aConnection) {
    Cu.import("resource://gre/modules/AppsUtils.jsm");
    Cu.import("resource://gre/modules/FileUtils.jsm");
    Cu.import('resource://gre/modules/Services.jsm');
@@ -130,7 +132,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
  }
  
  WebappsActor.prototype = {
-@@ -792,16 +803,57 @@ WebappsActor.prototype = {
+@@ -792,16 +805,57 @@ WebappsActor.prototype = {
    _connectToApp: function (aFrame) {
      let deferred = Promise.defer();
  
@@ -188,7 +190,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
        prefix = msg.json.prefix;
  
        // Pipe Debugger message from/to parent/child via the message manager
-@@ -820,16 +872,18 @@ WebappsActor.prototype = {
+@@ -820,16 +874,18 @@ WebappsActor.prototype = {
  
        deferred.resolve(actor);
      }).bind(this);
@@ -207,7 +209,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
          } else {
            // Otherwise, the app has been closed before the actor
            // had a chance to be created, so we are not able to create
-@@ -840,27 +894,57 @@ WebappsActor.prototype = {
+@@ -840,27 +896,57 @@ WebappsActor.prototype = {
          if (actor) {
            // The ContentAppActor within the child process doesn't necessary
            // have to time to uninitialize itself when the app is closed/killed.
@@ -265,7 +267,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
        if (frame.getAttribute("mozapp") == manifestURL) {
          appFrame = frame;
          break;
-@@ -1004,8 +1088,9 @@ if (Services.prefs.getBoolPref("devtools
+@@ -1004,8 +1090,9 @@ if (Services.prefs.getBoolPref("devtools
    requestTypes.listRunningApps = WebappsActor.prototype.listRunningApps;
    requestTypes.getAppActor = WebappsActor.prototype.getAppActor;
    requestTypes.watchApps = WebappsActor.prototype.watchApps;
@@ -351,7 +353,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    },
  
    hasNativeConsoleAPI: BrowserTabActor.prototype.hasNativeConsoleAPI,
-@@ -451,16 +456,23 @@ WebConsoleActor.prototype =
+@@ -451,16 +456,25 @@ WebConsoleActor.prototype =
     *        The JSON request object received from the Web Console client.
     * @return object
     *         The response object which holds the startedListeners array.
@@ -361,11 +363,13 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
      let startedListeners = [];
      let window = !this.parentActor.isRootActor ? this.window : null;
 +    let appId = null;
++    let messageManager = null;
 +
 +    if ("ContentAppActor" in DebuggerServer &&
 +        this.parentActor instanceof DebuggerServer.ContentAppActor) {
 +      // Filter network requests by appId on Firefox OS devices.
 +      appId = this.parentActor.appId;
++      messageManager = this.conn.transport.sender;
 +    }
  
      while (aRequest.listeners.length > 0) {
@@ -375,7 +379,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleServiceListener) {
              this.consoleServiceListener =
                new ConsoleServiceListener(window, this);
-@@ -473,18 +485,22 @@ WebConsoleActor.prototype =
+@@ -473,18 +487,23 @@ WebConsoleActor.prototype =
              this.consoleAPIListener =
                new ConsoleAPIListener(window, this);
              this.consoleAPIListener.init();
@@ -386,8 +390,9 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.networkMonitor) {
 -            this.networkMonitor =
 -              new NetworkMonitor(window, this);
-+            if (appId) {
-+              this.networkMonitor = new NetworkMonitorChild(appId, this);
++            if (appId && messageManager) {
++              this.networkMonitor =
++                new NetworkMonitorChild(appId, messageManager, this);
 +            }
 +            else {
 +              this.networkMonitor = new NetworkMonitor(window, null, this);
@@ -400,7 +405,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleProgressListener) {
              this.consoleProgressListener =
                new ConsoleProgressListener(this.window, this);
-@@ -792,16 +808,21 @@ WebConsoleActor.prototype =
+@@ -792,16 +811,21 @@ WebConsoleActor.prototype =
     *
     * @param object aRequest
     *        The request message - which preferences need to be updated.
@@ -422,7 +427,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    // End of request handlers.
    //////////////////
  
-@@ -1101,16 +1122,18 @@ WebConsoleActor.prototype =
+@@ -1101,16 +1125,18 @@ WebConsoleActor.prototype =
     * Handler for network events. This method is invoked when a new network event
     * is about to be recorded.
     *
@@ -441,7 +446,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    {
      let actor = this.getNetworkEventActor(aChannel);
      actor.init(aEvent);
-@@ -1125,18 +1148,20 @@ WebConsoleActor.prototype =
+@@ -1125,18 +1151,20 @@ WebConsoleActor.prototype =
  
      return actor;
    },
@@ -485,6 +490,28 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
                                       appId: docShell.appId,
                                       prefix: prefix});
    });
+diff --git a/toolkit/devtools/server/transport.js b/toolkit/devtools/server/transport.js
+--- a/toolkit/devtools/server/transport.js
++++ b/toolkit/devtools/server/transport.js
+@@ -329,16 +329,18 @@ function ChildDebuggerTransport(aSender,
+  * nsIMessageSender conveys, and 'packet' to mean a remote debugging
+  * protocol packet.
+  */
+ ChildDebuggerTransport.prototype = {
+   constructor: ChildDebuggerTransport,
+ 
+   hooks: null,
+ 
++  get sender() { return this._sender; },
++
+   ready: function () {
+     this._sender.addMessageListener(this._messageName, this);
+   },
+ 
+   close: function () {
+     this._sender.removeMessageListener(this._messageName, this);
+     this.hooks.onClosed();
+   },
 diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/webconsole/network-helper.js
 --- a/toolkit/devtools/webconsole/network-helper.js
 +++ b/toolkit/devtools/webconsole/network-helper.js
@@ -521,7 +548,7 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/network-monitor.js
-@@ -0,0 +1,1323 @@
+@@ -0,0 +1,1330 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this file,
 + * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -1487,12 +1514,15 @@ new file mode 100644
 + * @constructor
 + * @param number appId
 + *        The web appId of the child process.
++ * @param nsIMessageManager messageManager
++ *        The nsIMessageManager to use to communicate with the parent process.
 + * @param object owner
 + *        The WebConsoleActor that is listening for the network requests.
 + */
-+function NetworkMonitorChild(appId, owner) {
++function NetworkMonitorChild(appId, messageManager, owner) {
 +  this.appId = appId;
 +  this.owner = owner;
++  this._messageManager = messageManager;
 +  this._onNewEvent = this._onNewEvent.bind(this);
 +  this._onUpdateEvent = this._onUpdateEvent.bind(this);
 +  this._netEvents = new Map();
@@ -1512,7 +1542,7 @@ new file mode 100644
 +  set saveRequestAndResponseBodies(val) {
 +    this._saveRequestAndResponseBodies = val;
 +
-+    sendAsyncMessage("debug:netmonitor", {
++    this._messageManager.sendAsyncMessage("debug:netmonitor", {
 +      appId: this.appId,
 +      action: "setPreferences",
 +      preferences: {
@@ -1522,9 +1552,12 @@ new file mode 100644
 +  },
 +
 +  init: function() {
-+    addMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
-+    addMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
-+    sendAsyncMessage("debug:netmonitor", { appId: this.appId, action: "start" });
++    this._messageManager.addMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
++    this._messageManager.addMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
++    this._messageManager.sendAsyncMessage("debug:netmonitor", {
++      appId: this.appId,
++      action: "start",
++    });
 +  },
 +
 +  _onNewEvent: DevToolsUtils.makeInfallible(function _onNewEvent(msg) {
@@ -1549,10 +1582,11 @@ new file mode 100644
 +  }),
 +
 +  destroy: function() {
-+    removeMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
-+    removeMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
-+    sendAsyncMessage("debug:netmonitor", { action: "stop" });
++    this._messageManager.removeMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
++    this._messageManager.removeMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
++    this._messageManager.sendAsyncMessage("debug:netmonitor", { action: "stop" });
 +    this._netEvents.clear();
++    this._messageManager = null;
 +    this.owner = null;
 +  },
 +}; // NetworkMonitorChild.prototype
