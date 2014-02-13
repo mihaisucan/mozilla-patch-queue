@@ -1,59 +1,10 @@
 # HG changeset patch
-# Parent 661af972f1f99600cbe4cfa46352b9a3ceaef254
+# Parent faeecbbbf83ad0e32d66fd90adc18d4f3c69d5d4
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1392238411 -7200
+# Date 1392307220 -7200
 
-Bug 917227 - Network monitor doesn't work with Firefox OS; r=ochameau
+Bug 917227 - Part 2: network monitor server changes to add support for Firefox OS; r=ochameau
 
-diff --git a/browser/devtools/main.js b/browser/devtools/main.js
---- a/browser/devtools/main.js
-+++ b/browser/devtools/main.js
-@@ -234,17 +234,17 @@ Tools.netMonitor = {
-   icon: "chrome://browser/skin/devtools/tool-network.svg",
-   invertIconForLightTheme: true,
-   url: "chrome://browser/content/devtools/netmonitor.xul",
-   label: l10n("netmonitor.label", netMonitorStrings),
-   tooltip: l10n("netmonitor.tooltip", netMonitorStrings),
-   inMenu: true,
- 
-   isTargetSupported: function(target) {
--    return !target.isApp;
-+    return true;
-   },
- 
-   build: function(iframeWindow, toolbox) {
-     let panel = new NetMonitorPanel(iframeWindow, toolbox);
-     return panel.open();
-   }
- };
- 
-diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/netmonitor/netmonitor-view.js
---- a/browser/devtools/netmonitor/netmonitor-view.js
-+++ b/browser/devtools/netmonitor/netmonitor-view.js
-@@ -525,18 +525,22 @@ RequestsMenuView.prototype = Heritage.ex
-     this.selectedItem = newItem;
-   },
- 
-   /**
-    * Send a new HTTP request using the data in the custom request form.
-    */
-   sendCustomRequest: function() {
-     let selected = this.selectedItem.attachment;
--    let data = Object.create(selected);
- 
-+    let data = {
-+      method: selected.method,
-+      url: selected.url,
-+      httpVersion: selected.httpVersion,
-+    };
-     if (selected.requestHeaders) {
-       data.headers = selected.requestHeaders.headers;
-     }
-     if (selected.requestPostData) {
-       data.body = selected.requestPostData.postData.text;
-     }
- 
-     NetMonitorController.webConsoleClient.sendHTTPRequest(data, aResponse => {
 diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/server/actors/childtab.js
 --- a/toolkit/devtools/server/actors/childtab.js
 +++ b/toolkit/devtools/server/actors/childtab.js
@@ -82,6 +33,66 @@ diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/serve
  
  Object.defineProperty(ContentAppActor.prototype, "title", {
    get: function() {
+diff --git a/toolkit/devtools/server/actors/root.js b/toolkit/devtools/server/actors/root.js
+--- a/toolkit/devtools/server/actors/root.js
++++ b/toolkit/devtools/server/actors/root.js
+@@ -154,42 +154,45 @@ function CommonAppendExtraActors(aObject
+  * iteration: alliterative lazy live lists.
+  */
+ function RootActor(aConnection, aParameters) {
+   this.conn = aConnection;
+   this._parameters = aParameters;
+   this._onTabListChanged = this.onTabListChanged.bind(this);
+   this._onAddonListChanged = this.onAddonListChanged.bind(this);
+   this._extraActors = {};
++  this.traits = {
++    sources: true,
++    editOuterHTML: true,
++    // Wether the server-side highlighter actor exists and can be used to
++    // remotely highlight nodes (see server/actors/highlighter.js)
++    highlightable: true,
++    // Wether the inspector actor implements the getImageDataFromURL
++    // method that returns data-uris for image URLs. This is used for image
++    // tooltips for instance
++    urlToImageDataResolver: true,
++    networkMonitor: true,
++  };
+ }
+ 
+ RootActor.prototype = {
+   constructor: RootActor,
+   applicationType: "browser",
++  traits: null,
+ 
+   /**
+    * Return a 'hello' packet as specified by the Remote Debugging Protocol.
+    */
+   sayHello: function() {
+     return {
+       from: this.actorID,
+       applicationType: this.applicationType,
+       /* This is not in the spec, but it's used by tests. */
+       testConnectionPrefix: this.conn.prefix,
+-      traits: {
+-        sources: true,
+-        editOuterHTML: true,
+-        // Wether the server-side highlighter actor exists and can be used to
+-        // remotely highlight nodes (see server/actors/highlighter.js)
+-        highlightable: true,
+-        // Wether the inspector actor implements the getImageDataFromURL
+-        // method that returns data-uris for image URLs. This is used for image
+-        // tooltips for instance
+-        urlToImageDataResolver: true
+-      }
++      traits: this.traits,
+     };
+   },
+ 
+   /**
+    * This is true for the root actor only, used by some child actors
+    */
+   get isRootActor() true,
+ 
 diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server/actors/webapps.js
 --- a/toolkit/devtools/server/actors/webapps.js
 +++ b/toolkit/devtools/server/actors/webapps.js
@@ -267,16 +278,42 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
        if (frame.getAttribute("mozapp") == manifestURL) {
          appFrame = frame;
          break;
-@@ -1004,8 +1090,9 @@ if (Services.prefs.getBoolPref("devtools
-   requestTypes.listRunningApps = WebappsActor.prototype.listRunningApps;
-   requestTypes.getAppActor = WebappsActor.prototype.getAppActor;
-   requestTypes.watchApps = WebappsActor.prototype.watchApps;
-   requestTypes.unwatchApps = WebappsActor.prototype.unwatchApps;
-   requestTypes.getIconAsDataURL = WebappsActor.prototype.getIconAsDataURL;
+diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/server/actors/webbrowser.js
+--- a/toolkit/devtools/server/actors/webbrowser.js
++++ b/toolkit/devtools/server/actors/webbrowser.js
+@@ -54,23 +54,25 @@ function sendShutdownEvent() {
+  * - sends all navigator:browser window documents a Debugger:Shutdown event
+  *   when it exits.
+  *
+  * * @param aConnection DebuggerServerConnection
+  *        The conection to the client.
+  */
+ function createRootActor(aConnection)
+ {
+-  return new RootActor(aConnection,
+-                       {
+-                         tabList: new BrowserTabList(aConnection),
+-                         addonList: new BrowserAddonList(aConnection),
+-                         globalActorFactories: DebuggerServer.globalActorFactories,
+-                         onShutdown: sendShutdownEvent
+-                       });
++  let actor = new RootActor(aConnection, {
++    tabList: new BrowserTabList(aConnection),
++    addonList: new BrowserAddonList(aConnection),
++    globalActorFactories: DebuggerServer.globalActorFactories,
++    onShutdown: sendShutdownEvent
++  });
++  actor.traits.customNetworkRequest = true;
++  actor.traits.networkPerformanceStatistics = true;
++  return actor;
  }
  
- DebuggerServer.addGlobalActor(WebappsActor, "webappsActor");
-+
+ /**
+  * A live list of BrowserTabActors representing the current browser tabs,
+  * to be provided to the root actor to answer 'listTabs' requests.
+  *
+  * This object also takes care of listening for TabClose events and
+  * onCloseWindow notifications, and exiting the BrowserTabActors concerned.
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js

@@ -1,0 +1,210 @@
+# HG changeset patch
+# Parent 0d98212a6c291dfca830ee16bd71dd94dfbe08d0
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1392308089 -7200
+Bug 917227 - Part 1: network monitor client changes; r=ochameau
+
+diff --git a/browser/devtools/framework/toolbox.js b/browser/devtools/framework/toolbox.js
+--- a/browser/devtools/framework/toolbox.js
++++ b/browser/devtools/framework/toolbox.js
+@@ -250,31 +250,30 @@ Toolbox.prototype = {
+         this._buildOptions();
+         this._buildTabs();
+         this._buildButtons();
+         this._addKeysToWindow();
+         this._addToolSwitchingKeys();
+         this._addZoomKeys();
+         this._loadInitialZoom();
+ 
+-        // Load the toolbox-level actor fronts and utilities now
+-        this._target.makeRemote().then(() => {
+-          this._telemetry.toolOpened("toolbox");
++        this._telemetry.toolOpened("toolbox");
+ 
+-          this.selectTool(this._defaultToolId).then(panel => {
+-            this.emit("ready");
+-            deferred.resolve();
+-          });
++        this.selectTool(this._defaultToolId).then(panel => {
++          this.emit("ready");
++          deferred.resolve();
+         });
+       };
+ 
+-      iframe.setAttribute("src", this._URL);
+-
+-      let domHelper = new DOMHelpers(iframe.contentWindow);
+-      domHelper.onceDOMReady(domReady);
++      // Load the toolbox-level actor fronts and utilities now
++      this._target.makeRemote().then(() => {
++        iframe.setAttribute("src", this._URL);
++        let domHelper = new DOMHelpers(iframe.contentWindow);
++        domHelper.onceDOMReady(domReady);
++      });
+ 
+       return deferred.promise;
+     });
+   },
+ 
+   _buildOptions: function() {
+     let key = this.doc.getElementById("toolbox-options-key");
+     key.addEventListener("command", () => {
+diff --git a/browser/devtools/main.js b/browser/devtools/main.js
+--- a/browser/devtools/main.js
++++ b/browser/devtools/main.js
+@@ -234,17 +234,21 @@ Tools.netMonitor = {
+   icon: "chrome://browser/skin/devtools/tool-network.svg",
+   invertIconForLightTheme: true,
+   url: "chrome://browser/content/devtools/netmonitor.xul",
+   label: l10n("netmonitor.label", netMonitorStrings),
+   tooltip: l10n("netmonitor.tooltip", netMonitorStrings),
+   inMenu: true,
+ 
+   isTargetSupported: function(target) {
+-    return !target.isApp;
++    let root = target.client.mainRoot;
++    return root.traits.networkMonitor ||
++           // Compat with older browser releases which did not include the
++           // trait, but they have a working network monitor.
++           root.applicationType == "browser";
+   },
+ 
+   build: function(iframeWindow, toolbox) {
+     let panel = new NetMonitorPanel(iframeWindow, toolbox);
+     return panel.open();
+   }
+ };
+ 
+diff --git a/browser/devtools/netmonitor/netmonitor-controller.js b/browser/devtools/netmonitor/netmonitor-controller.js
+--- a/browser/devtools/netmonitor/netmonitor-controller.js
++++ b/browser/devtools/netmonitor/netmonitor-controller.js
+@@ -350,16 +350,35 @@ let NetMonitorController = {
+     if (aType == ACTIVITY_TYPE.DISABLE_CACHE) {
+       this._currentActivity = aType;
+       return reconfigureTab({ cacheEnabled: false, performReload: false }).then(standBy);
+     }
+     this._currentActivity = ACTIVITY_TYPE.NONE;
+     return promise.reject(new Error("Invalid activity type"));
+   },
+ 
++  /**
++   * Getter that tells if the server supports sending custom network requests.
++   * @type boolean
++   */
++  get supportsCustomRequest() {
++    let root = this._target.client.mainRoot;
++    return root.traits.customNetworkRequest || root.applicationType == "browser";
++  },
++
++  /**
++   * Getter that tells if the server can do network performance statistics.
++   * @type boolean
++   */
++  get supportsPerfStats() {
++    let root = this._target.client.mainRoot;
++    return root.traits.networkPerformanceStatistics ||
++           root.applicationType == "browser";
++  },
++
+   _startup: null,
+   _shutdown: null,
+   _connection: null,
+   _currentActivity: null,
+   client: null,
+   tabClient: null,
+   webConsoleClient: null
+ };
+diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/netmonitor/netmonitor-view.js
+--- a/browser/devtools/netmonitor/netmonitor-view.js
++++ b/browser/devtools/netmonitor/netmonitor-view.js
+@@ -365,26 +365,38 @@ RequestsMenuView.prototype = Heritage.ex
+ 
+     $("#toolbar-labels").addEventListener("click", this.requestsMenuSortEvent, false);
+     $("#requests-menu-footer").addEventListener("click", this.requestsMenuFilterEvent, false);
+     $("#requests-menu-clear-button").addEventListener("click", this.reqeustsMenuClearEvent, false);
+     $("#network-request-popup").addEventListener("popupshowing", this._onContextShowing, false);
+     $("#request-menu-context-newtab").addEventListener("command", this._onContextNewTabCommand, false);
+     $("#request-menu-context-copy-url").addEventListener("command", this._onContextCopyUrlCommand, false);
+     $("#request-menu-context-copy-image-as-data-uri").addEventListener("command", this._onContextCopyImageAsDataUriCommand, false);
+-    $("#request-menu-context-resend").addEventListener("command", this._onContextResendCommand, false);
+-    $("#request-menu-context-perf").addEventListener("command", this._onContextPerfCommand, false);
+ 
+-    $("#requests-menu-perf-notice-button").addEventListener("command", this._onContextPerfCommand, false);
+-    $("#requests-menu-network-summary-button").addEventListener("command", this._onContextPerfCommand, false);
+-    $("#requests-menu-network-summary-label").addEventListener("click", this._onContextPerfCommand, false);
++    if (NetMonitorController.supportsCustomRequest) {
++      $("#request-menu-context-resend").addEventListener("command", this._onContextResendCommand, false);
++      $("#custom-request-send-button").addEventListener("click", this.sendCustomRequestEvent, false);
++      $("#custom-request-close-button").addEventListener("click", this.closeCustomRequestEvent, false);
++      $("#headers-summary-resend").addEventListener("click", this.cloneSelectedRequestEvent, false);
++    } else {
++      $("#request-menu-context-resend").hidden = true;
++      $("#headers-summary-resend").hidden = true;
++    }
+ 
+-    $("#custom-request-send-button").addEventListener("click", this.sendCustomRequestEvent, false);
+-    $("#custom-request-close-button").addEventListener("click", this.closeCustomRequestEvent, false);
+-    $("#headers-summary-resend").addEventListener("click", this.cloneSelectedRequestEvent, false);
++    if (NetMonitorController.supportsPerfStats) {
++      $("#request-menu-context-perf").addEventListener("command", this._onContextPerfCommand, false);
++      $("#requests-menu-perf-notice-button").addEventListener("command", this._onContextPerfCommand, false);
++      $("#requests-menu-network-summary-button").addEventListener("command", this._onContextPerfCommand, false);
++      $("#requests-menu-network-summary-label").addEventListener("click", this._onContextPerfCommand, false);
++    } else {
++      $("#notice-perf-message").hidden = true;
++      $("#request-menu-context-perf").hidden = true;
++      $("#requests-menu-network-summary-button").hidden = true;
++      $("#requests-menu-network-summary-label").hidden = true;
++    }
+   },
+ 
+   /**
+    * Destruction function, called when the network monitor is closed.
+    */
+   destroy: function() {
+     dumpn("Destroying the SourcesView");
+ 
+@@ -525,18 +537,22 @@ RequestsMenuView.prototype = Heritage.ex
+     this.selectedItem = newItem;
+   },
+ 
+   /**
+    * Send a new HTTP request using the data in the custom request form.
+    */
+   sendCustomRequest: function() {
+     let selected = this.selectedItem.attachment;
+-    let data = Object.create(selected);
+ 
++    let data = {
++      method: selected.method,
++      url: selected.url,
++      httpVersion: selected.httpVersion,
++    };
+     if (selected.requestHeaders) {
+       data.headers = selected.requestHeaders.headers;
+     }
+     if (selected.requestPostData) {
+       data.body = selected.requestPostData.postData.text;
+     }
+ 
+     NetMonitorController.webConsoleClient.sendHTTPRequest(data, aResponse => {
+@@ -1441,17 +1457,18 @@ RequestsMenuView.prototype = Heritage.ex
+ 
+   /**
+    * Handle the context menu opening. Hide items if no request is selected.
+    */
+   _onContextShowing: function() {
+     let selectedItem = this.selectedItem;
+ 
+     let resendElement = $("#request-menu-context-resend");
+-    resendElement.hidden = !selectedItem || selectedItem.attachment.isCustom;
++    resendElement.hidden = !NetMonitorController.supportsCustomRequest ||
++                           !selectedItem || selectedItem.attachment.isCustom;
+ 
+     let copyUrlElement = $("#request-menu-context-copy-url");
+     copyUrlElement.hidden = !selectedItem;
+ 
+     let copyImageAsDataUriElement = $("#request-menu-context-copy-image-as-data-uri");
+     copyImageAsDataUriElement.hidden = !selectedItem ||
+       !selectedItem.attachment.responseContent ||
+       !selectedItem.attachment.responseContent.content.mimeType.contains("image/");
