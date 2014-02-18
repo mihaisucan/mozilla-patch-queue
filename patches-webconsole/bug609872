@@ -1,0 +1,351 @@
+# HG changeset patch
+# Parent 204caefe9e3f9d2c7eafc83c93a8abd22237180b
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1392758622 -7200
+
+Bug 609872 - Ability to execute code in sub-documents (iframes/frames); r=past
+
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -208,8 +208,12 @@ emptyPropertiesList=No properties to dis
+ # LOCALIZATION NOTE (messageRepeats.tooltip2): the tooltip text that is displayed
+ # when you hover the red bubble that shows how many times a message is repeated
+ # in the web console output.
+ # This is a semi-colon list of plural forms.
+ # See: http://developer.mozilla.org/en/docs/Localization_and_Plurals
+ # #1 number of message repeats
+ # example: 3 repeats
+ messageRepeats.tooltip2=#1 repeat;#1 repeats
++
++# LOCALIZATION NOTE (cdFunctionInvalidArgument): the text that is displayed when
++# cd() is invoked with an invalid argument.
++cdFunctionInvalidArgument=Cannot cd() to the given window. Invalid argument.
+diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/server/actors/webbrowser.js
+--- a/toolkit/devtools/server/actors/webbrowser.js
++++ b/toolkit/devtools/server/actors/webbrowser.js
+@@ -1040,16 +1040,18 @@ BrowserAddonActor.prototype = {
+  * is resumed before the navigation begins.
+  *
+  * @param BrowserTabActor aBrowserTabActor
+  *        The tab actor associated with this listener.
+  */
+ function DebuggerProgressListener(aBrowserTabActor) {
+   this._tabActor = aBrowserTabActor;
+   this._tabActor._tabbrowser.addProgressListener(this);
++  let EventEmitter = devtools.require("devtools/shared/event-emitter");
++  EventEmitter.decorate(this);
+ }
+ 
+ DebuggerProgressListener.prototype = {
+   onStateChange:
+   makeInfallible(function DPL_onStateChange(aProgress, aRequest, aFlag, aStatus) {
+     let isStart = aFlag & Ci.nsIWebProgressListener.STATE_START;
+     let isStop = aFlag & Ci.nsIWebProgressListener.STATE_STOP;
+     let isDocument = aFlag & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT;
+@@ -1067,38 +1069,42 @@ DebuggerProgressListener.prototype = {
+       // Proceed normally only if the debuggee is not paused.
+       if (this._tabActor.threadActor.state == "paused") {
+         aRequest.suspend();
+         this._tabActor.threadActor.onResume();
+         this._tabActor.threadActor.dbg.enabled = false;
+         this._tabActor._pendingNavigation = aRequest;
+       }
+ 
+-      this._tabActor.threadActor.disableAllBreakpoints();
+-      this._tabActor.conn.send({
++      let packet = {
+         from: this._tabActor.actorID,
+         type: "tabNavigated",
+         url: aRequest.URI.spec,
+         nativeConsoleAPI: true,
+         state: "start"
+-      });
++      };
++      this._tabActor.threadActor.disableAllBreakpoints();
++      this._tabActor.conn.send(packet);
++      this.emit("will-navigate", packet);
+     } else if (isStop) {
+       if (this._tabActor.threadActor.state == "running") {
+         this._tabActor.threadActor.dbg.enabled = true;
+       }
+ 
+       let window = this._tabActor.window;
+-      this._tabActor.conn.send({
++      let packet = {
+         from: this._tabActor.actorID,
+         type: "tabNavigated",
+         url: this._tabActor.url,
+         title: this._tabActor.title,
+         nativeConsoleAPI: this._tabActor.hasNativeConsoleAPI(window),
+         state: "stop"
+-      });
++      };
++      this._tabActor.conn.send(packet);
++      this.emit("navigate", packet);
+     }
+   }, "DebuggerProgressListener.prototype.onStateChange"),
+ 
+   /**
+    * Destroy the progress listener instance.
+    */
+   destroy: function DPL_destroy() {
+     if (this._tabActor._tabbrowser.removeProgressListener) {
+diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
+--- a/toolkit/devtools/server/actors/webconsole.js
++++ b/toolkit/devtools/server/actors/webconsole.js
+@@ -54,20 +54,20 @@ function WebConsoleActor(aConnection, aP
+ 
+   this._actorPool = new ActorPool(this.conn);
+   this.conn.addActorPool(this._actorPool);
+ 
+   this._prefs = {};
+ 
+   this.dbg = new Debugger();
+ 
+-  this._protoChains = new Map();
+   this._netEvents = new Map();
+   this._gripDepth = 0;
+ 
++  this._onWillNavigate = this._onWillNavigate.bind(this);
+   this._onObserverNotification = this._onObserverNotification.bind(this);
+   if (this.parentActor.isRootActor) {
+     Services.obs.addObserver(this._onObserverNotification,
+                              "last-pb-context-exited", false);
+   }
+ }
+ 
+ WebConsoleActor.l10n = new WebConsoleUtils.l10n("chrome://global/locale/console.properties");
+@@ -108,26 +108,16 @@ WebConsoleActor.prototype =
+    * created with sendHTTPRequest.
+    *
+    * @private
+    * @type Map
+    */
+   _netEvents: null,
+ 
+   /**
+-   * A cache of prototype chains for objects that have received a
+-   * prototypeAndProperties request.
+-   *
+-   * @private
+-   * @type Map
+-   * @see dbg-script-actors.js, ThreadActor._protoChains
+-   */
+-  _protoChains: null,
+-
+-  /**
+    * The debugger server connection instance.
+    * @type object
+    */
+   conn: null,
+ 
+   /**
+    * The window we work with.
+    * @type nsIDOMWindow
+@@ -204,16 +194,33 @@ WebConsoleActor.prototype =
+   /**
+    * A weak reference to the last chrome window we used to work with.
+    *
+    * @private
+    * @type nsIWeakReference
+    */
+   _lastChromeWindow: null,
+ 
++  // The evalWindow is used at the scope for JS evaluation.
++  _evalWindow: null,
++  get evalWindow() {
++    return this._evalWindow || this.window;
++  },
++
++  set evalWindow(aWindow) {
++    this._evalWindow = aWindow;
++
++    if (!this._progressListenerActive && this.parentActor._progressListener) {
++      this.parentActor._progressListener.on("will-navigate", this._onWillNavigate);
++      this._progressListenerActive = true;
++    }
++  },
++
++  _progressListenerActive: false,
++
+   /**
+    * The ConsoleServiceListener instance.
+    * @type object
+    */
+   consoleServiceListener: null,
+ 
+   /**
+    * The ConsoleAPIListener instance.
+@@ -290,18 +297,19 @@ WebConsoleActor.prototype =
+     }
+     this.conn.removeActorPool(this._actorPool);
+     if (this.parentActor.isRootActor) {
+       Services.obs.removeObserver(this._onObserverNotification,
+                                   "last-pb-context-exited");
+     }
+     this._actorPool = null;
+ 
++    this._jstermHelpersCache = null;
++    this._evalWindow = null;
+     this._netEvents.clear();
+-    this._protoChains.clear();
+     this.dbg.enabled = false;
+     this.dbg = null;
+     this.conn = null;
+   },
+ 
+   /**
+    * Create and return an environment actor that corresponds to the provided
+    * Debugger.Environment. This is a straightforward clone of the ThreadActor's
+@@ -720,17 +728,17 @@ WebConsoleActor.prototype =
+       }
+       else {
+         Cu.reportError("Web Console Actor: the frame actor was not found: " +
+                        frameActorId);
+       }
+     }
+     // This is the general case (non-paused debugger)
+     else {
+-      dbgObject = this.dbg.makeGlobalObjectReference(this.window);
++      dbgObject = this.dbg.makeGlobalObjectReference(this.evalWindow);
+     }
+ 
+     let result = JSPropertyProvider(dbgObject, environment, aRequest.text,
+                                     aRequest.cursor, frameActorId) || {};
+     let matches = result.matches || [];
+     let reqText = aRequest.text.substr(0, aRequest.cursor);
+ 
+     // We consider '$' as alphanumerc because it is used in the names of some
+@@ -817,22 +825,23 @@ WebConsoleActor.prototype =
+    * @return object
+    *         The same object as |this|, but with an added |sandbox| property.
+    *         The sandbox holds methods and properties that can be used as
+    *         bindings during JS evaluation.
+    */
+   _getJSTermHelpers: function WCA__getJSTermHelpers(aDebuggerGlobal)
+   {
+     let helpers = {
+-      window: this.window,
++      window: this.evalWindow,
+       chromeWindow: this.chromeWindow.bind(this),
+       makeDebuggeeValue: aDebuggerGlobal.makeDebuggeeValue.bind(aDebuggerGlobal),
+       createValueGrip: this.createValueGrip.bind(this),
+       sandbox: Object.create(null),
+       helperResult: null,
++      consoleActor: this,
+     };
+     JSTermHelpers(helpers);
+ 
+     // Make sure the helpers can be used during eval.
+     for (let name in helpers.sandbox) {
+       let desc = Object.getOwnPropertyDescriptor(helpers.sandbox, name);
+       if (desc.get || desc.set) {
+         continue;
+@@ -919,22 +928,22 @@ WebConsoleActor.prototype =
+ 
+     // If we've been given a frame actor in whose scope we should evaluate the
+     // expression, be sure to use that frame's Debugger (that is, the JavaScript
+     // debugger's Debugger) for the whole operation, not the console's Debugger.
+     // (One Debugger will treat a different Debugger's Debugger.Object instances
+     // as ordinary objects, not as references to be followed, so mixing
+     // debuggers causes strange behaviors.)
+     let dbg = frame ? frameActor.threadActor.dbg : this.dbg;
+-    let dbgWindow = dbg.makeGlobalObjectReference(this.window);
++    let dbgWindow = dbg.makeGlobalObjectReference(this.evalWindow);
+ 
+     // If we have an object to bind to |_self|, create a Debugger.Object
+     // referring to that object, belonging to dbg.
+     let bindSelf = null;
+-    let dbgWindow = dbg.makeGlobalObjectReference(this.window);
++    let dbgWindow = dbg.makeGlobalObjectReference(this.evalWindow);
+     if (aOptions.bindObjectActor) {
+       let objActor = this.getActorByID(aOptions.bindObjectActor);
+       if (objActor) {
+         let jsObj = objActor.obj.unsafeDereference();
+         // If we use the makeDebuggeeValue method of jsObj's own global, then
+         // we'll get a D.O that sees jsObj as viewed from its own compartment -
+         // that is, without wrappers. The evalWithBindings call will then wrap
+         // jsObj appropriately for the evaluation compartment.
+@@ -1284,17 +1293,26 @@ WebConsoleActor.prototype =
+     switch (aTopic) {
+       case "last-pb-context-exited":
+         this.conn.send({
+           from: this.actorID,
+           type: "lastPrivateContextExited",
+         });
+         break;
+     }
+-  }
++  },
++
++  /**
++   * The "will-navigate" progress listener. This is used to clear the current
++   * eval scope.
++   */
++  _onWillNavigate: function WCA__onWillNavigate()
++  {
++    this._evalWindow = null;
++  },
+ };
+ 
+ WebConsoleActor.prototype.requestTypes =
+ {
+   startListeners: WebConsoleActor.prototype.onStartListeners,
+   stopListeners: WebConsoleActor.prototype.onStopListeners,
+   getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
+   evaluateJS: WebConsoleActor.prototype.onEvaluateJS,
+diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
+--- a/toolkit/devtools/webconsole/utils.js
++++ b/toolkit/devtools/webconsole/utils.js
+@@ -1503,16 +1503,50 @@ function JSTermHelpers(aOwner)
+    * Opens a help window in MDN.
+    */
+   aOwner.sandbox.help = function JSTH_help()
+   {
+     aOwner.helperResult = { type: "help" };
+   };
+ 
+   /**
++   * Change the JS evaluation scope.
++   *
++   * @param DOMElement|string|window aWindow
++   *        The window object to use for eval scope. This can be a string that
++   *        is used to perform document.querySelector(), to find the iframe that
++   *        you want to cd() to. A DOMElement can be given as well, the
++   *        .contentWindow property is used. Lastly, you can directly pass
++   *        a window object. If you call cd() with no arguments, the current
++   *        eval scope is cleared back to its default (the top window).
++   */
++  aOwner.sandbox.cd = function JSTH_cd(aWindow)
++  {
++    if (!aWindow) {
++      aOwner.consoleActor.evalWindow = null;
++      aOwner.helperResult = { type: "cd" };
++      return;
++    }
++
++    if (typeof aWindow == "string") {
++      aWindow = aOwner.window.document.querySelector(aWindow);
++    }
++    if (aWindow instanceof Ci.nsIDOMElement && aWindow.contentWindow) {
++      aWindow = aWindow.contentWindow;
++    }
++    if (!(aWindow instanceof Ci.nsIDOMWindow)) {
++      aOwner.helperResult = { type: "error", message: "cdFunctionInvalidArgument" };
++      return;
++    }
++
++    aOwner.consoleActor.evalWindow = aWindow;
++    aOwner.helperResult = { type: "cd" };
++  };
++
++  /**
+    * Inspects the passed aObject. This is done by opening the PropertyPanel.
+    *
+    * @param object aObject
+    *        Object to inspect.
+    */
+   aOwner.sandbox.inspect = function JSTH_inspect(aObject)
+   {
+     let dbgObj = aOwner.makeDebuggeeValue(aObject);
