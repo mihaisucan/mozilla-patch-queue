@@ -1,0 +1,244 @@
+# HG changeset patch
+# Parent 47fddf9651fd5bbefa43e1fce0a24fbe30107a88
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1392844714 -7200
+
+Bug 584733 - Code highlight all JS objects and functions in console output; r=robcee
+
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -997,43 +997,65 @@ Messages.Extended.prototype = Heritage.e
+   {
+     if (piece instanceof Ci.nsIDOMNode) {
+       return piece;
+     }
+     if (typeof piece == "function") {
+       return piece(this);
+     }
+ 
+-    let isPrimitive = VariablesView.isPrimitive({ value: piece });
+-    let isActorGrip = WebConsoleUtils.isActorGrip(piece);
++    return this._renderValueGrip(piece);
++  },
++
++  _renderValueGrip: function(grip, options = {})
++  {
++    let isPrimitive = VariablesView.isPrimitive({ value: grip });
++    let isActorGrip = WebConsoleUtils.isActorGrip(grip);
+ 
+     if (isActorGrip) {
+-      this._repeatID.actors.add(piece.actor);
++      this._repeatID.actors.add(grip.actor);
+ 
+       if (!isPrimitive) {
+-        let widget = new Widgets.JSObject(this, piece).render();
+-        return widget.element;
++        return this._renderObjectActor(grip, options);
+       }
+       if (piece.type == "longString") {
+-        let widget = new Widgets.LongString(this, piece).render();
++        let widget = new Widgets.LongString(this, grip, options).render();
+         return widget.element;
+       }
+     }
+ 
+     let result = this.document.createDocumentFragment();
+     if (isPrimitive) {
+-      result.textContent = VariablesView.getString(piece, {
++      result.textContent = VariablesView.getString(grip, {
+         noStringQuotes: !this._quoteStrings,
++        concise: options.concise,
+       });
+     } else {
+-      result.textContent = piece;
++      result.textContent = grip;
+     }
+ 
+     return result;
+   },
++
++  _renderObjectActor: function(objectActor, options)
++  {
++    let widgetConstructor = null;
++    let {preview} = objectActor;
++
++    if (preview && preview.kind) {
++      widgetConstructor = Widgets.ObjectRenderers.byKind[preview.kind];
++    }
++
++    if (!widgetConstructor) {
++      widgetConstructor = Widgets.JSObject;
++    }
++
++    let widget = new widgetConstructor(this, objectActor, options).render();
++    return widget.element;
++  },
+ }); // Messages.Extended.prototype
+ 
+ 
+ 
+ /**
+  * The JavaScriptEvalOutput message.
+  *
+  * @constructor
+@@ -1337,21 +1359,22 @@ Widgets.MessageTimestamp.prototype = Her
+  * The JavaScript object widget.
+  *
+  * @constructor
+  * @param object message
+  *        The owning message.
+  * @param object objectActor
+  *        The ObjectActor to display.
+  */
+-Widgets.JSObject = function(message, objectActor)
++Widgets.JSObject = function(message, objectActor, options)
+ {
+   Widgets.BaseWidget.call(this, message);
+   this.objectActor = objectActor;
+   this._onClick = this._onClick.bind(this);
++  this.options = options;
+ };
+ 
+ Widgets.JSObject.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
+ {
+   /**
+    * The ObjectActor displayed by the widget.
+    * @type object
+    */
+@@ -1361,17 +1384,17 @@ Widgets.JSObject.prototype = Heritage.ex
+   {
+     if (this.element) {
+       return this;
+     }
+ 
+     let anchor = this.element = this.document.createElementNS(XHTML_NS, "a");
+     anchor.href = "#";
+     anchor.draggable = false;
+-    anchor.textContent = VariablesView.getString(this.objectActor);
++    anchor.textContent = VariablesView.getString(this.objectActor, this.options);
+     this.message._addLinkCallback(anchor, this._onClick);
+ 
+     return this;
+   },
+ 
+   /**
+    * The click event handler for objects shown inline.
+    * @private
+@@ -1381,16 +1404,116 @@ Widgets.JSObject.prototype = Heritage.ex
+     this.output.openVariablesView({
+       label: VariablesView.getString(this.objectActor, { concise: true }),
+       objectActor: this.objectActor,
+       autofocus: true,
+     });
+   },
+ }); // Widgets.JSObject.prototype
+ 
++Widgets.ObjectRenderers = {};
++Widgets.ObjectRenderers.byKind = {};
++
++/**
++ * The widget used for displaying ArrayLike objects.
++ *
++ * @constructor
++ * @param object message
++ *        The owning message.
++ * @param object objectActor
++ *        The ObjectActor to display.
++ */
++Widgets.ObjectRenderers.byKind.ArrayLike = function(message, objectActor, options)
++{
++  Widgets.BaseWidget.call(this, message);
++  this.objectActor = objectActor;
++  this.options = options;
++  this._onClick = this._onClick.bind(this);
++};
++
++Widgets.ObjectRenderers.byKind.ArrayLike.prototype =
++  Heritage.extend(Widgets.BaseWidget.prototype,
++{
++  /**
++   * The ObjectActor displayed by the widget.
++   * @type object
++   */
++  objectActor: null,
++
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let {preview} = this.objectActor;
++    let {items} = preview;
++
++    if (this.options.concise) {
++      let anchor = this.element = this.document.createElementNS(XHTML_NS, "a");
++      anchor.href = "#";
++      anchor.draggable = false;
++      anchor.textContent = this.objectActor.class + "[" + preview.length + "]";
++      this.message._addLinkCallback(anchor, this._onClick);
++      return this;
++    }
++
++    let container = this.element = this.document.createElementNS(XHTML_NS, "span");
++
++    let anchor = this.document.createElementNS(XHTML_NS, "a");
++    anchor.href = "#";
++    anchor.draggable = false;
++    anchor.textContent = this.objectActor.class;
++    this.message._addLinkCallback(anchor, this._onClick);
++    container.appendChild(anchor);
++    container.appendChild(this.document.createTextNode(" [ "));
++
++    let shown = 0;
++    for (let item of (items || [])) {
++      if (shown > 0) {
++        container.appendChild(this.document.createTextNode(", "));
++      }
++
++      let elem = this.message._renderValueGrip(item, { concise: true });
++      container.appendChild(elem);
++      shown++;
++    }
++
++    if (shown < preview.length) {
++      container.appendChild(this.document.createTextNode(", "));
++
++      let n = preview.length - shown;
++      let anchor = this.document.createElementNS(XHTML_NS, "a");
++      anchor.href = "#";
++      anchor.draggable = false;
++      anchor.textContent = VariablesView.stringifiers._getNMoreString(n);
++      this.message._addLinkCallback(anchor, this._onClick);
++
++      container.appendChild(anchor);
++    }
++
++    container.appendChild(this.document.createTextNode(" ]"));
++
++    return this;
++  },
++
++  /**
++   * The click event handler for objects shown inline.
++   * @private
++   */
++  _onClick: function()
++  {
++    this.output.openVariablesView({
++      label: VariablesView.getString(this.objectActor, { concise: true }),
++      objectActor: this.objectActor,
++      autofocus: true,
++    });
++  },
++}); // Widgets.ObjectRenderers.byKind.ArrayLike.prototype
++
+ /**
+  * The long string widget.
+  *
+  * @constructor
+  * @param object message
+  *        The owning message.
+  * @param object longStringActor
+  *        The LongStringActor to display.

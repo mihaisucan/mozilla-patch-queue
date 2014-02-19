@@ -1,10 +1,194 @@
 # HG changeset patch
-# Parent 204caefe9e3f9d2c7eafc83c93a8abd22237180b
+# Parent 123357e4ddc5d8e04dba4fffb0f8c327409159b8
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1392758622 -7200
+# Date 1392829135 -7200
 
-Bug 609872 - Ability to execute code in sub-documents (iframes/frames); r=past
+Bug 609872 - Ability to execute code in sub-documents (iframes/frames); r=past; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-bc,mochitest-o -t none
 
+diff --git a/browser/devtools/webconsole/test/browser.ini b/browser/devtools/webconsole/test/browser.ini
+--- a/browser/devtools/webconsole/test/browser.ini
++++ b/browser/devtools/webconsole/test/browser.ini
+@@ -102,16 +102,18 @@ support-files =
+   test_bug_770099_violation.html^headers^
+   test-autocomplete-in-stackframe.html
+   testscript.js
+   test-bug_923281_console_log_filter.html
+   test-bug_923281_test1.js
+   test-bug_923281_test2.js
+   test-bug_939783_console_trace_duplicates.html
+   test-bug-952277-highlight-nodes-in-vview.html
++  test-bug-609872-cd-iframe-parent.html
++  test-bug-609872-cd-iframe-child.html
+ 
+ [browser_bug664688_sandbox_update_after_navigation.js]
+ [browser_bug_638949_copy_link_location.js]
+ [browser_bug_862916_console_dir_and_filter_off.js]
+ [browser_bug_865288_repeat_different_objects.js]
+ [browser_bug_865871_variables_view_close_on_esc_key.js]
+ [browser_bug_869003_inspect_cross_domain_object.js]
+ [browser_bug_871156_ctrlw_close_tab.js]
+@@ -260,8 +262,9 @@ run-if = os == "mac"
+ [browser_console_hide_jsterm_when_devtools_chrome_enabled_false.js]
+ [browser_webconsole_output_01.js]
+ [browser_webconsole_output_02.js]
+ [browser_webconsole_output_03.js]
+ [browser_webconsole_output_04.js]
+ [browser_webconsole_output_events.js]
+ [browser_console_variables_view_highlighter.js]
+ [browser_webconsole_console_trace_duplicates.js]
++[browser_webconsole_cd_iframe.js]
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_cd_iframe.js b/browser/devtools/webconsole/test/browser_webconsole_cd_iframe.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_cd_iframe.js
+@@ -0,0 +1,110 @@
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++// Test that the cd() jsterm helper function works as expected. See bug 609872.
++
++function test() {
++  let hud;
++
++  const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-bug-609872-cd-iframe-parent.html";
++
++  const parentMessages = [{
++    name: "document.title in parent iframe",
++    text: "bug 609872 - iframe parent",
++    category: CATEGORY_OUTPUT,
++  }, {
++    name: "paragraph content",
++    text: "p: test for bug 609872 - iframe parent",
++    category: CATEGORY_OUTPUT,
++  }, {
++    name: "object content",
++    text: "obj: parent!",
++    category: CATEGORY_OUTPUT,
++  }];
++
++  const childMessages = [{
++    name: "document.title in child iframe",
++    text: "bug 609872 - iframe child",
++    category: CATEGORY_OUTPUT,
++  }, {
++    name: "paragraph content",
++    text: "p: test for bug 609872 - iframe child",
++    category: CATEGORY_OUTPUT,
++  }, {
++    name: "object content",
++    text: "obj: child!",
++    category: CATEGORY_OUTPUT,
++  }];
++
++  Task.spawn(runner).then(finishTest);
++
++  function* runner() {
++    const {tab} = yield loadTab(TEST_URI);
++    hud = yield openConsole(tab);
++
++    executeWindowTest();
++
++    yield waitForMessages({ webconsole: hud, messages: parentMessages });
++
++    info("cd() into the iframe using a selector");
++    hud.jsterm.clearOutput();
++    hud.jsterm.execute("cd('iframe')");
++    executeWindowTest();
++
++    yield waitForMessages({ webconsole: hud, messages: childMessages });
++
++    info("cd() out of the iframe, reset to default window");
++    hud.jsterm.clearOutput();
++    hud.jsterm.execute("cd()");
++    executeWindowTest();
++
++    yield waitForMessages({ webconsole: hud, messages: parentMessages });
++
++    info("call cd() with unexpected arguments");
++    hud.jsterm.clearOutput();
++    hud.jsterm.execute("cd(document)");
++
++    yield waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "Cannot cd()",
++        category: CATEGORY_OUTPUT,
++        severity: SEVERITY_ERROR,
++      }],
++    });
++
++    hud.jsterm.clearOutput();
++    hud.jsterm.execute("cd('p')");
++
++    yield waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "Cannot cd()",
++        category: CATEGORY_OUTPUT,
++        severity: SEVERITY_ERROR,
++      }],
++    });
++
++    info("cd() into the iframe using an iframe DOM element");
++    hud.jsterm.clearOutput();
++    hud.jsterm.execute("cd($('iframe'))");
++    executeWindowTest();
++
++    yield waitForMessages({ webconsole: hud, messages: childMessages });
++
++    info("cd(window.parent)");
++    hud.jsterm.clearOutput();
++    hud.jsterm.execute("cd(window.parent)");
++    executeWindowTest();
++
++    yield waitForMessages({ webconsole: hud, messages: parentMessages });
++
++    yield closeConsole(tab);
++  }
++
++  function executeWindowTest() {
++    hud.jsterm.execute("document.title");
++    hud.jsterm.execute("'p: ' + document.querySelector('p').textContent");
++    hud.jsterm.execute("'obj: ' + window.foobarBug609872");
++  }
++}
+diff --git a/browser/devtools/webconsole/test/test-bug-609872-cd-iframe-child.html b/browser/devtools/webconsole/test/test-bug-609872-cd-iframe-child.html
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/test-bug-609872-cd-iframe-child.html
+@@ -0,0 +1,13 @@
++<!DOCTYPE html>
++<html lang="en">
++  <head>
++    <meta charset="utf-8">
++    <title>test for bug 609872 - iframe child</title>
++    <!-- Any copyright is dedicated to the Public Domain.
++         http://creativecommons.org/publicdomain/zero/1.0/ -->
++  </head>
++  <body>
++    <p>test for bug 609872 - iframe child</p>
++    <script>window.foobarBug609872 = 'child!';</script>
++  </body>
++</html>
+diff --git a/browser/devtools/webconsole/test/test-bug-609872-cd-iframe-parent.html b/browser/devtools/webconsole/test/test-bug-609872-cd-iframe-parent.html
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/test-bug-609872-cd-iframe-parent.html
+@@ -0,0 +1,14 @@
++<!DOCTYPE html>
++<html lang="en">
++  <head>
++    <meta charset="utf-8">
++    <title>test for bug 609872 - iframe parent</title>
++    <!-- Any copyright is dedicated to the Public Domain.
++         http://creativecommons.org/publicdomain/zero/1.0/ -->
++  </head>
++  <body>
++    <p>test for bug 609872 - iframe parent</p>
++    <script>window.foobarBug609872 = 'parent!';</script>
++    <iframe src="test-bug-609872-cd-iframe-child.html"></iframe>
++  </body>
++</html>
 diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 --- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
 +++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
@@ -295,6 +479,178 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    stopListeners: WebConsoleActor.prototype.onStopListeners,
    getCachedMessages: WebConsoleActor.prototype.onGetCachedMessages,
    evaluateJS: WebConsoleActor.prototype.onEvaluateJS,
+diff --git a/toolkit/devtools/webconsole/test/chrome.ini b/toolkit/devtools/webconsole/test/chrome.ini
+--- a/toolkit/devtools/webconsole/test/chrome.ini
++++ b/toolkit/devtools/webconsole/test/chrome.ini
+@@ -16,8 +16,9 @@ support-files =
+ [test_network_longstring.html]
+ [test_network_post.html]
+ [test_nsiconsolemessage.html]
+ [test_object_actor.html]
+ [test_object_actor_native_getters.html]
+ [test_object_actor_native_getters_lenient_this.html]
+ [test_page_errors.html]
+ [test_throw.html]
++[test_jsterm_cd_iframe.html]
+diff --git a/toolkit/devtools/webconsole/test/test_jsterm_cd_iframe.html b/toolkit/devtools/webconsole/test/test_jsterm_cd_iframe.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/devtools/webconsole/test/test_jsterm_cd_iframe.html
+@@ -0,0 +1,154 @@
++<!DOCTYPE HTML>
++<html lang="en">
++<head>
++  <meta charset="utf8">
++  <title>Test for the cd() function</title>
++  <script type="text/javascript" src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript;version=1.8" src="common.js"></script>
++  <!-- Any copyright is dedicated to the Public Domain.
++     - http://creativecommons.org/publicdomain/zero/1.0/ -->
++</head>
++<body>
++<p>Test for the cd() function</p>
++
++<script class="testbody" type="text/javascript;version=1.8">
++SimpleTest.waitForExplicitFinish();
++
++let gState;
++
++function startTest()
++{
++  removeEventListener("load", startTest);
++
++  attachConsole([], onAttach, true);
++}
++
++function onAttach(aState, aResponse)
++{
++  top.foobarObject = Object.create(null);
++  top.foobarObject.bug609872 = "parent";
++
++  window.foobarObject = Object.create(null);
++  window.foobarObject.bug609872 = "child";
++
++  gState = aState;
++
++  let tests = [doCheckParent, doCdIframe, doCheckIframe, doCdParent,
++      doCheckParent2];
++  runTests(tests, testEnd);
++}
++
++function doCheckParent()
++{
++  info("check parent window");
++  gState.client.evaluateJS("window.foobarObject.bug609872",
++      onFooObjectFromParent);
++}
++
++function onFooObjectFromParent(aResponse)
++{
++  checkObject(aResponse, {
++    from: gState.actor,
++    input: "window.foobarObject.bug609872",
++    result: "parent",
++  });
++
++  ok(!aResponse.exception, "no eval exception");
++  ok(!aResponse.helperResult, "no helper result");
++
++  nextTest();
++}
++
++function doCdIframe()
++{
++  info("test cd('iframe')");
++  gState.client.evaluateJS("cd('iframe')", onCdIframe);
++}
++
++function onCdIframe(aResponse)
++{
++  checkObject(aResponse, {
++    from: gState.actor,
++    input: "cd('iframe')",
++    result: { type: "undefined" },
++    helperResult: { type: "cd" },
++  });
++
++  ok(!aResponse.exception, "no eval exception");
++
++  nextTest();
++}
++
++function doCheckIframe()
++{
++  info("check foobarObject from the iframe");
++  gState.client.evaluateJS("window.foobarObject.bug609872",
++                           onFooObjectFromIframe);
++}
++
++function onFooObjectFromIframe(aResponse)
++{
++  checkObject(aResponse, {
++    from: gState.actor,
++    input: "window.foobarObject.bug609872",
++    result: "child",
++  });
++
++  ok(!aResponse.exception, "no js eval exception");
++  ok(!aResponse.helperResult, "no helper result");
++
++  nextTest();
++}
++
++function doCdParent()
++{
++  info("test cd() back to parent");
++  gState.client.evaluateJS("cd()", onCdParent);
++}
++
++function onCdParent(aResponse)
++{
++  checkObject(aResponse, {
++    from: gState.actor,
++    input: "cd()",
++    result: { type: "undefined" },
++    helperResult: { type: "cd" },
++  });
++
++  ok(!aResponse.exception, "no eval exception");
++
++  nextTest();
++}
++
++function doCheckParent2()
++{
++  gState.client.evaluateJS("window.foobarObject.bug609872",
++                           onFooObjectFromParent2);
++}
++
++function onFooObjectFromParent2(aResponse)
++{
++  checkObject(aResponse, {
++    from: gState.actor,
++    input: "window.foobarObject.bug609872",
++    result: "parent",
++  });
++
++  ok(!aResponse.exception, "no eval exception");
++  ok(!aResponse.helperResult, "no helper result");
++
++  nextTest();
++}
++
++function testEnd()
++{
++  closeDebugger(gState, function() {
++    gState = null;
++    SimpleTest.finish();
++  });
++}
++
++addEventListener("load", startTest);
++</script>
++</body>
++</html>
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
