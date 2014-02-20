@@ -1,14 +1,55 @@
 # HG changeset patch
-# Parent 47fddf9651fd5bbefa43e1fce0a24fbe30107a88
+# Parent 1d91384b87772dbb08238e6c6d0765e2eac5ed2a
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1392844714 -7200
+# Date 1392927803 -7200
 
 Bug 584733 - Code highlight all JS objects and functions in console output; r=robcee
 
+diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
+--- a/browser/devtools/shared/widgets/VariablesView.jsm
++++ b/browser/devtools/shared/widgets/VariablesView.jsm
+@@ -3418,16 +3418,37 @@ VariablesView.stringifiers.byObjectClass
+     }
+ 
+     if (typeof preview.timestamp != "number") {
+       return new Date(preview.timestamp).toString(); // invalid date
+     }
+ 
+     return "Date " + new Date(preview.timestamp).toISOString();
+   },
++
++  String: function({displayString}) {
++    if (typeof displayString == "undefined") {
++      return null;
++    }
++    return VariablesView.getString(displayString);
++  },
++
++  Number: function({preview}) {
++    if (typeof preview == "undefined") {
++      return null;
++    }
++    return VariablesView.getString(preview.value);
++  },
++
++  Boolean: function({preview}) {
++    if (typeof preview == "undefined") {
++      return null;
++    }
++    return VariablesView.getString(preview.value);
++  },
+ }; // VariablesView.stringifiers.byObjectClass
+ 
+ VariablesView.stringifiers.byObjectKind = {
+   ArrayLike: function(aGrip, {concise}) {
+     let {preview} = aGrip;
+     if (concise) {
+       return aGrip.class + "[" + preview.length + "]";
+     }
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -997,43 +997,65 @@ Messages.Extended.prototype = Heritage.e
+@@ -997,43 +997,103 @@ Messages.Extended.prototype = Heritage.e
    {
      if (piece instanceof Ci.nsIDOMNode) {
        return piece;
@@ -26,6 +67,10 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +  {
 +    let isPrimitive = VariablesView.isPrimitive({ value: grip });
 +    let isActorGrip = WebConsoleUtils.isActorGrip(grip);
++    let noStringQuotes = !this._quoteStrings;
++    if ("noStringQuotes" in options) {
++      noStringQuotes = options.noStringQuotes;
++    }
  
      if (isActorGrip) {
 -      this._repeatID.actors.add(piece.actor);
@@ -36,18 +81,26 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 -        return widget.element;
 +        return this._renderObjectActor(grip, options);
        }
-       if (piece.type == "longString") {
+-      if (piece.type == "longString") {
 -        let widget = new Widgets.LongString(this, piece).render();
++      if (grip.type == "longString") {
 +        let widget = new Widgets.LongString(this, grip, options).render();
          return widget.element;
        }
      }
  
-     let result = this.document.createDocumentFragment();
+-    let result = this.document.createDocumentFragment();
++    let result = this.document.createElementNS(XHTML_NS, "span");
      if (isPrimitive) {
 -      result.textContent = VariablesView.getString(piece, {
+-        noStringQuotes: !this._quoteStrings,
++      let className = this.getClassNameForValueGrip(grip);
++      if (className) {
++        result.className = className;
++      }
++
 +      result.textContent = VariablesView.getString(grip, {
-         noStringQuotes: !this._quoteStrings,
++        noStringQuotes: noStringQuotes,
 +        concise: options.concise,
        });
      } else {
@@ -58,6 +111,31 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      return result;
    },
 +
++  getClassNameForValueGrip: function(grip)
++  {
++    let map = {
++      "number": "cm-number",
++      "longstring": "cm-string",
++      "string": "cm-string",
++      "regexp": "cm-string-2",
++      "boolean": "cm-atom",
++      "-infinity": "cm-atom",
++      "infinity": "cm-atom",
++      "null": "cm-atom",
++      "undefined": "cm-atom",
++    };
++
++    let className = map[typeof grip];
++    if (!className && grip && grip.type) {
++      className = map[grip.type.toLowerCase()];
++    }
++    if (!className && grip && grip.class) {
++      className = map[grip.class.toLowerCase()];
++    }
++
++    return className;
++  },
++
 +  _renderObjectActor: function(objectActor, options)
 +  {
 +    let widgetConstructor = null;
@@ -65,6 +143,10 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    if (preview && preview.kind) {
 +      widgetConstructor = Widgets.ObjectRenderers.byKind[preview.kind];
++    }
++
++    if (!widgetConstructor) {
++      widgetConstructor = Widgets.ObjectRenderers.byClass[objectActor.class];
 +    }
 +
 +    if (!widgetConstructor) {
@@ -82,7 +164,43 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   * The JavaScriptEvalOutput message.
   *
   * @constructor
-@@ -1337,21 +1359,22 @@ Widgets.MessageTimestamp.prototype = Her
+@@ -1051,16 +1111,17 @@ Messages.JavaScriptEvalOutput = function
+     severity = "error";
+     msg = errorMessage;
+     quoteStrings = false;
+   } else {
+     msg = evalResponse.result;
+   }
+ 
+   let options = {
++    className: "cm-s-mozilla",
+     timestamp: evalResponse.timestamp,
+     category: "output",
+     severity: severity,
+     quoteStrings: quoteStrings,
+   };
+   Messages.Extended.call(this, [msg], options);
+ };
+ 
+@@ -1072,16 +1133,17 @@ Messages.JavaScriptEvalOutput.prototype 
+  * @constructor
+  * @extends Messages.Extended
+  * @param object packet
+  *        The Console API call packet received from the server.
+  */
+ Messages.ConsoleGeneric = function(packet)
+ {
+   let options = {
++    className: "cm-s-mozilla",
+     timestamp: packet.timeStamp,
+     category: "webdev",
+     severity: CONSOLE_API_LEVELS_TO_SEVERITIES[packet.level],
+     private: packet.private,
+     filterDuplicates: true,
+     location: {
+       url: packet.filename,
+       line: packet.lineNumber,
+@@ -1337,20 +1399,21 @@ Widgets.MessageTimestamp.prototype = Her
   * The JavaScript object widget.
   *
   * @constructor
@@ -96,8 +214,8 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  {
    Widgets.BaseWidget.call(this, message);
    this.objectActor = objectActor;
-   this._onClick = this._onClick.bind(this);
 +  this.options = options;
+   this._onClick = this._onClick.bind(this);
  };
  
  Widgets.JSObject.prototype = Heritage.extend(Widgets.BaseWidget.prototype,
@@ -105,27 +223,49 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
     * The ObjectActor displayed by the widget.
     * @type object
-    */
-@@ -1361,17 +1384,17 @@ Widgets.JSObject.prototype = Heritage.ex
+@@ -1358,39 +1421,582 @@ Widgets.JSObject.prototype = Heritage.ex
+   objectActor: null,
+ 
+   render: function()
    {
      if (this.element) {
        return this;
      }
  
-     let anchor = this.element = this.document.createElementNS(XHTML_NS, "a");
+-    let anchor = this.element = this.document.createElementNS(XHTML_NS, "a");
++    let str = VariablesView.getString(this.objectActor, this.options);
++    this.element = this._renderAnchor(str);
++
++    let className = this.message.getClassNameForValueGrip(this.objectActor);
++    if (!className && this.objectActor.class == "Object") {
++      className = "cm-variable";
++    }
++    if (className) {
++      this.element.classList.add(className);
++    }
++
++    return this;
++  },
++
++  _renderAnchor: function(text)
++  {
++    let anchor = this.document.createElementNS(XHTML_NS, "a");
      anchor.href = "#";
      anchor.draggable = false;
 -    anchor.textContent = VariablesView.getString(this.objectActor);
-+    anchor.textContent = VariablesView.getString(this.objectActor, this.options);
++    anchor.textContent = text;
      this.message._addLinkCallback(anchor, this._onClick);
- 
-     return this;
+-
+-    return this;
++    return anchor;
    },
  
    /**
     * The click event handler for objects shown inline.
     * @private
-@@ -1381,16 +1404,116 @@ Widgets.JSObject.prototype = Heritage.ex
+    */
+   _onClick: function()
+   {
      this.output.openVariablesView({
        label: VariablesView.getString(this.objectActor, { concise: true }),
        objectActor: this.objectActor,
@@ -136,11 +276,154 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
 +Widgets.ObjectRenderers = {};
 +Widgets.ObjectRenderers.byKind = {};
++Widgets.ObjectRenderers.byClass = {};
++
++/**
++ * The widget used for displaying Date objects.
++ *
++ * @constructor
++ * @extends Widgets.JSObject
++ * @param object message
++ *        The owning message.
++ * @param object objectActor
++ *        The ObjectActor to display.
++ */
++Widgets.ObjectRenderers.byClass.Date = function(message, objectActor, options)
++{
++  Widgets.JSObject.call(this, message, objectActor, options);
++};
++
++Widgets.ObjectRenderers.byClass.Date.prototype = Heritage.extend(Widgets.JSObject.prototype,
++{
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let doc = this.document;
++    let {preview} = this.objectActor;
++    let container = this.element = doc.createElementNS(XHTML_NS, "span");
++    container.className = "class-" + this.objectActor.class;
++
++    let addStr = (s) => {
++      container.appendChild(doc.createTextNode(s));
++    };
++
++    let anchor = this._renderAnchor(this.objectActor.class);
++    anchor.className = "cm-variable";
++    container.appendChild(anchor);
++
++    if (!("timestamp" in preview)) {
++      return this;
++    }
++
++    if (typeof preview.timestamp != "number") {
++      anchor.textContent = new Date(preview.timestamp).toString(); // invalid date
++      anchor.className = "";
++      return this;
++    }
++
++    addStr(" ");
++
++    let n = doc.createElementNS(XHTML_NS, "span");
++    n.className = "cm-string-2";
++    n.textContent = new Date(preview.timestamp).toISOString();
++    container.appendChild(n);
++
++    return this;
++  },
++}); // Widgets.ObjectRenderers.byClass.Date.prototype
++
++/**
++ * The widget used for displaying Function objects.
++ *
++ * @constructor
++ * @extends Widgets.JSObject
++ * @param object message
++ *        The owning message.
++ * @param object objectActor
++ *        The ObjectActor to display.
++ */
++Widgets.ObjectRenderers.byClass.Function = function(message, objectActor, options)
++{
++  Widgets.JSObject.call(this, message, objectActor, options);
++};
++
++Widgets.ObjectRenderers.byClass.Function.prototype = Heritage.extend(Widgets.JSObject.prototype,
++{
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let doc = this.document;
++    let grip = this.objectActor;
++    let container = this.element = doc.createElementNS(XHTML_NS, "span");
++    container.className = "class-" + this.objectActor.class;
++
++    let addStr = (s) => {
++      container.appendChild(doc.createTextNode(s));
++    };
++
++    // TODO: Bug 948484 - support arrow functions and ES6 generators
++    let name = grip.userDisplayName || grip.displayName || grip.name || "";
++    name = VariablesView.getString(name, { noStringQuotes: true });
++
++    let str = this.options.concise ? name || "function " : "function " + name;
++
++    if (this.options.concise) {
++      let anchor = this._renderAnchor(name || "function");
++      anchor.className = name ? "cm-variable" : "cm-keyword";
++      container.appendChild(anchor);
++      if (!name) {
++        addStr(" ");
++      }
++    } else if (name) {
++      let fn = doc.createElementNS(XHTML_NS, "span");
++      fn.className = "cm-keyword";
++      fn.textContent = "function";
++      container.appendChild(fn);
++      addStr(" ");
++      let anchor = this._renderAnchor(name);
++      anchor.className = "cm-variable";
++      container.appendChild(anchor);
++    } else {
++      let anchor = this._renderAnchor("function");
++      anchor.className = "cm-keyword";
++      container.appendChild(anchor);
++      addStr(" ");
++    }
++
++    addStr("(");
++
++    // TODO: Bug 948489 - Support functions with destructured parameters and
++    // rest parameters
++    let params = grip.parameterNames || [];
++    let shown = 0;
++    for (let param of params) {
++      if (shown > 0) {
++        addStr(", ");
++      }
++      let arg = doc.createElementNS(XHTML_NS, "span");
++      arg.className = "cm-def";
++      arg.textContent = param;
++      container.appendChild(arg);
++      shown++;
++    }
++
++    addStr(")");
++
++    return this;
++  },
++}); // Widgets.ObjectRenderers.byClass.Function.prototype
 +
 +/**
 + * The widget used for displaying ArrayLike objects.
 + *
 + * @constructor
++ * @extends Widgets.JSObject
 + * @param object message
 + *        The owning message.
 + * @param object objectActor
@@ -148,21 +431,93 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + */
 +Widgets.ObjectRenderers.byKind.ArrayLike = function(message, objectActor, options)
 +{
-+  Widgets.BaseWidget.call(this, message);
-+  this.objectActor = objectActor;
-+  this.options = options;
-+  this._onClick = this._onClick.bind(this);
++  Widgets.JSObject.call(this, message, objectActor, options);
 +};
 +
-+Widgets.ObjectRenderers.byKind.ArrayLike.prototype =
-+  Heritage.extend(Widgets.BaseWidget.prototype,
++Widgets.ObjectRenderers.byKind.ArrayLike.prototype = Heritage.extend(Widgets.JSObject.prototype,
 +{
-+  /**
-+   * The ObjectActor displayed by the widget.
-+   * @type object
-+   */
-+  objectActor: null,
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
 +
++    let doc = this.document;
++    let {preview} = this.objectActor;
++    let {items} = preview;
++    let container = this.element = doc.createElementNS(XHTML_NS, "span");
++    container.className = "kind-" + preview.kind;
++
++    let addStr = (s) => {
++      container.appendChild(doc.createTextNode(s));
++    };
++
++    let anchor = this._renderAnchor(this.objectActor.class);
++    anchor.className = "cm-variable";
++    container.appendChild(anchor);
++
++    if (!items || this.options.concise) {
++      addStr("[");
++
++      let n = doc.createElementNS(XHTML_NS, "span");
++      n.className = "cm-number";
++      n.textContent = preview.length;
++      container.appendChild(n);
++
++      addStr("]");
++      return this;
++    }
++
++    addStr(" [ ");
++
++    let shown = 0;
++    for (let item of items) {
++      if (shown > 0) {
++        addStr(", ");
++      }
++
++      if (item !== null) {
++        let elem = this.message._renderValueGrip(item, { concise: true });
++        container.appendChild(elem);
++      } else if (shown == (items.length - 1)) {
++        addStr(", ");
++      }
++
++      shown++;
++    }
++
++    if (shown < preview.length) {
++      addStr(", ");
++
++      let n = preview.length - shown;
++      let str = VariablesView.stringifiers._getNMoreString(n);
++      let anchor = this._renderAnchor(str);
++      container.appendChild(anchor);
++    }
++
++    addStr(" ]");
++
++    return this;
++  },
++}); // Widgets.ObjectRenderers.byKind.ArrayLike.prototype
++
++/**
++ * The widget used for displaying MapLike objects.
++ *
++ * @constructor
++ * @extends Widgets.JSObject
++ * @param object message
++ *        The owning message.
++ * @param object objectActor
++ *        The ObjectActor to display.
++ */
++Widgets.ObjectRenderers.byKind.MapLike = function(message, objectActor, options)
++{
++  Widgets.JSObject.call(this, message, objectActor, options);
++};
++
++Widgets.ObjectRenderers.byKind.MapLike.prototype = Heritage.extend(Widgets.JSObject.prototype,
++{
 +  render: function()
 +  {
 +    if (this.element) {
@@ -170,69 +525,282 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    }
 +
 +    let {preview} = this.objectActor;
-+    let {items} = preview;
++    let {entries} = preview;
 +
-+    if (this.options.concise) {
-+      let anchor = this.element = this.document.createElementNS(XHTML_NS, "a");
-+      anchor.href = "#";
-+      anchor.draggable = false;
-+      anchor.textContent = this.objectActor.class + "[" + preview.length + "]";
-+      this.message._addLinkCallback(anchor, this._onClick);
++    let addStr = (s) => {
++      container.appendChild(this.document.createTextNode(s));
++    };
++
++    let container = this.element = this.document.createElementNS(XHTML_NS, "span");
++    container.className = "kind-" + preview.kind;
++
++    let anchor = this._renderAnchor(this.objectActor.class);
++    anchor.className = "cm-variable";
++    container.appendChild(anchor);
++
++    if (!entries || this.options.concise) {
++      if (typeof preview.size == "number") {
++        addStr("[");
++
++        let n = this.document.createElementNS(XHTML_NS, "span");
++        n.className = "cm-number";
++        n.textContent = preview.size;
++        container.appendChild(n);
++
++        addStr("]");
++      }
 +      return this;
 +    }
 +
-+    let container = this.element = this.document.createElementNS(XHTML_NS, "span");
-+
-+    let anchor = this.document.createElementNS(XHTML_NS, "a");
-+    anchor.href = "#";
-+    anchor.draggable = false;
-+    anchor.textContent = this.objectActor.class;
-+    this.message._addLinkCallback(anchor, this._onClick);
-+    container.appendChild(anchor);
-+    container.appendChild(this.document.createTextNode(" [ "));
++    addStr(" { ");
 +
 +    let shown = 0;
-+    for (let item of (items || [])) {
++    for (let [key, value] of entries) {
 +      if (shown > 0) {
-+        container.appendChild(this.document.createTextNode(", "));
++        addStr(", ");
 +      }
 +
-+      let elem = this.message._renderValueGrip(item, { concise: true });
-+      container.appendChild(elem);
++      let keyElem = this.message._renderValueGrip(key, {
++        concise: true,
++        noStringQuotes: true,
++      });
++
++      // Strings are property names.
++      if (keyElem.classList && keyElem.classList.contains("cm-string")) {
++        keyElem.classList.remove("cm-string");
++        keyElem.classList.add("cm-property");
++      }
++
++      container.appendChild(keyElem);
++
++      addStr(": ");
++
++      let valueElem = this.message._renderValueGrip(value, { concise: true });
++      container.appendChild(valueElem);
++
 +      shown++;
 +    }
 +
-+    if (shown < preview.length) {
-+      container.appendChild(this.document.createTextNode(", "));
++    if (typeof preview.size == "number" && shown < preview.size) {
++      addStr(", ");
 +
-+      let n = preview.length - shown;
-+      let anchor = this.document.createElementNS(XHTML_NS, "a");
-+      anchor.href = "#";
-+      anchor.draggable = false;
-+      anchor.textContent = VariablesView.stringifiers._getNMoreString(n);
-+      this.message._addLinkCallback(anchor, this._onClick);
-+
++      let n = preview.size - shown;
++      let str = VariablesView.stringifiers._getNMoreString(n);
++      let anchor = this._renderAnchor(str);
 +      container.appendChild(anchor);
 +    }
 +
-+    container.appendChild(this.document.createTextNode(" ]"));
++    addStr(" }");
 +
 +    return this;
 +  },
++}); // Widgets.ObjectRenderers.byKind.MapLike.prototype
 +
-+  /**
-+   * The click event handler for objects shown inline.
-+   * @private
-+   */
-+  _onClick: function()
++/**
++ * The widget used for displaying DOM event previews.
++ *
++ * @constructor
++ * @extends Widgets.JSObject
++ * @param object message
++ *        The owning message.
++ * @param object objectActor
++ *        The ObjectActor to display.
++ */
++Widgets.ObjectRenderers.byKind.DOMEvent = function(message, objectActor, options)
++{
++  Widgets.JSObject.call(this, message, objectActor, options);
++};
++
++Widgets.ObjectRenderers.byKind.DOMEvent.prototype = Heritage.extend(Widgets.JSObject.prototype,
++{
++  render: function()
 +  {
-+    this.output.openVariablesView({
-+      label: VariablesView.getString(this.objectActor, { concise: true }),
-+      objectActor: this.objectActor,
-+      autofocus: true,
-+    });
++    if (this.element) {
++      return this;
++    }
++
++    let doc = this.document;
++    let {preview} = this.objectActor;
++
++    let addStr = (s) => {
++      container.appendChild(doc.createTextNode(s));
++    };
++
++    let container = this.element = doc.createElementNS(XHTML_NS, "span");
++    container.className = "kind-" + preview.kind;
++
++    let anchor = this._renderAnchor(preview.type || this.objectActor.class);
++    anchor.className = "cm-variable";
++    container.appendChild(anchor);
++
++    if (this.options.concise) {
++      return this;
++    }
++
++    if (preview.eventKind == "key" && preview.modifiers &&
++        preview.modifiers.length) {
++      addStr(" ");
++
++      let mods = 0;
++      for (let mod of preview.modifiers) {
++        if (mods > 0) {
++          addStr("-");
++        }
++        let elem = doc.createElementNS(XHTML_NS, "span");
++        elem.className = "cm-keyword";
++        elem.textContent = mod;
++        container.appendChild(elem);
++        mods++;
++      }
++    }
++
++    addStr(" { ");
++
++    let shown = 0;
++    if (preview.target) {
++      let prop = doc.createElementNS(XHTML_NS, "span");
++      prop.className = "cm-property";
++      prop.textContent = "target";
++      container.appendChild(prop);
++
++      addStr(": ");
++      let target = this.message._renderValueGrip(preview.target, { concise: true });
++      container.appendChild(target);
++      shown++;
++    }
++
++    for (let key of Object.keys(preview.properties || {})) {
++      if (shown > 0) {
++        addStr(", ");
++      }
++
++      let keyElem = doc.createElementNS(XHTML_NS, "span");
++      keyElem.className = "cm-property";
++      keyElem.textContent = key;
++      container.appendChild(keyElem);
++
++      addStr(": ");
++
++      let value = preview.properties[key];
++      let valueElem = this.message._renderValueGrip(value, { concise: true });
++      container.appendChild(valueElem);
++
++      shown++;
++    }
++
++    addStr(" }");
++
++    return this;
 +  },
-+}); // Widgets.ObjectRenderers.byKind.ArrayLike.prototype
++}); // Widgets.ObjectRenderers.byKind.DOMEvent.prototype
++
++/**
++ * The widget used for displaying generic JS object previews.
++ *
++ * @constructor
++ * @extends Widgets.JSObject
++ * @param object message
++ *        The owning message.
++ * @param object objectActor
++ *        The ObjectActor to display.
++ */
++Widgets.ObjectRenderers.byKind.Object = function(message, objectActor, options)
++{
++  Widgets.JSObject.call(this, message, objectActor, options);
++};
++
++Widgets.ObjectRenderers.byKind.Object.prototype = Heritage.extend(Widgets.JSObject.prototype,
++{
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let doc = this.document;
++    let {preview} = this.objectActor;
++    let {ownProperties, safeGetterValues} = preview;
++
++    if ((!ownProperties && !safeGetterValues) || this.options.concise) {
++      this.element = this._renderAnchor(this.objectActor.class);
++      this.element.classList.add("cm-variable");
++      return this;
++    }
++
++    let addStr = (s) => {
++      container.appendChild(doc.createTextNode(s));
++    };
++
++    let container = this.element = doc.createElementNS(XHTML_NS, "span");
++    container.className = "kind-" + preview.kind;
++
++    let anchor = this._renderAnchor(this.objectActor.class);
++    anchor.className = "cm-variable";
++    container.appendChild(anchor);
++    addStr(" { ");
++
++    let addProperty = (str) => {
++      let elem = doc.createElementNS(XHTML_NS, "span");
++      elem.className = "cm-property";
++      elem.textContent = str;
++      container.appendChild(elem);
++    };
++
++    let shown = 0;
++    for (let key of Object.keys(ownProperties || {})) {
++      if (shown > 0) {
++        addStr(", ");
++      }
++
++      let value = ownProperties[key];
++
++      addProperty(key);
++      addStr(": ");
++
++      if (value.get) {
++        addProperty("Getter");
++      } else if (value.set) {
++        addProperty("Setter");
++      } else {
++        let valueElem = this.message._renderValueGrip(value.value, { concise: true });
++        container.appendChild(valueElem);
++      }
++
++      shown++;
++    }
++
++    let ownPropertiesShown = shown;
++
++    for (let key of Object.keys(safeGetterValues || {})) {
++      if (shown > 0) {
++        addStr(", ");
++      }
++
++      addProperty(key);
++      addStr(": ");
++
++      let value = safeGetterValues[key].getterValue;
++      let valueElem = this.message._renderValueGrip(value, { concise: true });
++      container.appendChild(valueElem);
++
++      shown++;
++    }
++
++    if (typeof preview.ownPropertiesLength == "number" &&
++        ownPropertiesShown < preview.ownPropertiesLength) {
++      addStr(", ");
++
++      let n = preview.ownPropertiesLength - ownPropertiesShown;
++      let str = VariablesView.stringifiers._getNMoreString(n);
++      let anchor = this._renderAnchor(str);
++      container.appendChild(anchor);
++    }
++
++    addStr(" }");
++
++    return this;
++  },
++}); // Widgets.ObjectRenderers.byKind.Object.prototype
 +
  /**
   * The long string widget.
@@ -242,3 +810,162 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   *        The owning message.
   * @param object longStringActor
   *        The LongStringActor to display.
+@@ -1413,17 +2019,17 @@ Widgets.LongString.prototype = Heritage.
+ 
+   render: function()
+   {
+     if (this.element) {
+       return this;
+     }
+ 
+     let result = this.element = this.document.createElementNS(XHTML_NS, "span");
+-    result.className = "longString";
++    result.className = "longString cm-string";
+     this._renderString(this.longStringActor.initial);
+     result.appendChild(this._renderEllipsis());
+ 
+     return this;
+   },
+ 
+   /**
+    * Render the long string in the widget element.
+diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
+--- a/browser/themes/shared/devtools/webconsole.inc.css
++++ b/browser/themes/shared/devtools/webconsole.inc.css
+@@ -184,17 +184,17 @@ a {
+   -moz-margin-start: 6px;
+ }
+ 
+ .message[category=network].mixed-content .url {
+   color: #FF0000;
+ }
+ 
+ .message .learn-more-link {
+-  color: #0000EE;
++  color: -moz-nativehyperlinktext;
+   margin: 0 6px;
+ }
+ 
+ /* CSS styles */
+ .webconsole-filter-button[category="css"] > .toolbarbutton-menubutton-button:before {
+   background-image: linear-gradient(#2DC3F3, #00B6F0);
+   border-color: #1BA2CC;
+ }
+@@ -366,16 +366,25 @@ a {
+   margin: 0;
+ }
+ 
+ .stacktrace .function {
+   display: block;
+   flex: 1 1 auto;
+ }
+ 
++.cm-s-mozilla a[class] {
++  -moz-text-decoration-style: dashed;
++}
++
++.cm-s-mozilla a[class]:hover,
++.cm-s-mozilla a[class]:focus {
++  text-decoration: underline;
++}
++
+ /* Replace these values with CSS variables as available */
+ .theme-dark .jsterm-input-container {
+   background-color: #252c33; /* tabToolbarBackgroundColor */
+   border-color: #131c26; /* mainBackgroundColor */
+ }
+ 
+ .theme-dark .jsterm-input-node {
+   color: #8fa1b2; /* textColor */
+diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
+--- a/toolkit/devtools/server/actors/script.js
++++ b/toolkit/devtools/server/actors/script.js
+@@ -3303,16 +3303,88 @@ ObjectActor.prototype.requestTypes = {
+  *   - the raw JS object after calling Debugger.Object.unsafeDereference(). This
+  *   argument is only provided if the object is safe for reading properties and
+  *   executing methods. See DevToolsUtils.isSafeJSObject().
+  *
+  * Functions must return false if they cannot provide preview
+  * information for the debugger object, or true otherwise.
+  */
+ DebuggerServer.ObjectActorPreviewers = {
++  String: [function({obj, threadActor}, aGrip) {
++    if (!obj.proto || obj.proto.class != "String") {
++      return false;
++    }
++
++    let length = DevToolsUtils.getProperty(obj, "length");
++    if (typeof length != "number") {
++      return false;
++    }
++
++    let raw = obj.unsafeDereference();
++    let str = null;
++    try {
++      str = String.prototype.toString.call(raw);
++    } catch (ex) {
++      // toString() can throw if the raw JS object cannot be represented as
++      // a string.
++      return false;
++    }
++
++    if (str !== null) {
++      str = threadActor.createValueGrip(makeDebuggeeValueIfNeeded(obj, str));
++    }
++
++    aGrip.displayString = str;
++    return true;
++  }],
++
++  Boolean: [function({obj, threadActor}, aGrip) {
++    if (!obj.proto || obj.proto.class != "Boolean") {
++      return false;
++    }
++
++    let raw = obj.unsafeDereference();
++    let bool = null;
++    try {
++      bool = Boolean.prototype.valueOf.call(raw);
++    } catch (ex) {
++      // valueOf() can throw if the raw JS object is "misbehaved".
++      return false;
++    }
++
++    if (bool !== null) {
++      bool = threadActor.createValueGrip(makeDebuggeeValueIfNeeded(obj, bool));
++    }
++
++    aGrip.preview = { value: bool };
++    return true;
++  }],
++
++  Number: [function({obj, threadActor}, aGrip) {
++    if (!obj.proto || obj.proto.class != "Number") {
++      return false;
++    }
++
++    let raw = obj.unsafeDereference();
++    let n = null;
++    try {
++      n = Number.prototype.valueOf.call(raw);
++    } catch (ex) {
++      // valueOf() can throw if the raw JS object is "misbehaved".
++      return false;
++    }
++
++    if (n !== null) {
++      n = threadActor.createValueGrip(makeDebuggeeValueIfNeeded(obj, n));
++    }
++
++    aGrip.preview = { value: n };
++    return true;
++  }],
++
+   Function: [function({obj, threadActor}, aGrip) {
+     if (obj.name) {
+       aGrip.name = obj.name;
+     }
+ 
+     if (obj.displayName) {
+       aGrip.displayName = obj.displayName.substr(0, 500);
+     }
