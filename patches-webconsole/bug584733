@@ -1,13 +1,32 @@
 # HG changeset patch
-# Parent 1d91384b87772dbb08238e6c6d0765e2eac5ed2a
+# Parent 5d896e33c6a6fa7c382d6a1c6b544675d9857ee9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1392927803 -7200
+# Date 1393007669 -7200
 
-Bug 584733 - Code highlight all JS objects and functions in console output; r=robcee
+Bug 584733 - Code highlight all JS objects and functions in console output; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-bc,mochitest-o -t none
 
 diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtools/shared/widgets/VariablesView.jsm
 --- a/browser/devtools/shared/widgets/VariablesView.jsm
 +++ b/browser/devtools/shared/widgets/VariablesView.jsm
+@@ -47,17 +47,17 @@ Object.defineProperty(this, "WebConsoleU
+ Object.defineProperty(this, "NetworkHelper", {
+   get: function() {
+     return devtools.require("devtools/toolkit/webconsole/network-helper");
+   },
+   configurable: true,
+   enumerable: true
+ });
+ 
+-this.EXPORTED_SYMBOLS = ["VariablesView"];
++this.EXPORTED_SYMBOLS = ["VariablesView", "escapeHTML"];
+ 
+ /**
+  * Debugger localization strings.
+  */
+ const STR = Services.strings.createBundle(DBG_STRINGS_URI);
+ 
+ /**
+  * A tree view for inspecting scopes, objects and properties.
 @@ -3418,16 +3418,37 @@ VariablesView.stringifiers.byObjectClass
      }
  
@@ -49,7 +68,25 @@ diff --git a/browser/devtools/shared/widgets/VariablesView.jsm b/browser/devtool
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -997,43 +997,103 @@ Messages.Extended.prototype = Heritage.e
+@@ -3,16 +3,17 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+ const {Cc, Ci, Cu} = require("chrome");
+ 
+ loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
++loader.lazyImporter(this, "escapeHTML", "resource:///modules/devtools/VariablesView.jsm");
+ 
+ const Heritage = require("sdk/core/heritage");
+ const XHTML_NS = "http://www.w3.org/1999/xhtml";
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ 
+ const WebConsoleUtils = require("devtools/toolkit/webconsole/utils").Utils;
+ const l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+@@ -997,43 +998,141 @@ Messages.Extended.prototype = Heritage.e
    {
      if (piece instanceof Ci.nsIDOMNode) {
        return piece;
@@ -63,6 +100,24 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return this._renderValueGrip(piece);
 +  },
 +
++  /**
++   * Render a grip that represent a value received from the server. This method
++   * picks the appropriate widget to render the value with.
++   *
++   * @private
++   * @param object grip
++   *        The value grip received from the server.
++   * @param object options
++   *        Options for displaying the value. Known options:
++   *        - noStringQuotes - boolean that tells the renderer to not use quotes
++   *        around strings.
++   *        - concise - boolean that tells the renderer to compactly display the
++   *        grip. This is typically set to true when the object needs to be
++   *        displayed in an array preview, or as a property value in object
++   *        previews, etc.
++   * @return DOMElement
++   *         The DOM element that displays the given grip.
++   */
 +  _renderValueGrip: function(grip, options = {})
 +  {
 +    let isPrimitive = VariablesView.isPrimitive({ value: grip });
@@ -111,6 +166,14 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      return result;
    },
 +
++  /**
++   * Get a CodeMirror-compatible class name for a given value grip.
++   *
++   * @param object grip
++   *        Value grip from the server.
++   * @return string
++   *         The class name for the grip.
++   */
 +  getClassNameForValueGrip: function(grip)
 +  {
 +    let map = {
@@ -136,25 +199,37 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return className;
 +  },
 +
-+  _renderObjectActor: function(objectActor, options)
++  /**
++   * Display an object actor with the appropriate renderer.
++   *
++   * @private
++   * @param object objectActor
++   *        The ObjectActor to display.
++   * @param object options
++   *        Options to use for displaying the ObjectActor.
++   * @see this._renderValueGrip for the available options.
++   * @return DOMElement
++   *         The DOM element that displays the object actor.
++   */
++  _renderObjectActor: function(objectActor, options = {})
 +  {
-+    let widgetConstructor = null;
++    let widget = null;
 +    let {preview} = objectActor;
 +
 +    if (preview && preview.kind) {
-+      widgetConstructor = Widgets.ObjectRenderers.byKind[preview.kind];
++      widget = Widgets.ObjectRenderers.byKind[preview.kind];
 +    }
 +
-+    if (!widgetConstructor) {
-+      widgetConstructor = Widgets.ObjectRenderers.byClass[objectActor.class];
++    if (!widget || (widget.canRender && !widget.canRender(objectActor))) {
++      widget = Widgets.ObjectRenderers.byClass[objectActor.class];
 +    }
 +
-+    if (!widgetConstructor) {
-+      widgetConstructor = Widgets.JSObject;
++    if (!widget || (widget.canRender && !widget.canRender(objectActor))) {
++      widget = Widgets.JSObject;
 +    }
 +
-+    let widget = new widgetConstructor(this, objectActor, options).render();
-+    return widget.element;
++    let instance = new widget(this, objectActor, options).render();
++    return instance.element;
 +  },
  }); // Messages.Extended.prototype
  
@@ -164,7 +239,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   * The JavaScriptEvalOutput message.
   *
   * @constructor
-@@ -1051,16 +1111,17 @@ Messages.JavaScriptEvalOutput = function
+@@ -1051,16 +1150,17 @@ Messages.JavaScriptEvalOutput = function
      severity = "error";
      msg = errorMessage;
      quoteStrings = false;
@@ -182,7 +257,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    Messages.Extended.call(this, [msg], options);
  };
  
-@@ -1072,16 +1133,17 @@ Messages.JavaScriptEvalOutput.prototype 
+@@ -1072,16 +1172,17 @@ Messages.JavaScriptEvalOutput.prototype 
   * @constructor
   * @extends Messages.Extended
   * @param object packet
@@ -200,14 +275,27 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      location: {
        url: packet.filename,
        line: packet.lineNumber,
-@@ -1337,20 +1399,21 @@ Widgets.MessageTimestamp.prototype = Her
-  * The JavaScript object widget.
+@@ -1329,28 +1430,33 @@ Widgets.MessageTimestamp.prototype = Her
+     this.element.textContent = l10n.timestampString(this.timestamp) + " ";
+ 
+     return this;
+   },
+ }); // Widgets.MessageTimestamp.prototype
+ 
+ 
+ /**
+- * The JavaScript object widget.
++ * Widget used for displaying ObjectActors that have no specialised renderers.
   *
   * @constructor
   * @param object message
   *        The owning message.
   * @param object objectActor
   *        The ObjectActor to display.
++ * @param object options
++ *        Options for displaying the given ObjectActor. See
++ *        Messages.Extended.prototype._renderValueGrip for the available
++ *        options.
   */
 -Widgets.JSObject = function(message, objectActor)
 +Widgets.JSObject = function(message, objectActor, options)
@@ -223,7 +311,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    /**
     * The ObjectActor displayed by the widget.
     * @type object
-@@ -1358,39 +1421,582 @@ Widgets.JSObject.prototype = Heritage.ex
+@@ -1358,39 +1464,871 @@ Widgets.JSObject.prototype = Heritage.ex
    objectActor: null,
  
    render: function()
@@ -233,6 +321,10 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      }
  
 -    let anchor = this.element = this.document.createElementNS(XHTML_NS, "a");
+-    anchor.href = "#";
+-    anchor.draggable = false;
+-    anchor.textContent = VariablesView.getString(this.objectActor);
+-    this.message._addLinkCallback(anchor, this._onClick);
 +    let str = VariablesView.getString(this.objectActor, this.options);
 +    this.element = this._renderAnchor(str);
 +
@@ -243,24 +335,42 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    if (className) {
 +      this.element.classList.add(className);
 +    }
-+
-+    return this;
-+  },
-+
-+  _renderAnchor: function(text)
-+  {
-+    let anchor = this.document.createElementNS(XHTML_NS, "a");
-     anchor.href = "#";
-     anchor.draggable = false;
--    anchor.textContent = VariablesView.getString(this.objectActor);
-+    anchor.textContent = text;
-     this.message._addLinkCallback(anchor, this._onClick);
--
--    return this;
-+    return anchor;
+ 
+     return this;
    },
  
    /**
++   * Render an anchor with a given text content and link.
++   *
++   * @private
++   * @param string text
++   *        Text to show in the anchor.
++   * @param function|string [handler]
++   *        Optional click event handler. By default a click on the anchor opens
++   *        the variables view for the current object actor (this.objectActor).
++   *        If given a string, the string is used a link and clicks open the
++   *        link in a new tab.
++   * @return DOMElement
++   *         The DOM element of the new anchor.
++   */
++  _renderAnchor: function(text, handler = this._onClick)
++  {
++    let anchor = this.document.createElementNS(XHTML_NS, "a");
++    anchor.draggable = false;
++    anchor.textContent = text;
++
++    if (typeof handler == "string") {
++      anchor.href = handler;
++      this.message._addLinkCallback(anchor);
++    } else {
++      anchor.href = "#";
++      this.message._addLinkCallback(anchor, handler);
++    }
++
++    return anchor;
++  },
++
++  /**
     * The click event handler for objects shown inline.
     * @private
     */
@@ -283,10 +393,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *
 + * @constructor
 + * @extends Widgets.JSObject
-+ * @param object message
-+ *        The owning message.
-+ * @param object objectActor
-+ *        The ObjectActor to display.
++ * @see Widget.JSObject for arguments
 + */
 +Widgets.ObjectRenderers.byClass.Date = function(message, objectActor, options)
 +{
@@ -340,10 +447,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *
 + * @constructor
 + * @extends Widgets.JSObject
-+ * @param object message
-+ *        The owning message.
-+ * @param object objectActor
-+ *        The ObjectActor to display.
++ * @see Widget.JSObject for arguments
 + */
 +Widgets.ObjectRenderers.byClass.Function = function(message, objectActor, options)
 +{
@@ -424,10 +528,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *
 + * @constructor
 + * @extends Widgets.JSObject
-+ * @param object message
-+ *        The owning message.
-+ * @param object objectActor
-+ *        The ObjectActor to display.
++ * @see Widget.JSObject for arguments
 + */
 +Widgets.ObjectRenderers.byKind.ArrayLike = function(message, objectActor, options)
 +{
@@ -506,10 +607,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 + *
 + * @constructor
 + * @extends Widgets.JSObject
-+ * @param object message
-+ *        The owning message.
-+ * @param object objectActor
-+ *        The ObjectActor to display.
++ * @see Widget.JSObject for arguments
 + */
 +Widgets.ObjectRenderers.byKind.MapLike = function(message, objectActor, options)
 +{
@@ -597,14 +695,109 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +}); // Widgets.ObjectRenderers.byKind.MapLike.prototype
 +
 +/**
++ * The widget used for displaying objects with a URL.
++ *
++ * @constructor
++ * @extends Widgets.JSObject
++ * @see Widget.JSObject for arguments
++ */
++Widgets.ObjectRenderers.byKind.ObjectWithURL = function(message, objectActor, options)
++{
++  Widgets.JSObject.call(this, message, objectActor, options);
++};
++
++Widgets.ObjectRenderers.byKind.ObjectWithURL.prototype = Heritage.extend(Widgets.JSObject.prototype,
++{
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    this.element = this._renderElement(this.objectActor,
++                                       this.objectActor.preview.url);
++    return this;
++  },
++
++  _renderElement: function(objectActor, url)
++  {
++    let doc = this.document;
++    let {preview} = objectActor;
++    let container = doc.createElementNS(XHTML_NS, "span");
++    container.className = "kind-" + preview.kind;
++
++    let addStr = (s) => {
++      container.appendChild(doc.createTextNode(s));
++    };
++
++    let anchor = this._renderAnchor(objectActor.class);
++    anchor.className = "cm-variable";
++    container.appendChild(anchor);
++
++    if (!VariablesView.isFalsy({ value: url })) {
++      addStr(" \u2192 ");
++      let shortUrl = WebConsoleUtils.abbreviateSourceURL(url, {
++        onlyCropQuery: !this.options.concise
++      });
++      let elem = this._renderAnchor(shortUrl, url);
++      container.appendChild(elem);
++    }
++
++    return container;
++  },
++}); // Widgets.ObjectRenderers.byKind.ObjectWithURL.prototype
++
++/**
++ * The widget used for displaying objects with a string next to them.
++ *
++ * @constructor
++ * @extends Widgets.JSObject
++ * @see Widget.JSObject for arguments
++ */
++Widgets.ObjectRenderers.byKind.ObjectWithText = function(message, objectActor, options)
++{
++  Widgets.JSObject.call(this, message, objectActor, options);
++};
++
++Widgets.ObjectRenderers.byKind.ObjectWithText.prototype = Heritage.extend(Widgets.JSObject.prototype,
++{
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    let doc = this.document;
++    let {preview} = this.objectActor;
++    let container = this.element = doc.createElementNS(XHTML_NS, "span");
++    container.className = "kind-" + preview.kind;
++
++    let addStr = (s) => {
++      container.appendChild(doc.createTextNode(s));
++    };
++
++    let anchor = this._renderAnchor(this.objectActor.class);
++    anchor.className = "cm-variable";
++    container.appendChild(anchor);
++
++    if (!this.options.concise) {
++      addStr(" ");
++      let elem = doc.createElementNS(XHTML_NS, "span");
++      elem.className = "cm-string";
++      elem.textContent = VariablesView.getString(preview.text);
++      container.appendChild(elem);
++    }
++
++    return this;
++  },
++}); // Widgets.ObjectRenderers.byKind.ObjectWithText.prototype
++
++/**
 + * The widget used for displaying DOM event previews.
 + *
 + * @constructor
 + * @extends Widgets.JSObject
-+ * @param object message
-+ *        The owning message.
-+ * @param object objectActor
-+ *        The ObjectActor to display.
++ * @see Widget.JSObject for arguments
 + */
 +Widgets.ObjectRenderers.byKind.DOMEvent = function(message, objectActor, options)
 +{
@@ -695,14 +888,199 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +}); // Widgets.ObjectRenderers.byKind.DOMEvent.prototype
 +
 +/**
++ * The widget used for displaying DOM node previews.
++ *
++ * @constructor
++ * @extends Widgets.JSObject
++ * @see Widget.JSObject for arguments
++ */
++Widgets.ObjectRenderers.byKind.DOMNode = function(message, objectActor, options)
++{
++  Widgets.JSObject.call(this, message, objectActor, options);
++};
++
++Widgets.ObjectRenderers.byKind.DOMNode.canRender = function(objectActor) {
++  let {preview} = objectActor;
++  if (!preview) {
++    return false;
++  }
++
++  switch (preview.nodeType) {
++    case Ci.nsIDOMNode.DOCUMENT_NODE:
++    case Ci.nsIDOMNode.ATTRIBUTE_NODE:
++    case Ci.nsIDOMNode.TEXT_NODE:
++    case Ci.nsIDOMNode.COMMENT_NODE:
++    case Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE:
++      return true;
++    default:
++      return false;
++  }
++};
++
++Widgets.ObjectRenderers.byKind.DOMNode.prototype = Heritage.extend(Widgets.JSObject.prototype,
++{
++  render: function()
++  {
++    if (this.element) {
++      return this;
++    }
++
++    switch (this.objectActor.preview.nodeType) {
++      case Ci.nsIDOMNode.DOCUMENT_NODE:
++        this._renderDocumentNode();
++        break;
++      case Ci.nsIDOMNode.ATTRIBUTE_NODE: {
++        let {preview} = this.objectActor;
++        let attr = this._renderAttributeNode(preview.nodeName, preview.value, true);
++        let container = this.document.createElementNS(XHTML_NS, "span");
++        container.className = "kind-" + preview.kind + " attributeNode";
++        container.appendChild(attr);
++        this.element = container;
++        break;
++      }
++      case Ci.nsIDOMNode.TEXT_NODE:
++        this._renderTextNode();
++        break;
++      case Ci.nsIDOMNode.COMMENT_NODE:
++        this._renderCommentNode();
++        break;
++      case Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE:
++        this._renderDocumentFragmentNode();
++        break;
++      default:
++        throw new Error("Unsupported nodeType: " + preview.nodeType);
++    }
++
++    return this;
++  },
++
++  _renderDocumentNode: function()
++  {
++    let fn = Widgets.ObjectRenderers.byKind.ObjectWithURL.prototype._renderElement;
++    this.element = fn.call(this, this.objectActor,
++                           this.objectActor.preview.location);
++    this.element.classList.add("documentNode");
++  },
++
++  _renderAttributeNode: function(nodeName, nodeValue, addLink)
++  {
++    let doc = this.document;
++    let value = VariablesView.getString(nodeValue, { noStringQuotes: true });
++
++    let fragment = doc.createDocumentFragment();
++    let attrElem;
++    if (addLink) {
++      attrElem = this._renderAnchor(nodeName);
++    } else {
++      attrElem = doc.createElementNS(XHTML_NS, "span");
++      attrElem.textContent = nodeName;
++    }
++    attrElem.className = "cm-attribute";
++
++    fragment.appendChild(attrElem);
++    fragment.appendChild(doc.createTextNode("="));
++
++    let valueElem = doc.createElementNS(XHTML_NS, "span");
++    valueElem.className = "cm-string";
++    valueElem.textContent = '"' + escapeHTML(value) + '"';
++    fragment.appendChild(valueElem);
++
++    return fragment;
++  },
++
++  _renderTextNode: function()
++  {
++    let doc = this.document;
++    let {preview} = this.objectActor;
++    let container = this.element = doc.createElementNS(XHTML_NS, "span");
++    container.className = "kind-" + preview.kind + " textNode";
++
++    let anchor = this._renderAnchor(preview.nodeName);
++    anchor.className = "cm-variable";
++    container.appendChild(anchor);
++
++    container.appendChild(doc.createTextNode(" "));
++
++    let elem = doc.createElementNS(XHTML_NS, "span");
++    elem.className = "cm-string";
++    elem.textContent = VariablesView.getString(preview.textContent);
++    container.appendChild(elem);
++  },
++
++  _renderCommentNode: function()
++  {
++    let doc = this.document;
++    let {preview} = this.objectActor;
++    let comment = "<!-- " + VariablesView.getString(preview.textContent, {
++      noStringQuotes: true,
++    }) + " -->";
++
++    this.element = this._renderAnchor(comment);
++    this.element.className = "kind-" + preview.kind + " commentNode cm-comment";
++  },
++
++  _renderDocumentFragmentNode: function()
++  {
++    let doc = this.document;
++    let {preview} = this.objectActor;
++    let {childNodes} = preview;
++    let container = this.element = doc.createElementNS(XHTML_NS, "span");
++    container.className = "kind-" + preview.kind + " documentFragmentNode";
++
++    let addStr = (s) => {
++      container.appendChild(doc.createTextNode(s));
++    };
++
++    let anchor = this._renderAnchor(this.objectActor.class);
++    anchor.className = "cm-variable";
++    container.appendChild(anchor);
++
++    if (!childNodes || this.options.concise) {
++      addStr("[");
++
++      let n = doc.createElementNS(XHTML_NS, "span");
++      n.className = "cm-number";
++      n.textContent = preview.childNodesLength;
++      container.appendChild(n);
++
++      addStr("]");
++      return this;
++    }
++
++    addStr(" [ ");
++
++    let shown = 0;
++    for (let item of childNodes) {
++      if (shown > 0) {
++        addStr(", ");
++      }
++
++      let elem = this.message._renderValueGrip(item, { concise: true });
++      container.appendChild(elem);
++      shown++;
++    }
++
++    if (shown < preview.childNodesLength) {
++      addStr(", ");
++
++      let n = preview.childNodesLength - shown;
++      let str = VariablesView.stringifiers._getNMoreString(n);
++      let anchor = this._renderAnchor(str);
++      container.appendChild(anchor);
++    }
++
++    addStr(" ]");
++
++    return this;
++  },
++}); // Widgets.ObjectRenderers.byKind.DOMNode.prototype
++
++/**
 + * The widget used for displaying generic JS object previews.
 + *
 + * @constructor
 + * @extends Widgets.JSObject
-+ * @param object message
-+ *        The owning message.
-+ * @param object objectActor
-+ *        The ObjectActor to display.
++ * @see Widget.JSObject for arguments
 + */
 +Widgets.ObjectRenderers.byKind.Object = function(message, objectActor, options)
 +{
@@ -810,7 +1188,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   *        The owning message.
   * @param object longStringActor
   *        The LongStringActor to display.
-@@ -1413,17 +2019,17 @@ Widgets.LongString.prototype = Heritage.
+@@ -1413,17 +2351,17 @@ Widgets.LongString.prototype = Heritage.
  
    render: function()
    {
@@ -829,6 +1207,591 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
    /**
     * Render the long string in the widget element.
+diff --git a/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js b/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
+--- a/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
++++ b/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
+@@ -18,18 +18,20 @@ function test()
+     let {tab} = yield loadTab(TEST_URI);
+     hud = yield openConsole(tab);
+     let jsterm = hud.jsterm;
+ 
+     let msg = yield execute("fooObj");
+     ok(msg, "output message found");
+ 
+     let anchor = msg.querySelector("a");
++    let body = msg.querySelector(".body");
+     ok(anchor, "object anchor");
+-    isnot(anchor.textContent.indexOf('testProp: "testValue"'), -1,
++    ok(body, "message body");
++    isnot(body.textContent.indexOf('testProp: "testValue"'), -1,
+           "message text check");
+ 
+     msg.scrollIntoView();
+     executeSoon(() => {
+       EventUtils.synthesizeMouse(anchor, 2, 2, {}, hud.iframeWindow);
+     });
+ 
+     let vviewVar = yield jsterm.once("variablesview-fetched");
+@@ -53,19 +55,21 @@ function test()
+     });
+     yield jsterm.once("sidebar-closed");
+ 
+     jsterm.clearOutput();
+ 
+     msg = yield execute("window");
+     ok(msg, "output message found");
+ 
+-    let anchor = msg.querySelector("a");
++    body = msg.querySelector(".body");
++    ok(body, "message body");
++    anchor = msg.querySelector("a");
+     ok(anchor, "object anchor");
+-    isnot(anchor.textContent.indexOf("Window \u2192 http://example.com/browser/"), -1,
++    isnot(body.textContent.indexOf("Window \u2192 http://example.com/browser/"), -1,
+           "message text check");
+ 
+     msg.scrollIntoView();
+     executeSoon(() => {
+       EventUtils.synthesizeMouse(anchor, 2, 2, {}, hud.iframeWindow)
+     });
+     vviewVar = yield jsterm.once("variablesview-fetched");
+ 
+diff --git a/browser/devtools/webconsole/test/browser_bug_869003_inspect_cross_domain_object.js b/browser/devtools/webconsole/test/browser_bug_869003_inspect_cross_domain_object.js
+--- a/browser/devtools/webconsole/test/browser_bug_869003_inspect_cross_domain_object.js
++++ b/browser/devtools/webconsole/test/browser_bug_869003_inspect_cross_domain_object.js
+@@ -39,19 +39,25 @@ function consoleOpened(hud)
+       severity: SEVERITY_LOG,
+       objects: true,
+     }],
+   }).then(onConsoleMessage);
+ }
+ 
+ function onConsoleMessage(aResults)
+ {
++  let msg = [...aResults[0].matched][0];
++  ok(msg, "message element");
++
++  let body = msg.querySelector(".body");
++  ok(body, "message body");
++
+   let clickable = aResults[0].clickableElements[0];
+   ok(clickable, "clickable object found");
+-  isnot(clickable.textContent.indexOf('{hello: "world!",'), -1,
++  isnot(body.textContent.indexOf('{ hello: "world!",'), -1,
+         "message text check");
+ 
+   gJSTerm.once("variablesview-fetched", onObjFetch);
+ 
+   EventUtils.synthesizeMouse(clickable, 2, 2, {}, gWebConsole.iframeWindow)
+ }
+ 
+ function onObjFetch(aEvent, aVar)
+diff --git a/browser/devtools/webconsole/test/browser_console_consolejsm_output.js b/browser/devtools/webconsole/test/browser_console_consolejsm_output.js
+--- a/browser/devtools/webconsole/test/browser_console_consolejsm_output.js
++++ b/browser/devtools/webconsole/test/browser_console_consolejsm_output.js
+@@ -66,17 +66,17 @@ function test()
+         {
+           name: "console.warn output",
+           text: "bug851231-warn",
+           category: CATEGORY_WEBDEV,
+           severity: SEVERITY_WARNING,
+         },
+         {
+           name: "console.error output",
+-          text: /\bbug851231-error\b.+\{bug851231prop:\s"bug851231value"\}/,
++          text: /\bbug851231-error\b.+\{\s*bug851231prop:\s"bug851231value"\s*\}/,
+           category: CATEGORY_WEBDEV,
+           severity: SEVERITY_ERROR,
+           objects: true,
+         },
+         {
+           name: "console.debug output",
+           text: "bug851231-debug",
+           category: CATEGORY_WEBDEV,
+@@ -86,17 +86,17 @@ function test()
+           name: "console.trace output",
+           consoleTrace: {
+             file: "browser_console_consolejsm_output.js",
+             fn: "onCachedMessage",
+           },
+         },
+         {
+           name: "console.dir output",
+-          consoleDir: /XULDocument .+ chrome:\/\/.+\/browser\.xul/,
++          consoleDir: /XULDocument\s+.+\s+chrome:\/\/.+\/browser\.xul/,
+         },
+         {
+           name: "console.time output",
+           consoleTime: "foobarTimer",
+         },
+         {
+           name: "console.timeEnd output",
+           consoleTimeEnd: "foobarTimer",
+diff --git a/browser/devtools/webconsole/test/browser_console_hide_jsterm_when_devtools_chrome_enabled_false.js b/browser/devtools/webconsole/test/browser_console_hide_jsterm_when_devtools_chrome_enabled_false.js
+--- a/browser/devtools/webconsole/test/browser_console_hide_jsterm_when_devtools_chrome_enabled_false.js
++++ b/browser/devtools/webconsole/test/browser_console_hide_jsterm_when_devtools_chrome_enabled_false.js
+@@ -31,17 +31,18 @@ function* getVariablesView(hud) {
+ 
+   let deferred = promise.defer();
+   hud.jsterm.clearOutput();
+   hud.jsterm.execute('new Object()');
+ 
+   let [message] = yield waitForMessages({
+     webconsole: hud,
+     messages: [{
+-      text: "object"
++      text: "Object",
++      category: CATEGORY_OUTPUT,
+     }],
+   })
+ 
+   hud.jsterm.once("variablesview-fetched", openVariablesView);
+ 
+   let anchor = [...message.matched][0].querySelector("a");
+ 
+   executeSoon(() =>
+diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
+--- a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
++++ b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
+@@ -27,19 +27,23 @@ function performTest(hud)
+     webconsole: hud,
+     messages: [{
+       text: "fooBug676722",
+       category: CATEGORY_WEBDEV,
+       severity: SEVERITY_LOG,
+       objects: true,
+     }],
+   }).then(([result]) => {
++    let msg = [...result.matched][0];
++    ok(msg, "message element");
++    let body = msg.querySelector(".body");
++    ok(body, "message body");
+     let clickable = result.clickableElements[0];
+     ok(clickable, "the console.log() object anchor was found");
+-    isnot(clickable.textContent.indexOf('{abba: "omgBug676722"}'), -1,
++    isnot(body.textContent.indexOf('{ abba: "omgBug676722" }'), -1,
+           "clickable node content is correct");
+ 
+     hud.jsterm.once("variablesview-fetched",
+       (aEvent, aVar) => {
+         ok(aVar, "object inspector opened on click");
+ 
+         findVariableViewProperties(aVar, [{
+           name: "abba",
+diff --git a/browser/devtools/webconsole/test/browser_console_variables_view.js b/browser/devtools/webconsole/test/browser_console_variables_view.js
+--- a/browser/devtools/webconsole/test/browser_console_variables_view.js
++++ b/browser/devtools/webconsole/test/browser_console_variables_view.js
+@@ -23,17 +23,17 @@ function consoleOpened(hud)
+   gWebConsole = hud;
+   gJSTerm = hud.jsterm;
+   gJSTerm.execute("fooObj", onExecuteFooObj);
+ }
+ 
+ function onExecuteFooObj(msg)
+ {
+   ok(msg, "output message found");
+-  isnot(msg.textContent.indexOf('{testProp: "testValue"}'), -1,
++  isnot(msg.textContent.indexOf('{ testProp: "testValue" }'), -1,
+         "message text check");
+ 
+   let anchor = msg.querySelector("a");
+   ok(anchor, "object link found");
+ 
+   gJSTerm.once("variablesview-fetched", onFooObjFetch);
+ 
+   executeSoon(() =>
+diff --git a/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging.js b/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging.js
+--- a/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging.js
++++ b/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging.js
+@@ -57,17 +57,17 @@ function onFramesAdded()
+     )
+   );
+ }
+ 
+ 
+ function onExecuteFooObj(msg)
+ {
+   ok(msg, "output message found");
+-  isnot(msg.textContent.indexOf('{testProp2: "testValue2"}'), -1,
++  isnot(msg.textContent.indexOf('{ testProp2: "testValue2" }'), -1,
+         "message text check");
+ 
+   let anchor = msg.querySelector("a");
+   ok(anchor, "object link found");
+ 
+   gJSTerm.once("variablesview-fetched", onFooObjFetch);
+ 
+   executeSoon(() => EventUtils.synthesizeMouse(anchor, 2, 2, {},
+diff --git a/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging_and_inspecting.js b/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging_and_inspecting.js
+--- a/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging_and_inspecting.js
++++ b/browser/devtools/webconsole/test/browser_console_variables_view_while_debugging_and_inspecting.js
+@@ -52,17 +52,17 @@ function onFramesAdded()
+   info("onFramesAdded");
+ 
+   openConsole(null, () => gJSTerm.execute("fooObj", onExecuteFooObj));
+ }
+ 
+ function onExecuteFooObj(msg)
+ {
+   ok(msg, "output message found");
+-  isnot(msg.textContent.indexOf('{testProp2: "testValue2"}'), -1,
++  isnot(msg.textContent.indexOf('{ testProp2: "testValue2" }'), -1,
+         "message text check");
+ 
+   let anchor = msg.querySelector("a");
+   ok(anchor, "object link found");
+ 
+   gJSTerm.once("variablesview-fetched", onFooObjFetch);
+ 
+   EventUtils.synthesizeMouse(anchor, 2, 2, {}, gWebConsole.iframeWindow);
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_02.js b/browser/devtools/webconsole/test/browser_webconsole_output_02.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_02.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_02.js
+@@ -50,104 +50,104 @@ let inputTests = [
+     printOutput: "function testfn3() { return 42; }",
+     inspectable: true,
+     variablesViewLabel: "testfn3DisplayName()",
+   },
+ 
+   // 5 - basic array
+   {
+     input: "window.array1",
+-    output: '[1, 2, 3, "a", "b", "c", "4", "5"]',
++    output: 'Array [ 1, 2, 3, "a", "b", "c", "4", "5" ]',
+     printOutput: "1,2,3,a,b,c,4,5",
+     inspectable: true,
+     variablesViewLabel: "Array[8]",
+   },
+ 
+   // 6 - array with objects
+   {
+     input: "window.array2",
+-    output: '["a", HTMLDocument \u2192 test-console-output-02.html, <body>, ' +
+-            "DOMStringMap[0], DOMTokenList[0]]",
++    output: 'Array [ "a", HTMLDocument \u2192 test-console-output-02.html, <body>, ' +
++            "DOMStringMap[0], DOMTokenList[0] ]",
+     printOutput: '"a,[object HTMLDocument],[object HTMLBodyElement],' +
+                  '[object DOMStringMap],"',
+     inspectable: true,
+     variablesViewLabel: "Array[5]",
+   },
+ 
+   // 7 - array with more than 10 elements
+   {
+     input: "window.array3",
+-    output: '[1, Window \u2192 test-console-output-02.html, null, "a", "b", ' +
+-            'undefined, false, "", -Infinity, testfn3DisplayName(), 3 more\u2026]',
++    output: 'Array [ 1, Window \u2192 test-console-output-02.html, null, "a", "b", ' +
++            'undefined, false, "", -Infinity, testfn3DisplayName(), 3 more\u2026 ]',
+     printOutput: '"1,[object Window],,a,b,,false,,-Infinity,' +
+                  'function testfn3() { return 42; },[object Object],foo,bar"',
+     inspectable: true,
+     variablesViewLabel: "Array[13]",
+   },
+ 
+   // 8 - array with holes and a cyclic reference
+   {
+     input: "window.array4",
+-    output: '[,,,,, "test", Array[7]]',
++    output: 'Array [ , , , , , "test", Array[7] ]',
+     printOutput: '",,,,,test,"',
+     inspectable: true,
+     variablesViewLabel: "Array[7]",
+   },
+ 
+   // 9
+   {
+     input: "window.typedarray1",
+-    output: 'Int32Array [1, 287, 8651, 40983, 8754]',
++    output: 'Int32Array [ 1, 287, 8651, 40983, 8754 ]',
+     printOutput: "[object Int32Array]",
+     inspectable: true,
+     variablesViewLabel: "Int32Array[5]",
+   },
+ 
+   // 10 - Set with cyclic reference
+   {
+     input: "window.set1",
+-    output: 'Set [1, 2, null, Array[13], "a", "b", undefined, <head>, Set[9]]',
++    output: 'Set [ 1, 2, null, Array[13], "a", "b", undefined, <head>, Set[9] ]',
+     printOutput: "[object Set]",
+     inspectable: true,
+     variablesViewLabel: "Set[9]",
+   },
+ 
+   // 11 - Object with cyclic reference and a getter
+   {
+     input: "window.testobj2",
+-    output: '{a: "b", c: "d", e: 1, f: "2", foo: Object, bar: Object, ' +
+-            "getterTest: Getter}",
++    output: 'Object { a: "b", c: "d", e: 1, f: "2", foo: Object, bar: Object, ' +
++            "getterTest: Getter }",
+     printOutput: "[object Object]",
+     inspectable: true,
+     variablesViewLabel: "Object",
+   },
+ 
+   // 12 - Object with more than 10 properties
+   {
+     input: "window.testobj3",
+-    output: '{a: "b", c: "d", e: 1, f: "2", g: true, h: null, i: undefined, ' +
+-            'j: "", k: StyleSheetList[0], l: NodeList[5], 2 more\u2026}',
++    output: 'Object { a: "b", c: "d", e: 1, f: "2", g: true, h: null, i: undefined, ' +
++            'j: "", k: StyleSheetList[0], l: NodeList[5], 2 more\u2026 }',
+     printOutput: "[object Object]",
+     inspectable: true,
+     variablesViewLabel: "Object",
+   },
+ 
+   // 13 - Object with a non-enumerable property that we do not show
+   {
+     input: "window.testobj4",
+-    output: '{a: "b", c: "d", 1 more\u2026}',
++    output: 'Object { a: "b", c: "d", 1 more\u2026 }',
+     printOutput: "[object Object]",
+     inspectable: true,
+     variablesViewLabel: "Object",
+   },
+ 
+   // 14 - Map with cyclic references
+   {
+     input: "window.map1",
+-    output: 'Map {a: "b", HTMLCollection[2]: Object, Map[3]: Set[9]}',
++    output: 'Map { a: "b", HTMLCollection[2]: Object, Map[3]: Set[9] }',
+     printOutput: "[object Map]",
+     inspectable: true,
+     variablesViewLabel: "Map[3]",
+   },
+ ];
+ 
+ function test() {
+ 
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_03.js b/browser/devtools/webconsole/test/browser_webconsole_output_03.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_03.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_03.js
+@@ -33,26 +33,26 @@ let inputTests = [
+     printOutput: "[object HTMLBodyElement]",
+     inspectable: true,
+     noClick: true,
+   },
+ 
+   // 3
+   {
+     input: "document.body.dataset",
+-    output: "DOMStringMap {}",
++    output: "DOMStringMap {  }",
+     printOutput: "[object DOMStringMap]",
+     inspectable: true,
+     variablesViewLabel: "DOMStringMap[0]",
+   },
+ 
+   // 4
+   {
+     input: "document.body.classList",
+-    output: "DOMTokenList []",
++    output: "DOMTokenList [  ]",
+     printOutput: '""',
+     inspectable: true,
+     variablesViewLabel: "DOMTokenList[0]",
+   },
+ 
+   // 5
+   {
+     input: "window.location.href",
+@@ -66,26 +66,26 @@ let inputTests = [
+     printOutput: TEST_URI,
+     inspectable: true,
+     variablesViewLabel: "Location \u2192 test-console-output-03.html",
+   },
+ 
+   // 7
+   {
+     input: "document.body.attributes",
+-    output: "MozNamedAttrMap []",
++    output: "MozNamedAttrMap [  ]",
+     printOutput: "[object MozNamedAttrMap]",
+     inspectable: true,
+     variablesViewLabel: "MozNamedAttrMap[0]",
+   },
+ 
+   // 8
+   {
+     input: "document.styleSheets",
+-    output: "StyleSheetList []",
++    output: "StyleSheetList [  ]",
+     printOutput: "[object StyleSheetList",
+     inspectable: true,
+     variablesViewLabel: "StyleSheetList[0]",
+   },
+ 
+   // 9
+   {
+     input: "testBodyClassName()",
+@@ -102,17 +102,17 @@ let inputTests = [
+     printOutput: "[object HTMLBodyElement]",
+     inspectable: true,
+     noClick: true,
+   },
+ 
+   // 11
+   {
+     input: "document.body.classList",
+-    output: 'DOMTokenList ["test1", "tezt2"]',
++    output: 'DOMTokenList [ "test1", "tezt2" ]',
+     printOutput: '"test1 tezt2"',
+     inspectable: true,
+     variablesViewLabel: "DOMTokenList[2]",
+   },
+ 
+   // 12
+   {
+     input: "testBodyDataset()",
+@@ -121,27 +121,27 @@ let inputTests = [
+     printOutput: "[object HTMLBodyElement]",
+     inspectable: true,
+     noClick: true,
+   },
+ 
+   // 13
+   {
+     input: "document.body.dataset",
+-    output: 'DOMStringMap {preview: "zuzu"<a>foo"}',
++    output: 'DOMStringMap { preview: "zuzu"<a>foo" }',
+     printOutput: "[object DOMStringMap]",
+     inspectable: true,
+     variablesViewLabel: "DOMStringMap[1]",
+   },
+ 
+   // 14
+   {
+     input: "document.body.attributes",
+-    output: 'MozNamedAttrMap [class="test1 tezt2", id="foobarid", ' +
+-            'data-preview="zuzu&quot;&lt;a&gt;foo"]',
++    output: 'MozNamedAttrMap [ class="test1 tezt2", id="foobarid", ' +
++            'data-preview="zuzu&quot;&lt;a&gt;foo" ]',
+     printOutput: "[object MozNamedAttrMap]",
+     inspectable: true,
+     variablesViewLabel: "MozNamedAttrMap[3]",
+   },
+ 
+   // 15
+   {
+     input: "document.body.attributes[0]",
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_04.js b/browser/devtools/webconsole/test/browser_webconsole_output_04.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_04.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_04.js
+@@ -15,26 +15,26 @@ let inputTests = [
+     printOutput: "[object Text]",
+     inspectable: true,
+     noClick: true,
+   },
+ 
+   // 1
+   {
+     input: "testCommentNode()",
+-    output: "<!--\n  - Any copyright ",
++    output: /<!--\s+- Any copyright /,
+     printOutput: "[object Comment]",
+     inspectable: true,
+     noClick: true,
+   },
+ 
+   // 2
+   {
+     input: "testDocumentFragment()",
+-    output: 'DocumentFragment [<div id="foo1" class="bar">, <div id="foo3">]',
++    output: 'DocumentFragment [ <div#foo1>, <div#foo3> ]',
+     printOutput: "[object DocumentFragment]",
+     inspectable: true,
+     variablesViewLabel: "DocumentFragment[2]",
+   },
+ 
+   // 3
+   {
+     input: "testError()",
+@@ -53,43 +53,43 @@ let inputTests = [
+     printOutput: '[Exception... "An invalid or illegal string was specified"',
+     inspectable: true,
+     variablesViewLabel: "SyntaxError",
+   },
+ 
+   // 5
+   {
+     input: "testCSSStyleDeclaration()",
+-    output: 'CSS2Properties {color: "green", font-size: "2em"}',
++    output: 'CSS2Properties { color: "green", font-size: "2em" }',
+     printOutput: "[object CSS2Properties]",
+     inspectable: true,
+     noClick: true,
+   },
+ 
+   // 6
+   {
+     input: "testStyleSheetList()",
+-    output: "StyleSheetList [CSSStyleSheet]",
++    output: "StyleSheetList [ CSSStyleSheet ]",
+     printOutput: "[object StyleSheetList",
+     inspectable: true,
+     variablesViewLabel: "StyleSheetList[1]",
+   },
+ 
+   // 7
+   {
+     input: "document.styleSheets[0]",
+     output: "CSSStyleSheet",
+     printOutput: "[object CSSStyleSheet]",
+     inspectable: true,
+   },
+ 
+   // 8
+   {
+     input: "document.styleSheets[0].cssRules",
+-    output: "CSSRuleList [CSSStyleRule, CSSMediaRule]",
++    output: "CSSRuleList [ CSSStyleRule, CSSMediaRule ]",
+     printOutput: "[object CSSRuleList",
+     inspectable: true,
+     variablesViewLabel: "CSSRuleList[2]",
+   },
+ 
+   // 9
+   {
+     input: "document.styleSheets[0].cssRules[0]",
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_events.js b/browser/devtools/webconsole/test/browser_webconsole_output_events.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_events.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_events.js
+@@ -31,30 +31,30 @@ function test() {
+     });
+ 
+     EventUtils.synthesizeMouse(content.document.body, 2, 2, {type: "mousemove"}, content);
+ 
+     yield waitForMessages({
+       webconsole: hud,
+       messages: [{
+         name: "console.log() output for mousemove",
+-        text: /"eventLogger" mousemove {target: .+, buttons: 1, clientX: \d+, clientY: \d+, layerX: \d+, layerY: \d+}/,
++        text: /"eventLogger" mousemove { target: .+, buttons: 1, clientX: \d+, clientY: \d+, layerX: \d+, layerY: \d+ }/,
+         category: CATEGORY_WEBDEV,
+         severity: SEVERITY_LOG,
+       }],
+     });
+ 
+     content.focus();
+     EventUtils.synthesizeKey("a", {shiftKey: true}, content);
+ 
+     yield waitForMessages({
+       webconsole: hud,
+       messages: [{
+         name: "console.log() output for keypress",
+-        text: /"eventLogger" keypress Shift {target: .+, key: .+, charCode: \d+, keyCode: \d+}/,
++        text: /"eventLogger" keypress Shift { target: .+, key: .+, charCode: \d+, keyCode: \d+ }/,
+         category: CATEGORY_WEBDEV,
+         severity: SEVERITY_LOG,
+       }],
+     });
+ 
+     finishTest();
+   }
+ }
 diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
 --- a/browser/themes/shared/devtools/webconsole.inc.css
 +++ b/browser/themes/shared/devtools/webconsole.inc.css
@@ -861,7 +1824,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
  }
  
 +.cm-s-mozilla a[class] {
-+  -moz-text-decoration-style: dashed;
++  text-decoration: none;
 +}
 +
 +.cm-s-mozilla a[class]:hover,
