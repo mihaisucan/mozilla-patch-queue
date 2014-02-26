@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 5d896e33c6a6fa7c382d6a1c6b544675d9857ee9
+# Parent 9adf062bc5a344d2314498ce168d915632367c75
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1393007669 -7200
+# Date 1393434817 -7200
 
 Bug 584733 - Code highlight all JS objects and functions in console output; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-bc,mochitest-o -t none
 
@@ -1792,6 +1792,59 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_events.j
      finishTest();
    }
  }
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -2135,23 +2135,18 @@ WebConsoleFrame.prototype = {
+     }
+ 
+     // If the queue is not empty, schedule another flush.
+     if (this._outputQueue.length > 0) {
+       this._initOutputTimer();
+     }
+     else {
+       this._outputTimerInitialized = false;
+-      if (this._flushCallback) {
+-        try {
+-          this._flushCallback();
+-        }
+-        catch (ex) {
+-          console.error(ex);
+-        }
++      if (this._flushCallback && this._flushCallback() === false) {
++        this._flushCallback = null;
+       }
+     }
+ 
+     this._lastOutputFlush = Date.now();
+   },
+ 
+   /**
+    * Initialize the output timer.
+@@ -3199,20 +3194,20 @@ JSTerm.prototype = {
+ 
+     if (aCallback) {
+       let oldFlushCallback = this.hud._flushCallback;
+       this.hud._flushCallback = () => {
+         aCallback(msg.element);
+         if (oldFlushCallback) {
+           oldFlushCallback();
+           this.hud._flushCallback = oldFlushCallback;
++          return true;
+         }
+-        else {
+-          this.hud._flushCallback = null;
+-        }
++
++        return false;
+       };
+     }
+ 
+     msg._afterMessage = aAfterMessage;
+     msg._objectActors = new Set();
+ 
+     if (WebConsoleUtils.isActorGrip(aResponse.exception)) {
+       msg._objectActors.add(aResponse.exception.actor);
 diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
 --- a/browser/themes/shared/devtools/webconsole.inc.css
 +++ b/browser/themes/shared/devtools/webconsole.inc.css
@@ -1814,7 +1867,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    background-image: linear-gradient(#2DC3F3, #00B6F0);
    border-color: #1BA2CC;
  }
-@@ -366,16 +366,25 @@ a {
+@@ -366,16 +366,26 @@ a {
    margin: 0;
  }
  
@@ -1824,6 +1877,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
  }
  
 +.cm-s-mozilla a[class] {
++  font-style: italic;
 +  text-decoration: none;
 +}
 +
