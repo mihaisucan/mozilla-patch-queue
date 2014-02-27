@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent faeecbbbf83ad0e32d66fd90adc18d4f3c69d5d4
+# Parent 5eb1e5676b4ca1dd03d2e5df9bc1694c7569bcb4
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1392307220 -7200
+# Date 1393535664 -7200
 
 Bug 917227 - Part 2: network monitor server changes to add support for Firefox OS; r=ochameau
 
 diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/server/actors/childtab.js
 --- a/toolkit/devtools/server/actors/childtab.js
 +++ b/toolkit/devtools/server/actors/childtab.js
-@@ -14,20 +14,23 @@
+@@ -14,20 +14,26 @@
   * Creates a tab actor for handling requests to the single tab, like
   * attaching and detaching. ContentAppActor respects the actor factories
   * registered with DebuggerServer.addTabActor.
@@ -19,12 +19,15 @@ diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/serve
   *        The browser instance that contains this tab.
 + * @param number appId
 + *        The web application ID for the content app actor.
++ * @param nsIMessageManager messageManager
++ *        THe message manager of the app content process.
   */
 -function ContentAppActor(connection, browser)
-+function ContentAppActor(connection, browser, appId)
++function ContentAppActor(connection, browser, appId, messageManager)
  {
    BrowserTabActor.call(this, connection, browser);
 +  this.appId = appId;
++  this.messageManager = messageManager;
  }
  
  ContentAppActor.prototype = Object.create(BrowserTabActor.prototype);
@@ -262,7 +265,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
 +   */
 +  onNetworkEvent: function(event, channel, netMonitor) {
 +    let mm = netMonitor._messageManager;
-+    let proxy = new NetworkEventActorProxy(mm, this);
++    let proxy = new NetworkEventActorProxy(mm);
 +    mm.sendAsyncMessage("debug:netmonitor:newEvent", {
 +      id: proxy.id,
 +      event: event,
@@ -366,7 +369,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
   * @param object aConnection
   *        The connection to the client, DebuggerServerConnection.
   * @param object [aParentActor]
-@@ -237,23 +249,16 @@ WebConsoleActor.prototype =
+@@ -252,23 +264,16 @@ WebConsoleActor.prototype =
  
    /**
     * The JSTerm Helpers names cache.
@@ -390,7 +393,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    },
  
    hasNativeConsoleAPI: BrowserTabActor.prototype.hasNativeConsoleAPI,
-@@ -451,16 +456,25 @@ WebConsoleActor.prototype =
+@@ -467,16 +472,25 @@ WebConsoleActor.prototype =
     *        The JSON request object received from the Web Console client.
     * @return object
     *         The response object which holds the startedListeners array.
@@ -406,7 +409,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +        this.parentActor instanceof DebuggerServer.ContentAppActor) {
 +      // Filter network requests by appId on Firefox OS devices.
 +      appId = this.parentActor.appId;
-+      messageManager = this.conn.transport.sender;
++      messageManager = this.parentActor.messageManager;
 +    }
  
      while (aRequest.listeners.length > 0) {
@@ -416,7 +419,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleServiceListener) {
              this.consoleServiceListener =
                new ConsoleServiceListener(window, this);
-@@ -473,18 +487,23 @@ WebConsoleActor.prototype =
+@@ -489,18 +503,23 @@ WebConsoleActor.prototype =
              this.consoleAPIListener =
                new ConsoleAPIListener(window, this);
              this.consoleAPIListener.init();
@@ -442,7 +445,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleProgressListener) {
              this.consoleProgressListener =
                new ConsoleProgressListener(this.window, this);
-@@ -792,16 +811,21 @@ WebConsoleActor.prototype =
+@@ -808,16 +827,21 @@ WebConsoleActor.prototype =
     *
     * @param object aRequest
     *        The request message - which preferences need to be updated.
@@ -464,7 +467,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    // End of request handlers.
    //////////////////
  
-@@ -1101,16 +1125,18 @@ WebConsoleActor.prototype =
+@@ -1118,16 +1142,18 @@ WebConsoleActor.prototype =
     * Handler for network events. This method is invoked when a new network event
     * is about to be recorded.
     *
@@ -483,7 +486,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    {
      let actor = this.getNetworkEventActor(aChannel);
      actor.init(aEvent);
-@@ -1125,18 +1151,20 @@ WebConsoleActor.prototype =
+@@ -1142,18 +1168,20 @@ WebConsoleActor.prototype =
  
      return actor;
    },
@@ -508,7 +511,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 --- a/toolkit/devtools/server/child.js
 +++ b/toolkit/devtools/server/child.js
-@@ -24,17 +24,17 @@
+@@ -24,17 +24,18 @@
      removeMessageListener("debug:connect", onConnect);
  
      let mm = msg.target;
@@ -518,7 +521,8 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
      let conn = DebuggerServer.connectToParent(prefix, mm);
  
 -    let actor = new DebuggerServer.ContentAppActor(conn, content);
-+    let actor = new DebuggerServer.ContentAppActor(conn, content, docShell.appId);
++    let actor = new DebuggerServer.ContentAppActor(conn, content,
++                                                   docShell.appId, mm);
      let actorPool = new ActorPool(conn);
      actorPool.addActor(actor);
      conn.addActorPool(actorPool);
@@ -527,28 +531,6 @@ diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
                                       appId: docShell.appId,
                                       prefix: prefix});
    });
-diff --git a/toolkit/devtools/server/transport.js b/toolkit/devtools/server/transport.js
---- a/toolkit/devtools/server/transport.js
-+++ b/toolkit/devtools/server/transport.js
-@@ -329,16 +329,18 @@ function ChildDebuggerTransport(aSender,
-  * nsIMessageSender conveys, and 'packet' to mean a remote debugging
-  * protocol packet.
-  */
- ChildDebuggerTransport.prototype = {
-   constructor: ChildDebuggerTransport,
- 
-   hooks: null,
- 
-+  get sender() { return this._sender; },
-+
-   ready: function () {
-     this._sender.addMessageListener(this._messageName, this);
-   },
- 
-   close: function () {
-     this._sender.removeMessageListener(this._messageName, this);
-     this.hooks.onClosed();
-   },
 diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/webconsole/network-helper.js
 --- a/toolkit/devtools/webconsole/network-helper.js
 +++ b/toolkit/devtools/webconsole/network-helper.js
@@ -585,7 +567,7 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/network-monitor.js
-@@ -0,0 +1,1330 @@
+@@ -0,0 +1,1327 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this file,
 + * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -1642,13 +1624,10 @@ new file mode 100644
 + * @param nsIMessageManager messageManager
 + *        The message manager for the child app process. This is used for
 + *        communication with the NetworkMonitorChild instance of the process.
-+ * @param object owner
-+ *        The WebappsActor instance owning this network event.
 + */
-+function NetworkEventActorProxy(messageManager, owner) {
++function NetworkEventActorProxy(messageManager) {
 +  this.id = gSequenceId();
 +  this.messageManager = messageManager;
-+  this.owner = owner;
 +}
 +exports.NetworkEventActorProxy = NetworkEventActorProxy;
 +
@@ -1945,7 +1924,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
  loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
  loader.lazyImporter(this, "DevToolsUtils", "resource://gre/modules/devtools/DevToolsUtils.jsm");
  
-@@ -1581,1167 +1575,16 @@ function JSTermHelpers(aOwner)
+@@ -1620,1167 +1614,16 @@ function JSTermHelpers(aOwner)
    aOwner.sandbox.print = function JSTH_print(aString)
    {
      aOwner.helperResult = { rawOutput: true };
