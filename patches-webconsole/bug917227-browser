@@ -1,5 +1,5 @@
 # HG changeset patch
-# Parent 8267ff378fb243edad238ba0ef761090368fc62e
+# Parent 0a977c271f8e949804818fffc868ae6de84bfe9c
 # User Mihai Sucan <mihai.sucan@gmail.com>
 # Date 1393521606 -7200
 Bug 917227 - Part 1: network monitor client changes; r=ochameau
@@ -7,7 +7,7 @@ Bug 917227 - Part 1: network monitor client changes; r=ochameau
 diff --git a/browser/devtools/framework/toolbox.js b/browser/devtools/framework/toolbox.js
 --- a/browser/devtools/framework/toolbox.js
 +++ b/browser/devtools/framework/toolbox.js
-@@ -250,31 +250,30 @@ Toolbox.prototype = {
+@@ -248,31 +248,30 @@ Toolbox.prototype = {
          this._buildOptions();
          this._buildTabs();
          this._buildButtons();
@@ -75,7 +75,52 @@ diff --git a/browser/devtools/main.js b/browser/devtools/main.js
 diff --git a/browser/devtools/netmonitor/netmonitor-controller.js b/browser/devtools/netmonitor/netmonitor-controller.js
 --- a/browser/devtools/netmonitor/netmonitor-controller.js
 +++ b/browser/devtools/netmonitor/netmonitor-controller.js
-@@ -357,16 +357,35 @@ let NetMonitorController = {
+@@ -73,17 +73,21 @@ const EVENTS = {
+   NETWORKDETAILSVIEW_POPULATED: "NetMonitor:NetworkDetailsViewPopulated",
+ 
+   // Fired when CustomRequestView has finished being populated.
+   CUSTOMREQUESTVIEW_POPULATED: "NetMonitor:CustomRequestViewPopulated",
+ 
+   // Fired when charts have been displayed in the PerformanceStatisticsView.
+   PLACEHOLDER_CHARTS_DISPLAYED: "NetMonitor:PlaceholderChartsDisplayed",
+   PRIMED_CACHE_CHART_DISPLAYED: "NetMonitor:PrimedChartsDisplayed",
+-  EMPTY_CACHE_CHART_DISPLAYED: "NetMonitor:EmptyChartsDisplayed"
++  EMPTY_CACHE_CHART_DISPLAYED: "NetMonitor:EmptyChartsDisplayed",
++
++  // Fired once the NetMonitorController establishes a connection to the debug
++  // target.
++  CONNECTED: "connected",
+ };
+ 
+ // Descriptions for what this frontend is currently doing.
+ const ACTIVITY_TYPE = {
+   // Standing by and handling requests normally.
+   NONE: 0,
+ 
+   // Forcing the target to reload with cache enabled or disabled.
+@@ -195,17 +199,20 @@ let NetMonitorController = {
+     let target = this._target;
+     let { client, form } = target;
+     if (target.chrome) {
+       this._startChromeMonitoring(client, form.consoleActor, deferred.resolve);
+     } else {
+       this._startMonitoringTab(client, form, deferred.resolve);
+     }
+ 
+-    return deferred.promise;
++    return deferred.promise.then((result) => {
++      window.emit(EVENTS.CONNECTED);
++      return result;
++    });
+   },
+ 
+   /**
+    * Disconnects the debugger client and removes event handlers as necessary.
+    */
+   disconnect: function() {
+     // When debugging local or a remote instance, the connection is closed by
+     // the RemoteTarget.
+@@ -357,16 +364,35 @@ let NetMonitorController = {
      if (aType == ACTIVITY_TYPE.DISABLE_CACHE) {
        this._currentActivity = aType;
        return reconfigureTab({ cacheEnabled: false, performReload: false }).then(standBy);
@@ -89,8 +134,9 @@ diff --git a/browser/devtools/netmonitor/netmonitor-controller.js b/browser/devt
 +   * @type boolean
 +   */
 +  get supportsCustomRequest() {
-+    let root = this._target.client.mainRoot;
-+    return root.traits.customNetworkRequest || root.applicationType == "browser";
++    return this.webConsoleClient &&
++           (this.webConsoleClient.traits.customNetworkRequest ||
++            !this._target.isApp);
 +  },
 +
 +  /**
@@ -98,9 +144,8 @@ diff --git a/browser/devtools/netmonitor/netmonitor-controller.js b/browser/devt
 +   * @type boolean
 +   */
 +  get supportsPerfStats() {
-+    let root = this._target.client.mainRoot;
-+    return root.traits.networkPerformanceStatistics ||
-+           root.applicationType == "browser";
++    return this.tabClient &&
++           (this.tabClient.traits.reconfigure || !this._target.isApp);
 +  },
 +
    _startup: null,
@@ -114,7 +159,7 @@ diff --git a/browser/devtools/netmonitor/netmonitor-controller.js b/browser/devt
 diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/netmonitor/netmonitor-view.js
 --- a/browser/devtools/netmonitor/netmonitor-view.js
 +++ b/browser/devtools/netmonitor/netmonitor-view.js
-@@ -369,26 +369,38 @@ RequestsMenuView.prototype = Heritage.ex
+@@ -369,26 +369,42 @@ RequestsMenuView.prototype = Heritage.ex
  
      $("#toolbar-labels").addEventListener("click", this.requestsMenuSortEvent, false);
      $("#requests-menu-footer").addEventListener("click", this.requestsMenuFilterEvent, false);
@@ -129,6 +174,13 @@ diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/n
 -    $("#requests-menu-perf-notice-button").addEventListener("command", this._onContextPerfCommand, false);
 -    $("#requests-menu-network-summary-button").addEventListener("command", this._onContextPerfCommand, false);
 -    $("#requests-menu-network-summary-label").addEventListener("click", this._onContextPerfCommand, false);
++    window.once("connected", this._onConnect.bind(this));
++  },
+ 
+-    $("#custom-request-send-button").addEventListener("click", this.sendCustomRequestEvent, false);
+-    $("#custom-request-close-button").addEventListener("click", this.closeCustomRequestEvent, false);
+-    $("#headers-summary-resend").addEventListener("click", this.cloneSelectedRequestEvent, false);
++  _onConnect: function() {
 +    if (NetMonitorController.supportsCustomRequest) {
 +      $("#request-menu-context-resend").addEventListener("command", this._onContextResendCommand, false);
 +      $("#custom-request-send-button").addEventListener("click", this.sendCustomRequestEvent, false);
@@ -138,10 +190,7 @@ diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/n
 +      $("#request-menu-context-resend").hidden = true;
 +      $("#headers-summary-resend").hidden = true;
 +    }
- 
--    $("#custom-request-send-button").addEventListener("click", this.sendCustomRequestEvent, false);
--    $("#custom-request-close-button").addEventListener("click", this.closeCustomRequestEvent, false);
--    $("#headers-summary-resend").addEventListener("click", this.cloneSelectedRequestEvent, false);
++
 +    if (NetMonitorController.supportsPerfStats) {
 +      $("#request-menu-context-perf").addEventListener("command", this._onContextPerfCommand, false);
 +      $("#requests-menu-perf-notice-button").addEventListener("command", this._onContextPerfCommand, false);
@@ -161,7 +210,7 @@ diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/n
    destroy: function() {
      dumpn("Destroying the SourcesView");
  
-@@ -541,18 +553,22 @@ RequestsMenuView.prototype = Heritage.ex
+@@ -541,18 +557,22 @@ RequestsMenuView.prototype = Heritage.ex
      this.selectedItem = newItem;
    },
  
@@ -185,7 +234,7 @@ diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/n
      }
  
      NetMonitorController.webConsoleClient.sendHTTPRequest(data, aResponse => {
-@@ -1525,17 +1541,18 @@ RequestsMenuView.prototype = Heritage.ex
+@@ -1525,17 +1545,18 @@ RequestsMenuView.prototype = Heritage.ex
  
    /**
     * Handle the context menu opening. Hide items if no request is selected.
