@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent aff6c68092f5ad73de26964b300b821826378497
+# Parent ebcf116fae8d0d16dca5bb25a5f8b336e6862bae
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1393882398 -7200
+# Date 1393963140 -7200
 
 Bug 584733 - Code highlight all JS objects and functions in console output; r=bbenvie; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-bc,mochitest-o -t none
 
@@ -273,7 +273,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      location: {
        url: packet.filename,
        line: packet.lineNumber,
-@@ -1288,16 +1389,48 @@ Widgets.BaseWidget.prototype = {
+@@ -1288,16 +1389,78 @@ Widgets.BaseWidget.prototype = {
     * @return this
     */
    render: function() { },
@@ -283,6 +283,36 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     */
    destroy: function() { },
 +
++  /**
++   * Helper for creating DOM elements for widgets.
++   *
++   * Usage:
++   *   this.el("tag#id.class.names"); // create element "tag" with ID "id" and
++   *   two class names, .class and .names.
++   *
++   *   this.el("span", { attr1: "value1", ... }) // second argument can be an
++   *   object that holds element attributes and values for the new DOM element.
++   *
++   *   this.el("p", { attr1: "value1", ... }, "text content"); // the third
++   *   argument can include the default .textContent of the new DOM element.
++   *
++   *   this.el("p", "text content"); // if the second argument is not an object,
++   *   it will be used as .textContent for the new DOM element.
++   *
++   * @param string tagNameIdAndClasses
++   *        Tag name for the new element, optionally followed by an ID and/or
++   *        class names. Examples: "span", "div#fooId", "div.class.names",
++   *        "p#id.class".
++   * @param string|object [attributesOrTextContent]
++   *        If this argument is an object it will be used to set the attributes
++   *        of the new DOM element. Otherwise, the value becomes the
++   *        .textContent of the new DOM element.
++   * @param string [textContent]
++   *        If this argument is provided the value is used as the textContent of
++   *        the new DOM element.
++   * @return DOMElement
++   *         The new DOM element.
++   */
 +  el: function(tagNameIdAndClasses)
 +  {
 +    let attrs, text;
@@ -322,7 +352,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   * @constructor
   * @param object message
   *        The owning message.
-@@ -1329,68 +1462,745 @@ Widgets.MessageTimestamp.prototype = Her
+@@ -1329,68 +1492,737 @@ Widgets.MessageTimestamp.prototype = Her
      this.element.textContent = l10n.timestampString(this.timestamp) + " ";
  
      return this;
@@ -466,20 +496,76 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +Widgets.ObjectRenderers.byClass = {};
 +
 +/**
-+ * The widget used for displaying Date objects.
++ * Add an object renderer.
 + *
-+ * @constructor
-+ * @extends Widgets.JSObject
-+ * @see Widget.JSObject for arguments
++ * @param object obj
++ *        An object that represents the renderer. Properties:
++ *        - byClass (string, optional): this renderer will be used for the given
++ *        object class.
++ *        - byKind (string, optional): this renderer will be used for the given
++ *        object kind.
++ *        One of byClass or byKind must be provided.
++ *        - extends (object, optional): the renderer object extends the given
++ *        object. Default: Widgets.JSObject.
++ *        - canRender (function, optional): this method is invoked when
++ *        a candidate object needs to be displayed. The method is invoked as
++ *        a static method, as such, none of the properties of the renderer
++ *        object will be available. You get one argument: the object actor grip
++ *        received from the server. If the method returns true, then this
++ *        renderer is used for displaying the object, otherwise not.
++ *        - initialize (function, optional): the constructor of the renderer
++ *        widget. This function is invoked with the following arguments: the
++ *        owner message object instance, the object actor grip to display, and
++ *        an options object. See Messages.Extended.prototype._renderValueGrip()
++ *        for details about the options object.
++ *        - render (function, required): the method that displays the given
++ *        object actor.
 + */
-+Widgets.ObjectRenderers.byClass.Date = function(message, objectActor, options = {})
++Widgets.ObjectRenderers.add = function(obj)
 +{
-+  Widgets.JSObject.call(this, message, objectActor, options);
++  let extendObj = obj.extends || Widgets.JSObject;
++
++  let constructor = function() {
++    if (obj.initialize) {
++      obj.initialize.apply(this, arguments);
++    } else {
++      extendObj.apply(this, arguments);
++    }
++  };
++
++  let proto = WebConsoleUtils.cloneObject(obj, false, function(key) {
++    if (key == "initialize" || key == "canRender" ||
++        (key == "render" && extendObj === Widgets.JSObject)) {
++      return false;
++    }
++    return true;
++  });
++
++  if (extendObj === Widgets.JSObject) {
++    proto._render = obj.render;
++  }
++
++  constructor.canRender = obj.canRender;
++  constructor.prototype = Heritage.extend(extendObj.prototype, proto);
++
++  if (obj.byClass) {
++    Widgets.ObjectRenderers.byClass[obj.byClass] = constructor;
++  } else if (obj.byKind) {
++    Widgets.ObjectRenderers.byKind[obj.byKind] = constructor;
++  } else {
++    throw new Error("You are adding an object renderer without any byClass or " +
++                    "byKind property.");
++  }
 +};
 +
-+Widgets.ObjectRenderers.byClass.Date.prototype = Heritage.extend(Widgets.JSObject.prototype,
-+{
-+  _render: function()
++
++/**
++ * The widget used for displaying Date objects.
++ */
++Widgets.ObjectRenderers.add({
++  byClass: "Date",
++
++  render: function()
 +  {
 +    let {preview} = this.objectActor;
 +    this.element = this.el("span.class-" + this.objectActor.class);
@@ -494,7 +580,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    this._anchor(anchorText, { className: anchorClass });
 +
 +    if (!("timestamp" in preview) || typeof preview.timestamp != "number") {
-+      return this;
++      return;
 +    }
 +
 +    this._text(" ");
@@ -502,23 +588,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    let elem = this.el("span.cm-string-2", new Date(preview.timestamp).toISOString());
 +    this.element.appendChild(elem);
 +  },
-+}); // Widgets.ObjectRenderers.byClass.Date.prototype
++});
 +
 +/**
 + * The widget used for displaying Function objects.
-+ *
-+ * @constructor
-+ * @extends Widgets.JSObject
-+ * @see Widget.JSObject for arguments
 + */
-+Widgets.ObjectRenderers.byClass.Function = function(message, objectActor, options = {})
-+{
-+  Widgets.JSObject.call(this, message, objectActor, options);
-+};
++Widgets.ObjectRenderers.add({
++  byClass: "Function",
 +
-+Widgets.ObjectRenderers.byClass.Function.prototype = Heritage.extend(Widgets.JSObject.prototype,
-+{
-+  _render: function()
++  render: function()
 +  {
 +    let grip = this.objectActor;
 +    this.element = this.el("span.class-" + this.objectActor.class);
@@ -561,23 +639,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    this._text(")");
 +  },
-+}); // Widgets.ObjectRenderers.byClass.Function.prototype
++}); // Widgets.ObjectRenderers.byClass.Function
 +
 +/**
 + * The widget used for displaying ArrayLike objects.
-+ *
-+ * @constructor
-+ * @extends Widgets.JSObject
-+ * @see Widget.JSObject for arguments
 + */
-+Widgets.ObjectRenderers.byKind.ArrayLike = function(message, objectActor, options = {})
-+{
-+  Widgets.JSObject.call(this, message, objectActor, options);
-+};
++Widgets.ObjectRenderers.add({
++  byKind: "ArrayLike",
 +
-+Widgets.ObjectRenderers.byKind.ArrayLike.prototype = Heritage.extend(Widgets.JSObject.prototype,
-+{
-+  _render: function()
++  render: function()
 +  {
 +    let {preview} = this.objectActor;
 +    let {items} = preview;
@@ -620,23 +690,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    this._text(" ]");
 +  },
-+}); // Widgets.ObjectRenderers.byKind.ArrayLike.prototype
++}); // Widgets.ObjectRenderers.byKind.ArrayLike
 +
 +/**
 + * The widget used for displaying MapLike objects.
-+ *
-+ * @constructor
-+ * @extends Widgets.JSObject
-+ * @see Widget.JSObject for arguments
 + */
-+Widgets.ObjectRenderers.byKind.MapLike = function(message, objectActor, options = {})
-+{
-+  Widgets.JSObject.call(this, message, objectActor, options);
-+};
++Widgets.ObjectRenderers.add({
++  byKind: "MapLike",
 +
-+Widgets.ObjectRenderers.byKind.MapLike.prototype = Heritage.extend(Widgets.JSObject.prototype,
-+{
-+  _render: function()
++  render: function()
 +  {
 +    let {preview} = this.objectActor;
 +    let {entries} = preview;
@@ -692,23 +754,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    this._text(" }");
 +  },
-+}); // Widgets.ObjectRenderers.byKind.MapLike.prototype
++}); // Widgets.ObjectRenderers.byKind.MapLike
 +
 +/**
 + * The widget used for displaying objects with a URL.
-+ *
-+ * @constructor
-+ * @extends Widgets.JSObject
-+ * @see Widget.JSObject for arguments
 + */
-+Widgets.ObjectRenderers.byKind.ObjectWithURL = function(message, objectActor, options = {})
-+{
-+  Widgets.JSObject.call(this, message, objectActor, options);
-+};
++Widgets.ObjectRenderers.add({
++  byKind: "ObjectWithURL",
 +
-+Widgets.ObjectRenderers.byKind.ObjectWithURL.prototype = Heritage.extend(Widgets.JSObject.prototype,
-+{
-+  _render: function()
++  render: function()
 +  {
 +    this.element = this._renderElement(this.objectActor,
 +                                       this.objectActor.preview.url);
@@ -733,23 +787,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    return container;
 +  },
-+}); // Widgets.ObjectRenderers.byKind.ObjectWithURL.prototype
++}); // Widgets.ObjectRenderers.byKind.ObjectWithURL
 +
 +/**
 + * The widget used for displaying objects with a string next to them.
-+ *
-+ * @constructor
-+ * @extends Widgets.JSObject
-+ * @see Widget.JSObject for arguments
 + */
-+Widgets.ObjectRenderers.byKind.ObjectWithText = function(message, objectActor, options = {})
-+{
-+  Widgets.JSObject.call(this, message, objectActor, options);
-+};
++Widgets.ObjectRenderers.add({
++  byKind: "ObjectWithText",
 +
-+Widgets.ObjectRenderers.byKind.ObjectWithText.prototype = Heritage.extend(Widgets.JSObject.prototype,
-+{
-+  _render: function()
++  render: function()
 +  {
 +    let {preview} = this.objectActor;
 +    this.element = this.el("span.kind-" + preview.kind);
@@ -762,23 +808,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +                                       VariablesView.getString(preview.text)));
 +    }
 +  },
-+}); // Widgets.ObjectRenderers.byKind.ObjectWithText.prototype
++});
 +
 +/**
 + * The widget used for displaying DOM event previews.
-+ *
-+ * @constructor
-+ * @extends Widgets.JSObject
-+ * @see Widget.JSObject for arguments
 + */
-+Widgets.ObjectRenderers.byKind.DOMEvent = function(message, objectActor, options = {})
-+{
-+  Widgets.JSObject.call(this, message, objectActor, options);
-+};
++Widgets.ObjectRenderers.add({
++  byKind: "DOMEvent",
 +
-+Widgets.ObjectRenderers.byKind.DOMEvent.prototype = Heritage.extend(Widgets.JSObject.prototype,
-+{
-+  _render: function()
++  render: function()
 +  {
 +    let {preview} = this.objectActor;
 +
@@ -833,41 +871,33 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    this._text(" }");
 +  },
-+}); // Widgets.ObjectRenderers.byKind.DOMEvent.prototype
++}); // Widgets.ObjectRenderers.byKind.DOMEvent
 +
 +/**
 + * The widget used for displaying DOM node previews.
-+ *
-+ * @constructor
-+ * @extends Widgets.JSObject
-+ * @see Widget.JSObject for arguments
 + */
-+Widgets.ObjectRenderers.byKind.DOMNode = function(message, objectActor, options = {})
-+{
-+  Widgets.JSObject.call(this, message, objectActor, options);
-+};
++Widgets.ObjectRenderers.add({
++  byKind: "DOMNode",
 +
-+Widgets.ObjectRenderers.byKind.DOMNode.canRender = function(objectActor) {
-+  let {preview} = objectActor;
-+  if (!preview) {
-+    return false;
-+  }
-+
-+  switch (preview.nodeType) {
-+    case Ci.nsIDOMNode.DOCUMENT_NODE:
-+    case Ci.nsIDOMNode.ATTRIBUTE_NODE:
-+    case Ci.nsIDOMNode.TEXT_NODE:
-+    case Ci.nsIDOMNode.COMMENT_NODE:
-+    case Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE:
-+      return true;
-+    default:
++  canRender: function(objectActor) {
++    let {preview} = objectActor;
++    if (!preview) {
 +      return false;
-+  }
-+};
++    }
 +
-+Widgets.ObjectRenderers.byKind.DOMNode.prototype = Heritage.extend(Widgets.JSObject.prototype,
-+{
-+  _render: function()
++    switch (preview.nodeType) {
++      case Ci.nsIDOMNode.DOCUMENT_NODE:
++      case Ci.nsIDOMNode.ATTRIBUTE_NODE:
++      case Ci.nsIDOMNode.TEXT_NODE:
++      case Ci.nsIDOMNode.COMMENT_NODE:
++      case Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE:
++        return true;
++      default:
++        return false;
++    }
++  },
++
++  render: function()
 +  {
 +    switch (this.objectActor.preview.nodeType) {
 +      case Ci.nsIDOMNode.DOCUMENT_NODE:
@@ -982,23 +1012,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    this._text(" ]");
 +  },
-+}); // Widgets.ObjectRenderers.byKind.DOMNode.prototype
++}); // Widgets.ObjectRenderers.byKind.DOMNode
 +
 +/**
 + * The widget used for displaying generic JS object previews.
-+ *
-+ * @constructor
-+ * @extends Widgets.JSObject
-+ * @see Widget.JSObject for arguments
 + */
-+Widgets.ObjectRenderers.byKind.Object = function(message, objectActor, options = {})
-+{
-+  Widgets.JSObject.call(this, message, objectActor, options);
-+};
++Widgets.ObjectRenderers.add({
++  byKind: "Object",
 +
-+Widgets.ObjectRenderers.byKind.Object.prototype = Heritage.extend(Widgets.JSObject.prototype,
-+{
-+  _render: function()
++  render: function()
 +  {
 +    let {preview} = this.objectActor;
 +    let {ownProperties, safeGetterValues} = preview;
@@ -1068,7 +1090,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    this._text(" }");
 +  },
-+}); // Widgets.ObjectRenderers.byKind.Object.prototype
++}); // Widgets.ObjectRenderers.byKind.Object
 +
  /**
   * The long string widget.
@@ -1078,7 +1100,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   *        The owning message.
   * @param object longStringActor
   *        The LongStringActor to display.
-@@ -1413,17 +2223,17 @@ Widgets.LongString.prototype = Heritage.
+@@ -1413,17 +2245,17 @@ Widgets.LongString.prototype = Heritage.
  
    render: function()
    {
@@ -1344,6 +1366,63 @@ diff --git a/browser/devtools/webconsole/test/browser_console_variables_view_whi
  
    EventUtils.synthesizeMouse(anchor, 2, 2, {}, gWebConsole.iframeWindow);
  }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_01.js b/browser/devtools/webconsole/test/browser_webconsole_output_01.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_01.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_01.js
+@@ -100,37 +100,51 @@ let inputTests = [
+   // 12
+   {
+     input: "true",
+     output: "true",
+   },
+ 
+   // 13
+   {
+-    input: "false",
++    input: "new Boolean(false)",
+     output: "false",
++    inspectable: true,
+   },
+ 
+-
+   // 14
+   {
+     input: "new Date(" + dateNow + ")",
+     output: "Date " + (new Date(dateNow)).toISOString(),
+     printOutput: (new Date(dateNow)).toString(),
+     inspectable: true,
+   },
+ 
+   // 15
+   {
+     input: "new Date('test')",
+     output: "Invalid Date",
+     printOutput: "Invalid Date",
+     inspectable: true,
+     variablesViewLabel: "Invalid Date",
+   },
++
++  // 16
++  {
++    input: "new Number(43)",
++    output: "43",
++    inspectable: true,
++  },
++
++  // 17
++  {
++    input: "new String('hello world')",
++    output: '"hello world"',
++    inspectable: true,
++  },
+ ];
+ 
+ longString = initialString = null;
+ 
+ function test() {
+   registerCleanupFunction(() => {
+     DebuggerServer.LONG_STRING_LENGTH = LONG_STRING_LENGTH;
+     DebuggerServer.LONG_STRING_INITIAL_LENGTH = LONG_STRING_INITIAL_LENGTH;
 diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_02.js b/browser/devtools/webconsole/test/browser_webconsole_output_02.js
 --- a/browser/devtools/webconsole/test/browser_webconsole_output_02.js
 +++ b/browser/devtools/webconsole/test/browser_webconsole_output_02.js
@@ -1789,15 +1868,15 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
  /* Replace these values with CSS variables as available */
  .theme-dark .jsterm-input-container {
    background-color: #252c33; /* tabToolbarBackgroundColor */
-   border-color: #131c26; /* mainBackgroundColor */
+   border-color: #14171a; /* mainBackgroundColor */
  }
  
  .theme-dark .jsterm-input-node {
-   color: #8fa1b2; /* textColor */
+   color: #a9bacb; /* textColor */
 diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/actors/script.js
 --- a/toolkit/devtools/server/actors/script.js
 +++ b/toolkit/devtools/server/actors/script.js
-@@ -3303,16 +3303,88 @@ ObjectActor.prototype.requestTypes = {
+@@ -3303,16 +3303,51 @@ ObjectActor.prototype.requestTypes = {
   *   - the raw JS object after calling Debugger.Object.unsafeDereference(). This
   *   argument is only provided if the object is safe for reading properties and
   *   executing methods. See DevToolsUtils.isSafeJSObject().
@@ -1807,75 +1886,38 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
   */
  DebuggerServer.ObjectActorPreviewers = {
 +  String: [function({obj, threadActor}, aGrip) {
-+    if (!obj.proto || obj.proto.class != "String") {
-+      return false;
++    let result = genericObjectPreviewer("String", String, obj, threadActor);
++    if (result) {
++      let length = DevToolsUtils.getProperty(obj, "length");
++      if (typeof length != "number") {
++        return false;
++      }
++
++      aGrip.displayString = result.value;
++      return true;
 +    }
 +
-+    let length = DevToolsUtils.getProperty(obj, "length");
-+    if (typeof length != "number") {
-+      return false;
-+    }
-+
-+    let raw = obj.unsafeDereference();
-+    let str = null;
-+    try {
-+      str = String.prototype.toString.call(raw);
-+    } catch (ex) {
-+      // toString() can throw if the raw JS object cannot be represented as
-+      // a string.
-+      return false;
-+    }
-+
-+    if (str !== null) {
-+      str = threadActor.createValueGrip(makeDebuggeeValueIfNeeded(obj, str));
-+    }
-+
-+    aGrip.displayString = str;
 +    return true;
 +  }],
 +
 +  Boolean: [function({obj, threadActor}, aGrip) {
-+    if (!obj.proto || obj.proto.class != "Boolean") {
-+      return false;
++    let result = genericObjectPreviewer("Boolean", Boolean, obj, threadActor);
++    if (result) {
++      aGrip.preview = result;
++      return true;
 +    }
 +
-+    let raw = obj.unsafeDereference();
-+    let bool = null;
-+    try {
-+      bool = Boolean.prototype.valueOf.call(raw);
-+    } catch (ex) {
-+      // valueOf() can throw if the raw JS object is "misbehaved".
-+      return false;
-+    }
-+
-+    if (bool !== null) {
-+      bool = threadActor.createValueGrip(makeDebuggeeValueIfNeeded(obj, bool));
-+    }
-+
-+    aGrip.preview = { value: bool };
-+    return true;
++    return false;
 +  }],
 +
 +  Number: [function({obj, threadActor}, aGrip) {
-+    if (!obj.proto || obj.proto.class != "Number") {
-+      return false;
++    let result = genericObjectPreviewer("Number", Number, obj, threadActor);
++    if (result) {
++      aGrip.preview = result;
++      return true;
 +    }
 +
-+    let raw = obj.unsafeDereference();
-+    let n = null;
-+    try {
-+      n = Number.prototype.valueOf.call(raw);
-+    } catch (ex) {
-+      // valueOf() can throw if the raw JS object is "misbehaved".
-+      return false;
-+    }
-+
-+    if (n !== null) {
-+      n = threadActor.createValueGrip(makeDebuggeeValueIfNeeded(obj, n));
-+    }
-+
-+    aGrip.preview = { value: n };
-+    return true;
++    return false;
 +  }],
 +
    Function: [function({obj, threadActor}, aGrip) {
@@ -1886,3 +1928,59 @@ diff --git a/toolkit/devtools/server/actors/script.js b/toolkit/devtools/server/
      if (obj.displayName) {
        aGrip.displayName = obj.displayName.substr(0, 500);
      }
+@@ -3480,16 +3515,55 @@ DebuggerServer.ObjectActorPreviewers = {
+         break;
+       }
+     }
+ 
+     return true;
+   }], // DOMStringMap
+ }; // DebuggerServer.ObjectActorPreviewers
+ 
++/**
++ * Generic previewer for "simple" classes like String, Number and Boolean.
++ *
++ * @param string aClassName
++ *        Class name to expect.
++ * @param object aClass
++ *        The class to expect, eg. String. The valueOf() method of the class is
++ *        invoked on the given object.
++ * @param Debugger.Object aObj
++ *        The debugger object we need to preview.
++ * @param object aThreadActor
++ *        The thread actor to use to create a value grip.
++ * @return object|null
++ *         An object with one property, "value", which holds the value grip that
++ *         represents the given object. Null is returned if we cant preview the
++ *         object.
++ */
++function genericObjectPreviewer(aClassName, aClass, aObj, aThreadActor) {
++  if (!aObj.proto || aObj.proto.class != aClassName) {
++    return null;
++  }
++
++  let raw = aObj.unsafeDereference();
++  let v = null;
++  try {
++    v = aClass.prototype.valueOf.call(raw);
++  } catch (ex) {
++    // valueOf() can throw if the raw JS object is "misbehaved".
++    return null;
++  }
++
++  if (v !== null) {
++    v = aThreadActor.createValueGrip(makeDebuggeeValueIfNeeded(aObj, v));
++    return { value: v };
++  }
++
++  return null;
++}
++
+ // Preview functions that do not rely on the object class.
+ DebuggerServer.ObjectActorPreviewers.Object = [
+   function TypedArray({obj, threadActor}, aGrip) {
+     if (TYPED_ARRAY_CLASSES.indexOf(obj.class) == -1) {
+       return false;
+     }
+ 
+     let length = DevToolsUtils.getProperty(obj, "length");
