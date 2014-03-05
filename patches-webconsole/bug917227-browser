@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 0a977c271f8e949804818fffc868ae6de84bfe9c
+# Parent ee131fc23afd41112fd0275d8b87677a46709103
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1393521606 -7200
+# Date 1394050124 -7200
 Bug 917227 - Part 1: network monitor client changes; r=ochameau
 
 diff --git a/browser/devtools/framework/toolbox.js b/browser/devtools/framework/toolbox.js
@@ -156,6 +156,47 @@ diff --git a/browser/devtools/netmonitor/netmonitor-controller.js b/browser/devt
    tabClient: null,
    webConsoleClient: null
  };
+@@ -488,31 +514,40 @@ NetworkEventsHandler.prototype = {
+    * The "networkEvent" message type handler.
+    *
+    * @param string aType
+    *        Message type.
+    * @param object aPacket
+    *        The message received from the server.
+    */
+   _onNetworkEvent: function(aType, aPacket) {
++    if (aPacket.from != this.webConsoleClient.actor) {
++      // Skip events from different console actors.
++      return;
++    }
++
+     let { actor, startedDateTime, method, url, isXHR } = aPacket.eventActor;
+     NetMonitorView.RequestsMenu.addRequest(actor, startedDateTime, method, url, isXHR);
+     window.emit(EVENTS.NETWORK_EVENT);
+   },
+ 
+   /**
+    * The "networkEventUpdate" message type handler.
+    *
+    * @param string aType
+    *        Message type.
+    * @param object aPacket
+    *        The message received from the server.
+    */
+   _onNetworkEventUpdate: function(aType, aPacket) {
+     let actor = aPacket.from;
++    if (!NetMonitorView.RequestsMenu.getItemByValue(actor)) {
++      // Skip events from unknown actors.
++      return;
++    }
+ 
+     switch (aPacket.updateType) {
+       case "requestHeaders":
+         this.webConsoleClient.getRequestHeaders(actor, this._onRequestHeaders);
+         window.emit(EVENTS.UPDATING_REQUEST_HEADERS);
+         break;
+       case "requestCookies":
+         this.webConsoleClient.getRequestCookies(actor, this._onRequestCookies);
 diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/netmonitor/netmonitor-view.js
 --- a/browser/devtools/netmonitor/netmonitor-view.js
 +++ b/browser/devtools/netmonitor/netmonitor-view.js
@@ -234,7 +275,7 @@ diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/n
      }
  
      NetMonitorController.webConsoleClient.sendHTTPRequest(data, aResponse => {
-@@ -1525,17 +1545,18 @@ RequestsMenuView.prototype = Heritage.ex
+@@ -1529,17 +1549,18 @@ RequestsMenuView.prototype = Heritage.ex
  
    /**
     * Handle the context menu opening. Hide items if no request is selected.
@@ -254,3 +295,25 @@ diff --git a/browser/devtools/netmonitor/netmonitor-view.js b/browser/devtools/n
      copyImageAsDataUriElement.hidden = !selectedItem ||
        !selectedItem.attachment.responseContent ||
        !selectedItem.attachment.responseContent.content.mimeType.contains("image/");
+diff --git a/toolkit/devtools/webconsole/client.js b/toolkit/devtools/webconsole/client.js
+--- a/toolkit/devtools/webconsole/client.js
++++ b/toolkit/devtools/webconsole/client.js
+@@ -25,16 +25,18 @@ function WebConsoleClient(aDebuggerClien
+   this._client = aDebuggerClient;
+   this._longStrings = {};
+ }
+ exports.WebConsoleClient = WebConsoleClient;
+ 
+ WebConsoleClient.prototype = {
+   _longStrings: null,
+ 
++  get actor() { return this._actor; },
++
+   /**
+    * Retrieve the cached messages from the server.
+    *
+    * @see this.CACHED_MESSAGES
+    * @param array aTypes
+    *        The array of message types you want from the server. See
+    *        this.CACHED_MESSAGES for known types.
+    * @param function aOnResponse

@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent 8d096cc589f8574c1059289d317fb50c4ad66da0
+# Parent e380cc177f6ff6692458055e7cbf8b52828faabe
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1393611188 -7200
+# Date 1394052064 -7200
 
 Bug 917227 - Part 2: network monitor server changes to add support for Firefox OS; r=ochameau
 
@@ -68,7 +68,7 @@ diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/db
 diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/server/actors/childtab.js
 --- a/toolkit/devtools/server/actors/childtab.js
 +++ b/toolkit/devtools/server/actors/childtab.js
-@@ -14,20 +14,26 @@
+@@ -14,26 +14,42 @@
   * Creates a tab actor for handling requests to the single tab, like
   * attaching and detaching. ContentAppActor respects the actor factories
   * registered with DebuggerServer.addTabActor.
@@ -94,8 +94,24 @@ diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/serve
  
  ContentAppActor.prototype.constructor = ContentAppActor;
  
++ContentAppActor.prototype.onAttach = function()
++{
++  let result = BrowserTabActor.prototype.onAttach.apply(this, arguments);
++  if (result.traits) {
++    result.traits.reconfigure = false;
++  }
++  return result;
++};
++ContentAppActor.prototype.requestTypes.attach = ContentAppActor.prototype.onAttach;
++
  Object.defineProperty(ContentAppActor.prototype, "title", {
    get: function() {
+     return this.browser.title;
+   },
+   enumerable: true,
+   configurable: false
+ });
+ 
 diff --git a/toolkit/devtools/server/actors/root.js b/toolkit/devtools/server/actors/root.js
 --- a/toolkit/devtools/server/actors/root.js
 +++ b/toolkit/devtools/server/actors/root.js
@@ -122,7 +138,7 @@ diff --git a/toolkit/devtools/server/actors/root.js b/toolkit/devtools/server/ac
 diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server/actors/webapps.js
 --- a/toolkit/devtools/server/actors/webapps.js
 +++ b/toolkit/devtools/server/actors/webapps.js
-@@ -5,16 +5,32 @@
+@@ -5,16 +5,24 @@
  "use strict";
  
  let Cu = Components.utils;
@@ -135,17 +151,9 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
 +
 +let {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 +
-+XPCOMUtils.defineLazyGetter(this, "NetworkMonitor", () => {
-+  return devtools.require("devtools/toolkit/webconsole/network-monitor")
-+         .NetworkMonitor;
-+});
 +XPCOMUtils.defineLazyGetter(this, "NetworkMonitorManager", () => {
 +  return devtools.require("devtools/toolkit/webconsole/network-monitor")
 +         .NetworkMonitorManager;
-+});
-+XPCOMUtils.defineLazyGetter(this, "NetworkEventActorProxy", () => {
-+  return devtools.require("devtools/toolkit/webconsole/network-monitor")
-+         .NetworkEventActorProxy;
 +});
  
  let promise;
@@ -155,7 +163,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
    Cc["@mozilla.org/consoleservice;1"]
      .getService(Ci.nsIConsoleService)
      .logStringMessage("--*-- WebappsActor : " + aMsg);
-@@ -791,16 +807,17 @@ WebappsActor.prototype = {
+@@ -791,16 +799,17 @@ WebappsActor.prototype = {
  
    _connectToApp: function (aFrame) {
      let deferred = Promise.defer();
@@ -166,14 +174,14 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
      let childTransport, prefix;
 +    let netMonitor;
  
-     let onActorCreated = makeInfallible(function (msg) {
+     let onActorCreated = DevToolsUtils.makeInfallible(function (msg) {
        mm.removeMessageListener("debug:actor", onActorCreated);
  
        dump("***** Got debug:actor\n");
        let { actor, appId } = msg.json;
        prefix = msg.json.prefix;
  
-@@ -813,23 +830,26 @@ WebappsActor.prototype = {
+@@ -813,16 +822,18 @@ WebappsActor.prototype = {
        childTransport.ready();
  
        this.conn.setForwarding(prefix, childTransport);
@@ -188,19 +196,11 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
      }).bind(this);
      mm.addMessageListener("debug:actor", onActorCreated);
  
-     let onMessageManagerDisconnect = makeInfallible(function (subject, topic, data) {
+     let onMessageManagerDisconnect = DevToolsUtils.makeInfallible(function (subject, topic, data) {
        if (subject == mm) {
          Services.obs.removeObserver(onMessageManagerDisconnect, topic);
-+
          if (childTransport) {
-           // If we have a child transport, the actor has already
-           // been created. We need to stop using this message manager.
-           childTransport.close();
-           this.conn.cancelForwarding(prefix);
-         } else {
-           // Otherwise, the app has been closed before the actor
-           // had a chance to be created, so we are not able to create
-@@ -840,16 +860,21 @@ WebappsActor.prototype = {
+@@ -840,16 +851,21 @@ WebappsActor.prototype = {
          if (actor) {
            // The ContentAppActor within the child process doesn't necessary
            // have to time to uninitialize itself when the app is closed/killed.
@@ -248,15 +248,15 @@ diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/ser
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -15,33 +15,45 @@ Cu.import("resource://gre/modules/XPCOMU
+@@ -11,34 +11,44 @@ let Ci = Components.interfaces;
+ let Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
  let devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
  
  XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                    "resource://gre/modules/Services.jsm");
- 
- XPCOMUtils.defineLazyModuleGetter(this, "ConsoleAPIStorage",
-                                   "resource://gre/modules/ConsoleAPIStorage.jsm");
- 
 +XPCOMUtils.defineLazyGetter(this, "NetworkMonitor", () => {
 +  return devtools.require("devtools/toolkit/webconsole/network-monitor")
 +         .NetworkMonitor;
@@ -269,12 +269,11 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +  return devtools.require("devtools/toolkit/webconsole/network-monitor")
 +         .ConsoleProgressListener;
 +});
-+
+ 
  for (let name of ["WebConsoleUtils", "ConsoleServiceListener",
 -                  "ConsoleAPIListener", "ConsoleProgressListener",
 -                  "JSTermHelpers", "JSPropertyProvider", "NetworkMonitor",
-+                  "ConsoleAPIListener",
-+                  "JSTermHelpers", "JSPropertyProvider",
++                  "ConsoleAPIListener", "JSTermHelpers", "JSPropertyProvider",
                    "ConsoleReflowListener"]) {
    Object.defineProperty(this, name, {
      get: function(prop) {
@@ -297,7 +296,62 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
   * @param object aConnection
   *        The connection to the client, DebuggerServerConnection.
   * @param object [aParentActor]
-@@ -252,23 +264,16 @@ WebConsoleActor.prototype =
+@@ -60,16 +70,20 @@ function WebConsoleActor(aConnection, aP
+   this._gripDepth = 0;
+ 
+   this._onWillNavigate = this._onWillNavigate.bind(this);
+   this._onObserverNotification = this._onObserverNotification.bind(this);
+   if (this.parentActor.isRootActor) {
+     Services.obs.addObserver(this._onObserverNotification,
+                              "last-pb-context-exited", false);
+   }
++
++  this.traits = {
++    customNetworkRequest: !this._parentIsContentAppActor,
++  };
+ }
+ 
+ WebConsoleActor.l10n = new WebConsoleUtils.l10n("chrome://global/locale/console.properties");
+ 
+ WebConsoleActor.prototype =
+ {
+   /**
+    * Debugger instance.
+@@ -111,16 +125,33 @@ WebConsoleActor.prototype =
+ 
+   /**
+    * The debugger server connection instance.
+    * @type object
+    */
+   conn: null,
+ 
+   /**
++   * List of supported features by the console actor.
++   * @type object
++   */
++  traits: null,
++
++  /**
++   * Boolean getter that tells if the parent actor is a ContentAppActor.
++   *
++   * @private
++   * @type boolean
++   */
++  get _parentIsContentAppActor() {
++    return "ContentAppActor" in DebuggerServer &&
++            this.parentActor instanceof DebuggerServer.ContentAppActor;
++  },
++
++  /**
+    * The window we work with.
+    * @type nsIDOMWindow
+    */
+   get window() {
+     if (this.parentActor.isRootActor) {
+       return this._getWindowForBrowserConsole();
+     }
+     return this.parentActor.window;
+@@ -249,23 +280,16 @@ WebConsoleActor.prototype =
  
    /**
     * The JSTerm Helpers names cache.
@@ -320,8 +374,8 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
      return { actor: this.actorID };
    },
  
-   hasNativeConsoleAPI: BrowserTabActor.prototype.hasNativeConsoleAPI,
-@@ -467,16 +472,25 @@ WebConsoleActor.prototype =
+   hasNativeConsoleAPI: function WCA_hasNativeConsoleAPI(aWindow) {
+@@ -472,16 +496,24 @@ WebConsoleActor.prototype =
     *        The JSON request object received from the Web Console client.
     * @return object
     *         The response object which holds the startedListeners array.
@@ -333,8 +387,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +    let appId = null;
 +    let messageManager = null;
 +
-+    if ("ContentAppActor" in DebuggerServer &&
-+        this.parentActor instanceof DebuggerServer.ContentAppActor) {
++    if (this._parentIsContentAppActor) {
 +      // Filter network requests by appId on Firefox OS devices.
 +      appId = this.parentActor.appId;
 +      messageManager = this.parentActor.messageManager;
@@ -347,7 +400,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleServiceListener) {
              this.consoleServiceListener =
                new ConsoleServiceListener(window, this);
-@@ -489,18 +503,23 @@ WebConsoleActor.prototype =
+@@ -494,18 +526,23 @@ WebConsoleActor.prototype =
              this.consoleAPIListener =
                new ConsoleAPIListener(window, this);
              this.consoleAPIListener.init();
@@ -373,7 +426,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleProgressListener) {
              this.consoleProgressListener =
                new ConsoleProgressListener(this.window, this);
-@@ -516,16 +535,19 @@ WebConsoleActor.prototype =
+@@ -521,16 +558,17 @@ WebConsoleActor.prototype =
            }
            startedListeners.push(listener);
            break;
@@ -382,9 +435,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
      return {
        startedListeners: startedListeners,
        nativeConsoleAPI: this.hasNativeConsoleAPI(this.window),
-+      traits: {
-+        customNetworkRequest: true,
-+      },
++      traits: this.traits,
      };
    },
  
@@ -393,7 +444,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
     *
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
-@@ -808,16 +830,21 @@ WebConsoleActor.prototype =
+@@ -816,16 +854,21 @@ WebConsoleActor.prototype =
     *
     * @param object aRequest
     *        The request message - which preferences need to be updated.
@@ -415,7 +466,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    // End of request handlers.
    //////////////////
  
-@@ -1118,16 +1145,18 @@ WebConsoleActor.prototype =
+@@ -1126,16 +1169,18 @@ WebConsoleActor.prototype =
     * Handler for network events. This method is invoked when a new network event
     * is about to be recorded.
     *
@@ -434,7 +485,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    {
      let actor = this.getNetworkEventActor(aChannel);
      actor.init(aEvent);
-@@ -1142,18 +1171,20 @@ WebConsoleActor.prototype =
+@@ -1150,18 +1195,20 @@ WebConsoleActor.prototype =
  
      return actor;
    },
@@ -459,7 +510,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
 --- a/toolkit/devtools/server/child.js
 +++ b/toolkit/devtools/server/child.js
-@@ -24,17 +24,18 @@
+@@ -25,17 +25,18 @@
      removeMessageListener("debug:connect", onConnect);
  
      let mm = msg.target;
@@ -512,17 +563,17 @@ diff --git a/toolkit/devtools/webconsole/client.js b/toolkit/devtools/webconsole
    _longStrings: null,
 +  traits: null,
  
+   get actor() { return this._actor; },
+ 
    /**
     * Retrieve the cached messages from the server.
     *
     * @see this.CACHED_MESSAGES
     * @param array aTypes
-    *        The array of message types you want from the server. See
-    *        this.CACHED_MESSAGES for known types.
 diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/webconsole/network-helper.js
 --- a/toolkit/devtools/webconsole/network-helper.js
 +++ b/toolkit/devtools/webconsole/network-helper.js
-@@ -184,16 +184,28 @@ let NetworkHelper = {
+@@ -184,16 +184,33 @@ let NetworkHelper = {
  
          return this.readAndConvertFromStream(descriptor, aCharset);
        }
@@ -539,7 +590,12 @@ diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/we
 +   */
 +  getAppIdForRequest: function NH_getAppIdForRequest(aRequest)
 +  {
-+    return this.getRequestLoadContext(aRequest).appId;
++    try {
++      return this.getRequestLoadContext(aRequest).appId;
++    } catch (ex) {
++      // request loadContent is not always available.
++    }
++    return null;
 +  },
 +
 +  /**
@@ -555,7 +611,7 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/network-monitor.js
-@@ -0,0 +1,1437 @@
+@@ -0,0 +1,1435 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this file,
 + * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -1693,12 +1749,10 @@ new file mode 100644
 +   */
 +  onNetMonitorMessage: DevToolsUtils.makeInfallible(function _onNetMonitorMessage(msg) {
 +    let { action, appId } = msg.json;
-+    debug("***** Got debug:netmonitor " + action + " " + appId);
 +
 +    // Pipe network monitor data from parent to child via the message manager.
 +    switch (action) {
 +      case "start": {
-+        debug("establishing network monitoring for app " + appId);
 +        if (!this.netMonitor) {
 +          this.netMonitor = new NetworkMonitor(null, appId, this);
 +          this.netMonitor.init();
@@ -1996,7 +2050,7 @@ new file mode 100644
 diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/utils.js
 --- a/toolkit/devtools/webconsole/utils.js
 +++ b/toolkit/devtools/webconsole/utils.js
-@@ -5,25 +5,19 @@
+@@ -5,24 +5,18 @@
   * You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  "use strict";
@@ -2007,7 +2061,6 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
  
 -loader.lazyGetter(this, "NetworkHelper", () => require("devtools/toolkit/webconsole/network-helper"));
  loader.lazyImporter(this, "Services", "resource://gre/modules/Services.jsm");
- loader.lazyImporter(this, "ConsoleAPIStorage", "resource://gre/modules/ConsoleAPIStorage.jsm");
 -loader.lazyImporter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm");
 -loader.lazyImporter(this, "PrivateBrowsingUtils", "resource://gre/modules/PrivateBrowsingUtils.jsm");
  loader.lazyImporter(this, "LayoutHelpers", "resource://gre/modules/devtools/LayoutHelpers.jsm");
@@ -2022,7 +2075,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
  loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
  loader.lazyImporter(this, "DevToolsUtils", "resource://gre/modules/devtools/DevToolsUtils.jsm");
  
-@@ -1620,1167 +1614,16 @@ function JSTermHelpers(aOwner)
+@@ -1621,1167 +1615,16 @@ function JSTermHelpers(aOwner)
    aOwner.sandbox.print = function JSTH_print(aString)
    {
      aOwner.helperResult = { rawOutput: true };
