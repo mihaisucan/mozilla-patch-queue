@@ -1,9 +1,9 @@
 # HG changeset patch
-# Parent e380cc177f6ff6692458055e7cbf8b52828faabe
+# Parent c01985aa106682c0e9f4ed97f4731b0e5a53c2c6
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1394052064 -7200
+# Date 1394121701 -7200
 
-Bug 917227 - Part 2: network monitor server changes to add support for Firefox OS; r=ochameau
+Bug 917227 - Part 2: network monitor server changes to add support for Firefox OS; r=ochameau; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-bc,mochitest-o -t none
 
 diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/dbg-client.jsm
 --- a/toolkit/devtools/client/dbg-client.jsm
@@ -190,7 +190,7 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
  
        this._appActorsMap.set(mm, actor);
  
-+      netMonitor = new NetworkMonitorManager(mm);
++      netMonitor = new NetworkMonitorManager(aFrame);
 +
        deferred.resolve(actor);
      }).bind(this);
@@ -248,7 +248,7 @@ diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/ser
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -11,34 +11,44 @@ let Ci = Components.interfaces;
+@@ -11,20 +11,31 @@ let Ci = Components.interfaces;
  let Cu = Components.utils;
  
  Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -282,21 +282,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
        }
        return devtools.require("devtools/toolkit/webconsole/utils")[prop];
      }.bind(null, name),
-     configurable: true,
-     enumerable: true
-   });
- }
- 
--
- /**
-  * The WebConsoleActor implements capabilities needed for the Web Console
-  * feature.
-  *
-  * @constructor
-  * @param object aConnection
-  *        The connection to the client, DebuggerServerConnection.
-  * @param object [aParentActor]
-@@ -60,16 +70,20 @@ function WebConsoleActor(aConnection, aP
+@@ -60,16 +71,20 @@ function WebConsoleActor(aConnection, aP
    this._gripDepth = 0;
  
    this._onWillNavigate = this._onWillNavigate.bind(this);
@@ -317,7 +303,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
  {
    /**
     * Debugger instance.
-@@ -111,16 +125,33 @@ WebConsoleActor.prototype =
+@@ -111,16 +126,33 @@ WebConsoleActor.prototype =
  
    /**
     * The debugger server connection instance.
@@ -351,7 +337,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
        return this._getWindowForBrowserConsole();
      }
      return this.parentActor.window;
-@@ -249,23 +280,16 @@ WebConsoleActor.prototype =
+@@ -249,23 +281,16 @@ WebConsoleActor.prototype =
  
    /**
     * The JSTerm Helpers names cache.
@@ -375,7 +361,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    },
  
    hasNativeConsoleAPI: function WCA_hasNativeConsoleAPI(aWindow) {
-@@ -472,16 +496,24 @@ WebConsoleActor.prototype =
+@@ -472,16 +497,24 @@ WebConsoleActor.prototype =
     *        The JSON request object received from the Web Console client.
     * @return object
     *         The response object which holds the startedListeners array.
@@ -400,7 +386,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleServiceListener) {
              this.consoleServiceListener =
                new ConsoleServiceListener(window, this);
-@@ -494,18 +526,23 @@ WebConsoleActor.prototype =
+@@ -494,18 +527,23 @@ WebConsoleActor.prototype =
              this.consoleAPIListener =
                new ConsoleAPIListener(window, this);
              this.consoleAPIListener.init();
@@ -416,7 +402,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +                new NetworkMonitorChild(appId, messageManager, this);
 +            }
 +            else {
-+              this.networkMonitor = new NetworkMonitor(window, null, this);
++              this.networkMonitor = new NetworkMonitor({ window: window }, this);
 +            }
              this.networkMonitor.init();
            }
@@ -426,7 +412,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
            if (!this.consoleProgressListener) {
              this.consoleProgressListener =
                new ConsoleProgressListener(this.window, this);
-@@ -521,16 +558,17 @@ WebConsoleActor.prototype =
+@@ -521,16 +559,17 @@ WebConsoleActor.prototype =
            }
            startedListeners.push(listener);
            break;
@@ -444,7 +430,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
     *
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
-@@ -816,16 +854,21 @@ WebConsoleActor.prototype =
+@@ -816,16 +855,21 @@ WebConsoleActor.prototype =
     *
     * @param object aRequest
     *        The request message - which preferences need to be updated.
@@ -466,7 +452,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    // End of request handlers.
    //////////////////
  
-@@ -1126,16 +1169,18 @@ WebConsoleActor.prototype =
+@@ -1126,16 +1170,18 @@ WebConsoleActor.prototype =
     * Handler for network events. This method is invoked when a new network event
     * is about to be recorded.
     *
@@ -485,7 +471,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    {
      let actor = this.getNetworkEventActor(aChannel);
      actor.init(aEvent);
-@@ -1150,18 +1195,20 @@ WebConsoleActor.prototype =
+@@ -1150,18 +1196,20 @@ WebConsoleActor.prototype =
  
      return actor;
    },
@@ -573,7 +559,7 @@ diff --git a/toolkit/devtools/webconsole/client.js b/toolkit/devtools/webconsole
 diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/webconsole/network-helper.js
 --- a/toolkit/devtools/webconsole/network-helper.js
 +++ b/toolkit/devtools/webconsole/network-helper.js
-@@ -184,16 +184,33 @@ let NetworkHelper = {
+@@ -184,16 +184,50 @@ let NetworkHelper = {
  
          return this.readAndConvertFromStream(descriptor, aCharset);
        }
@@ -585,13 +571,30 @@ diff --git a/toolkit/devtools/webconsole/network-helper.js b/toolkit/devtools/we
 +   * Gets the web appId that is associated with aRequest.
 +   *
 +   * @param nsIHttpChannel aRequest
-+   * @returns number
-+   *          The appId for the given request.
++   * @returns number|null
++   *          The appId for the given request, if available.
 +   */
 +  getAppIdForRequest: function NH_getAppIdForRequest(aRequest)
 +  {
 +    try {
 +      return this.getRequestLoadContext(aRequest).appId;
++    } catch (ex) {
++      // request loadContent is not always available.
++    }
++    return null;
++  },
++
++  /**
++   * Gets the topFrameElement that is associated with aRequest.
++   *
++   * @param nsIHttpChannel aRequest
++   * @returns nsIDOMElement|null
++   *          The top frame element for the given request, if available.
++   */
++  getTopFrameForRequest: function NH_getTopFrameForRequest(aRequest)
++  {
++    try {
++      return this.getRequestLoadContext(aRequest).topFrameElement;
 +    } catch (ex) {
 +      // request loadContent is not always available.
 +    }
@@ -611,7 +614,7 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/devtools/webconsole/network-monitor.js
-@@ -0,0 +1,1435 @@
+@@ -0,0 +1,1478 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this file,
 + * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -946,13 +949,18 @@ new file mode 100644
 + * routed to the remote Web Console.
 + *
 + * @constructor
-+ * @param nsIDOMWindow aWindow
-+ *        Optional, filter network requests by the associated window object.
-+ * @param number aAppId
-+ *        Optional, filter network requests by the associated web app ID.
++ * @param object aFilters
++ *        Object with the filters to use for network requests:
++ *        - window (nsIDOMWindow): filter network requests by the associated
++ *        window object.
++ *        - appId (number): filter requests by the appId.
++ *        - topFrame (nsIDOMElement): filter requests by their topFrameElement.
++ *        Filters are optional. If any of these filters match the request is
++ *        logged (OR is applied). If no filter is provided then all requests are
++ *        logged.
 + * @param object aOwner
 + *        The network monitor owner. This object needs to hold:
-+ *        - onNetworkEvent(aRequestInfo, aChannel).
++ *        - onNetworkEvent(aRequestInfo, aChannel, aNetworkMonitor).
 + *        This method is invoked once for every new network request and it is
 + *        given the following arguments: the initial network request
 + *        information, and the channel. The third argument is the NetworkMonitor
@@ -961,10 +969,16 @@ new file mode 100644
 + *        methods which are used to add further network request/response
 + *        information.
 + */
-+function NetworkMonitor(aWindow, aAppId, aOwner)
++function NetworkMonitor(aFilters, aOwner)
 +{
-+  this.window = aWindow;
-+  this.appId = aAppId;
++  if (aFilters) {
++    this.window = aFilters.window;
++    this.appId = aFilters.appId;
++    this.topFrame = aFilters.topFrame;
++  }
++  if (!this.window && !this.appId && !this.topFrame) {
++    this._logEverything = true;
++  }
 +  this.owner = aOwner;
 +  this.openRequests = {};
 +  this.openResponses = {};
@@ -974,6 +988,11 @@ new file mode 100644
 +exports.NetworkMonitor = NetworkMonitor;
 +
 +NetworkMonitor.prototype = {
++  _logEverything: false,
++  window: null,
++  appId: null,
++  topFrame: null,
++
 +  httpTransactionCodes: {
 +    0x5001: "REQUEST_HEADER",
 +    0x5002: "REQUEST_BODY_SENT",
@@ -1053,20 +1072,8 @@ new file mode 100644
 +
 +    let channel = aSubject.QueryInterface(Ci.nsIHttpChannel);
 +
-+    if (this.window) {
-+      // Try to get the source window of the request.
-+      let win = NetworkHelper.getWindowForRequest(channel);
-+      if (!win || win.top !== this.window) {
-+        return;
-+      }
-+    }
-+
-+    if (this.appId) {
-+      // Try to get the source appId of the request.
-+      let appId = NetworkHelper.getAppIdForRequest(channel);
-+      if (!appId || appId != this.appId) {
-+        return;
-+      }
++    if (!this._matchRequest(channel)) {
++      return;
 +    }
 +
 +    let response = {
@@ -1189,6 +1196,46 @@ new file mode 100644
 +  }),
 +
 +  /**
++   * Check if a given network request should be logged by this network monitor
++   * instance based on the current filters.
++   *
++   * @private
++   * @param nsIHttpChannel aChannel
++   *        Request to check.
++   * @return boolean
++   *         True if the network request should be logged, false otherwise.
++   */
++  _matchRequest: function NM__matchRequest(aChannel)
++  {
++    if (this._logEverything) {
++      return true;
++    }
++
++    if (this.window) {
++      let win = NetworkHelper.getWindowForRequest(aChannel);
++      if (win && win.top === this.window) {
++        return true;
++      }
++    }
++
++    if (this.topFrame) {
++      let topFrame = NetworkHelper.getTopFrameForRequest(aChannel);
++      if (topFrame && topFrame === this.topFrame) {
++        return true;
++      }
++    }
++
++    if (this.appId) {
++      let appId = NetworkHelper.getAppIdForRequest(aChannel);
++      if (appId && appId == this.appId) {
++        return true;
++      }
++    }
++
++    return false;
++  },
++
++  /**
 +   * Handler for ACTIVITY_SUBTYPE_REQUEST_HEADER. When a request starts the
 +   * headers are sent to the server. This method creates the |httpActivity|
 +   * object where we store the request and response information that is
@@ -1203,21 +1250,11 @@ new file mode 100644
 +  _onRequestHeader:
 +  function NM__onRequestHeader(aChannel, aTimestamp, aExtraStringData)
 +  {
-+    let win = NetworkHelper.getWindowForRequest(aChannel);
-+
-+    // Try to get the source window of the request.
-+    if (this.window && (!win || win.top !== this.window)) {
++    if (!this._matchRequest(aChannel)) {
 +      return;
 +    }
 +
-+    if (this.appId) {
-+      // Try to get the source appId of the request.
-+      let appId = NetworkHelper.getAppIdForRequest(aChannel);
-+      if (!appId || appId != this.appId) {
-+        return;
-+      }
-+    }
-+
++    let win = NetworkHelper.getWindowForRequest(aChannel);
 +    let httpActivity = this.createActivityObject(aChannel);
 +
 +    // see NM__onRequestBodySent()
@@ -1725,20 +1762,25 @@ new file mode 100644
 + * process to start/stop the network monitor.
 + *
 + * @constructor
-+ * @param nsIMessageManager messageManager
-+ *        The message manager to work with.
++ * @param nsIDOMElement frame
++ *        The browser frame to work with (mozbrowser).
 + */
-+function NetworkMonitorManager(messageManager)
++function NetworkMonitorManager(frame)
 +{
-+  this.messageManager = messageManager;
++  let mm = frame.QueryInterface(Ci.nsIFrameLoaderOwner).frameLoader.messageManager;
++  this.messageManager = mm;
++  this.frame = frame;
 +  this.onNetMonitorMessage = this.onNetMonitorMessage.bind(this);
 +  this.onNetworkEvent = this.onNetworkEvent.bind(this);
-+  messageManager.addMessageListener("debug:netmonitor", this.onNetMonitorMessage);
++
++  mm.addMessageListener("debug:netmonitor", this.onNetMonitorMessage);
 +}
 +exports.NetworkMonitorManager = NetworkMonitorManager;
 +
 +NetworkMonitorManager.prototype = {
 +  netMonitor: null,
++  frame: null,
++  messageManager: null,
 +
 +  /**
 +   * Handler for "debug:monitor" messages received through the message manager
@@ -1754,7 +1796,10 @@ new file mode 100644
 +    switch (action) {
 +      case "start": {
 +        if (!this.netMonitor) {
-+          this.netMonitor = new NetworkMonitor(null, appId, this);
++          this.netMonitor = new NetworkMonitor({
++            topFrame: this.frame,
++            appId: appId,
++          }, this);
 +          this.netMonitor.init();
 +        }
 +        break;
@@ -1799,6 +1844,7 @@ new file mode 100644
 +    this.messageManager.removeMessageListener("debug:netmonitor",
 +                                              this.onNetMonitorMessage);
 +    this.messageManager = null;
++    this.filters = null;
 +
 +    if (this.netMonitor) {
 +      this.netMonitor.destroy();
