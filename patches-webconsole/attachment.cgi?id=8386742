@@ -1,0 +1,1232 @@
+# HG changeset patch
+# Parent 3e04ea03716e09e54b0163083300d2ff65886ca5
+# User Patrick Brosset <pbrosset@mozilla.com>
+Bug 757866 - Highlight and select DOM nodes in the web console output; r=msucan
+
+diff --git a/browser/devtools/framework/toolbox.js b/browser/devtools/framework/toolbox.js
+--- a/browser/devtools/framework/toolbox.js
++++ b/browser/devtools/framework/toolbox.js
+@@ -460,17 +460,17 @@ Toolbox.prototype = {
+   /**
+    * Handle any custom key events.  Returns true if there was a custom key binding run
+    * @param {string} toolId
+    *        Which tool to run the command on (skip if not current)
+    */
+   fireCustomKey: function(toolId) {
+     let toolDefinition = gDevTools.getToolDefinition(toolId);
+ 
+-    if (toolDefinition.onkey && 
++    if (toolDefinition.onkey &&
+         ((this.currentToolId === toolId) ||
+           (toolId == "webconsole" && this.splitConsole))) {
+       toolDefinition.onkey(this.getCurrentPanel(), this);
+     }
+   },
+ 
+   /**
+    * Build the buttons for changing hosts. Called every time
+@@ -1036,37 +1036,27 @@ Toolbox.prototype = {
+     }
+   },
+ 
+   /**
+    * Initialize the inspector/walker/selection/highlighter fronts.
+    * Returns a promise that resolves when the fronts are initialized
+    */
+   initInspector: function() {
+-    let deferred = promise.defer();
+-
+-    if (!this._inspector) {
+-      this._inspector = InspectorFront(this._target.client, this._target.form);
+-      this._inspector.getWalker().then(walker => {
+-        this._walker = walker;
++    if (!this._initInspector) {
++      this._initInspector = Task.spawn(function*() {
++        this._inspector = InspectorFront(this._target.client, this._target.form);
++        this._walker = yield this._inspector.getWalker();
+         this._selection = new Selection(this._walker);
+         if (this.highlighterUtils.isRemoteHighlightable) {
+-          this._inspector.getHighlighter().then(highlighter => {
+-            this._highlighter = highlighter;
+-            deferred.resolve();
+-          });
+-        } else {
+-          deferred.resolve();
++          this._highlighter = yield this._inspector.getHighlighter();
+         }
+-      });
+-    } else {
+-      deferred.resolve();
++      }.bind(this));
+     }
+-
+-    return deferred.promise;
++    return this._initInspector;
+   },
+ 
+   /**
+    * Destroy the inspector/walker/selection fronts
+    * Returns a promise that resolves when the fronts are destroyed
+    */
+   destroyInspector: function() {
+     if (!this._inspector) {
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -4,16 +4,18 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+ const {Cc, Ci, Cu} = require("chrome");
+ 
+ loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
+ loader.lazyImporter(this, "escapeHTML", "resource:///modules/devtools/VariablesView.jsm");
++loader.lazyImporter(this, "gDevTools", "resource:///modules/devtools/gDevTools.jsm");
++loader.lazyImporter(this, "Task","resource://gre/modules/Task.jsm");
+ 
+ const Heritage = require("sdk/core/heritage");
+ const XHTML_NS = "http://www.w3.org/1999/xhtml";
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ const STRINGS_URI = "chrome://browser/locale/devtools/webconsole.properties";
+ 
+ const WebConsoleUtils = require("devtools/toolkit/webconsole/utils").Utils;
+ const l10n = new WebConsoleUtils.l10n(STRINGS_URI);
+@@ -126,17 +128,17 @@ ConsoleOutput.prototype = {
+     return this.owner.outputNode;
+   },
+ 
+   /**
+    * The document that holds the output.
+    * @type DOMDocument
+    */
+   get document() {
+-    return this.owner.document;
++    return this.owner ? this.owner.document : null;
+   },
+ 
+   /**
+    * The DOM window that holds the output.
+    * @type Window
+    */
+   get window() {
+     return this.owner.window;
+@@ -146,16 +148,24 @@ ConsoleOutput.prototype = {
+    * Getter for the debugger WebConsoleClient.
+    * @type object
+    */
+   get webConsoleClient() {
+     return this.owner.webConsoleClient;
+   },
+ 
+   /**
++   * Getter for the current toolbox debuggee target.
++   * @type Target
++   */
++  get toolboxTarget() {
++    return this.owner.owner.target;
++  },
++
++  /**
+    * Release an actor.
+    *
+    * @private
+    * @param string actorId
+    *        The actor ID you want to release.
+    */
+   _releaseObject: function(actorId)
+   {
+@@ -502,16 +512,24 @@ Messages.BaseMessage.prototype = {
+    * @private
+    * @param Event event
+    *        The DOM event that invoked this function.
+    */
+   _onClickAnchor: function(event)
+   {
+     this.output.openLink(event.target.href);
+   },
++
++  destroy: function()
++  {
++    // Destroy all widgets that have registered themselves in this.widgets
++    for (let widget of this.widgets) {
++      widget.destroy();
++    }
++  }
+ }; // Messages.BaseMessage.prototype
+ 
+ 
+ /**
+  * The NavigationMarker is used to show a page load event.
+  *
+  * @constructor
+  * @extends Messages.BaseMessage
+@@ -2012,16 +2030,17 @@ Widgets.ObjectRenderers.add({
+     }
+ 
+     switch (preview.nodeType) {
+       case Ci.nsIDOMNode.DOCUMENT_NODE:
+       case Ci.nsIDOMNode.ATTRIBUTE_NODE:
+       case Ci.nsIDOMNode.TEXT_NODE:
+       case Ci.nsIDOMNode.COMMENT_NODE:
+       case Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE:
++      case Ci.nsIDOMNode.ELEMENT_NODE:
+         return true;
+       default:
+         return false;
+     }
+   },
+ 
+   render: function()
+   {
+@@ -2040,16 +2059,19 @@ Widgets.ObjectRenderers.add({
+         this._renderTextNode();
+         break;
+       case Ci.nsIDOMNode.COMMENT_NODE:
+         this._renderCommentNode();
+         break;
+       case Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE:
+         this._renderDocumentFragmentNode();
+         break;
++      case Ci.nsIDOMNode.ELEMENT_NODE:
++        this._renderElementNode();
++        break;
+       default:
+         throw new Error("Unsupported nodeType: " + preview.nodeType);
+     }
+   },
+ 
+   _renderDocumentNode: function()
+   {
+     let fn = Widgets.ObjectRenderers.byKind.ObjectWithURL.prototype._renderElement;
+@@ -2133,16 +2155,178 @@ Widgets.ObjectRenderers.add({
+ 
+       let n = preview.childNodesLength - shown;
+       let str = VariablesView.stringifiers._getNMoreString(n);
+       this._anchor(str);
+     }
+ 
+     this._text(" ]");
+   },
++
++  _renderElementNode: function()
++  {
++    let doc = this.document;
++    let {attributes, nodeName} = this.objectActor.preview;
++
++    this.element = this.el("span." + "kind-" + this.objectActor.preview.kind + ".elementNode");
++
++    let openTag = this.el("span.cm-tag");
++    openTag.textContent = "<";
++    this.element.appendChild(openTag);
++
++    let tagName = this._anchor(nodeName, {
++      className: "cm-tag",
++      appendTo: openTag
++    });
++
++    if (this.options.concise) {
++      if (attributes.id) {
++        tagName.appendChild(this.el("span.cm-attribute", "#" + attributes.id));
++      }
++      if (attributes.class) {
++        tagName.appendChild(this.el("span.cm-attribute", "." + attributes.class.split(" ").join(".")));
++      }
++    } else {
++      for (let name of Object.keys(attributes)) {
++        let attr = this._renderAttributeNode(" " + name, attributes[name]);
++        this.element.appendChild(attr);
++      }
++    }
++
++    let closeTag = this.el("span.cm-tag");
++    closeTag.textContent = ">";
++    this.element.appendChild(closeTag);
++
++    // Register this widget in the owner message so that it gets destroyed when
++    // the message is destroyed.
++    this.message.widgets.add(this);
++
++    this.linkToInspector();
++  },
++
++  /**
++   * If the DOMNode being rendered can be highlit in the page, this function
++   * will attach mouseover/out event listeners to do so, and the inspector icon
++   * to open the node in the inspector.
++   * @return a promise (always the same) that resolves when the node has been
++   * linked to the inspector, or rejects if it wasn't (either if no toolbox
++   * could be found to access the inspector, or if the node isn't present in the
++   * inspector, i.e. if the node is in a DocumentFragment or not part of the
++   * tree, or not of type Ci.nsIDOMNode.ELEMENT_NODE).
++   */
++  linkToInspector: function()
++  {
++    if (this._linkedToInspector) {
++      return this._linkedToInspector;
++    }
++
++    this._linkedToInspector = Task.spawn(function*() {
++      // Checking the node type
++      if (this.objectActor.preview.nodeType !== Ci.nsIDOMNode.ELEMENT_NODE) {
++        throw null;
++      }
++
++      // Checking the presence of a toolbox
++      let target = this.message.output.toolboxTarget;
++      this.toolbox = gDevTools.getToolbox(target);
++      if (!this.toolbox) {
++        throw null;
++      }
++
++      // Checking that the inspector supports the node
++      yield this.toolbox.initInspector();
++      this._nodeFront = yield this.toolbox.walker.getNodeActorFromObjectActor(this.objectActor.actor);
++      if (!this._nodeFront) {
++        throw null;
++      }
++
++      // At this stage, the message may have been cleared already
++      if (!this.document) {
++        throw null;
++      }
++
++      this.highlightDomNode = this.highlightDomNode.bind(this);
++      this.element.addEventListener("mouseover", this.highlightDomNode, false);
++      this.unhighlightDomNode = this.unhighlightDomNode.bind(this);
++      this.element.addEventListener("mouseout", this.unhighlightDomNode, false);
++
++      this._openInspectorNode = this._anchor("", {
++        className: "open-inspector",
++        onClick: this.openNodeInInspector.bind(this)
++      });
++      this._openInspectorNode.title = l10n.getStr("openNodeInInspector");
++    }.bind(this));
++
++    return this._linkedToInspector;
++  },
++
++  /**
++   * Highlight the DOMNode corresponding to the ObjectActor in the page.
++   * @return a promise that resolves when the node has been highlighted, or
++   * rejects if the node cannot be highlighted (detached from the DOM)
++   */
++  highlightDomNode: function()
++  {
++    return Task.spawn(function*() {
++      yield this.linkToInspector();
++      let isAttached = yield this.toolbox.walker.isInDOMTree(this._nodeFront);
++      if (isAttached) {
++        yield this.toolbox.highlighterUtils.highlightNodeFront(this._nodeFront);
++      } else {
++        throw null;
++      }
++    }.bind(this));
++  },
++
++  /**
++   * Unhighlight a previously highlit node
++   * @see highlightDomNode
++   * @return a promise that resolves when the highlighter has been hidden
++   */
++  unhighlightDomNode: function()
++  {
++    return this.linkToInspector().then(() => {
++      return this.toolbox.highlighterUtils.unhighlight();
++    });
++  },
++
++  /**
++   * Open the DOMNode corresponding to the ObjectActor in the inspector panel
++   * @return a promise that resolves when the inspector has been switched to
++   * and the node has been selected, or rejects if the node cannot be selected
++   * (detached from the DOM). Note that in any case, the inspector panel will
++   * be switched to.
++   */
++  openNodeInInspector: function()
++  {
++    return Task.spawn(function*() {
++      yield this.linkToInspector();
++      yield this.toolbox.selectTool("inspector");
++
++      let isAttached = yield this.toolbox.walker.isInDOMTree(this._nodeFront);
++      if (isAttached) {
++        let onReady = this.toolbox.inspector.once("inspector-updated");
++        yield this.toolbox.selection.setNodeFront(this._nodeFront, "console");
++        yield onReady;
++      } else {
++        throw null;
++      }
++    }.bind(this));
++  },
++
++  destroy: function()
++  {
++    if (this.toolbox && this._nodeFront) {
++      this.element.removeEventListener("mouseover", this.highlightDomNode, false);
++      this.element.removeEventListener("mouseout", this.unhighlightDomNode, false);
++      this._openInspectorNode.removeEventListener("mousedown", this.openNodeInInspector, true);
++      this.toolbox = null;
++      this._nodeFront = null;
++    }
++  },
+ }); // Widgets.ObjectRenderers.byKind.DOMNode
+ 
+ /**
+  * The widget used for displaying generic JS object previews.
+  */
+ Widgets.ObjectRenderers.add({
+   byKind: "Object",
+ 
+diff --git a/browser/devtools/webconsole/test/browser.ini b/browser/devtools/webconsole/test/browser.ini
+--- a/browser/devtools/webconsole/test/browser.ini
++++ b/browser/devtools/webconsole/test/browser.ini
+@@ -64,16 +64,17 @@ support-files =
+   test-console-count.html
+   test-console-count-external-file.js
+   test-console-extras.html
+   test-console-replaced-api.html
+   test-console.html
+   test-console-output-02.html
+   test-console-output-03.html
+   test-console-output-04.html
++  test-console-output-dom-elements.html
+   test-console-output-events.html
+   test-consoleiframes.html
+   test-data.json
+   test-data.json^headers^
+   test-duplicate-error.html
+   test-encoding-ISO-8859-1.html
+   test-error.html
+   test-eval-in-stackframe.html
+@@ -261,13 +262,17 @@ run-if = os == "mac"
+ [browser_webconsole_expandable_timestamps.js]
+ [browser_webconsole_autocomplete_in_debugger_stackframe.js]
+ [browser_webconsole_autocomplete_popup_close_on_tab_switch.js]
+ [browser_console_hide_jsterm_when_devtools_chrome_enabled_false.js]
+ [browser_webconsole_output_01.js]
+ [browser_webconsole_output_02.js]
+ [browser_webconsole_output_03.js]
+ [browser_webconsole_output_04.js]
++[browser_webconsole_output_dom_elements_01.js]
++[browser_webconsole_output_dom_elements_02.js]
++[browser_webconsole_output_dom_elements_03.js]
++[browser_webconsole_output_dom_elements_04.js]
+ [browser_webconsole_output_events.js]
+ [browser_console_variables_view_highlighter.js]
+ [browser_webconsole_start_netmon_first.js]
+ [browser_webconsole_console_trace_duplicates.js]
+ [browser_webconsole_cd_iframe.js]
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_04.js b/browser/devtools/webconsole/test/browser_webconsole_output_04.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_04.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_04.js
+@@ -24,17 +24,17 @@ let inputTests = [
+     printOutput: "[object Comment]",
+     inspectable: true,
+     noClick: true,
+   },
+ 
+   // 2
+   {
+     input: "testDocumentFragment()",
+-    output: 'DocumentFragment [ <div#foo1>, <div#foo3> ]',
++    output: 'DocumentFragment [ <div#foo1.bar>, <div#foo3> ]',
+     printOutput: "[object DocumentFragment]",
+     inspectable: true,
+     variablesViewLabel: "DocumentFragment[2]",
+   },
+ 
+   // 3
+   {
+     input: "testError()",
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_01.js b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_01.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_01.js
+@@ -0,0 +1,99 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Test the webconsole output for various types of DOM Nodes.
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console-output-dom-elements.html";
++
++let inputTests = [
++  {
++    input: "testBodyNode()",
++    output: '<body id="body-id" class="body-class">',
++    printOutput: "[object HTMLBodyElement]",
++    inspectable: true,
++    noClick: true,
++    inspectorIcon: true
++  },
++
++  {
++    input: "testDocumentElement()",
++    output: '<html lang="en-US" dir="ltr">',
++    printOutput: "[object HTMLHtmlElement]",
++    inspectable: true,
++    noClick: true,
++    inspectorIcon: true
++  },
++
++  {
++    input: "testDocument()",
++    output: 'HTMLDocument \u2192 ' + TEST_URI,
++    printOutput: "[object HTMLDocument]",
++    inspectable: true,
++    noClick: true,
++    inspectorIcon: false
++  },
++
++  {
++    input: "testNode()",
++    output: '<p some-attribute="some-value">',
++    printOutput: "[object HTMLParagraphElement]",
++    inspectable: true,
++    noClick: true,
++    inspectorIcon: true
++  },
++
++  {
++    input: "testNodeList()",
++    output: 'NodeList [ <html>, <head>, <meta>, <title>, <body#body-id.body-class>, <p>, <iframe>, <script> ]',
++    printOutput: "[object NodeList]",
++    inspectable: true,
++    noClick: true,
++    inspectorIcon: true
++  },
++
++  {
++    input: "testNodeInIframe()",
++    output: '<p>',
++    printOutput: "[object HTMLParagraphElement]",
++    inspectable: true,
++    noClick: true,
++    inspectorIcon: true
++  },
++
++  {
++    input: "testDocumentFragment()",
++    output: 'DocumentFragment [ <span.foo>, <div#fragdiv> ]',
++    printOutput: "[object DocumentFragment]",
++    inspectable: true,
++    noClick: true,
++    inspectorIcon: false
++  },
++
++  {
++    input: "testNodeInDocumentFragment()",
++    output: '<span class="foo" data-lolz="hehe">',
++    printOutput: "[object HTMLSpanElement]",
++    inspectable: true,
++    noClick: true,
++    inspectorIcon: false
++  },
++
++  {
++    input: "testUnattachedNode()",
++    output: '<p class="such-class" data-data="such-data">',
++    printOutput: "[object HTMLParagraphElement]",
++    inspectable: true,
++    noClick: true,
++    inspectorIcon: false
++  }
++];
++
++function test() {
++  Task.spawn(function*() {
++    let {tab} = yield loadTab(TEST_URI);
++    let hud = yield openConsole(tab);
++    yield checkOutputForInputs(hud, inputTests);
++  }).then(finishTest);
++}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js
+@@ -0,0 +1,95 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Test the inspector links in the webconsole output for DOM Nodes actually
++// open the inspector and select the right node
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console-output-dom-elements.html";
++
++const TEST_DATA = [
++  {
++    // The first test shouldn't be returning the body element as this is the
++    // default selected node, so re-selecting it won't fire the inspector-updated
++    // event
++    input: "testNode()",
++    output: '<p some-attribute="some-value">'
++  },
++  {
++    input: "testBodyNode()",
++    output: '<body id="body-id" class="body-class">'
++  },
++  {
++    input: "testNodeInIframe()",
++    output: '<p>'
++  },
++  {
++    input: "testDocumentElement()",
++    output: '<html lang="en-US" dir="ltr">'
++  }
++];
++
++function test() {
++  Task.spawn(function*() {
++    let {tab} = yield loadTab(TEST_URI);
++    let hud = yield openConsole(tab);
++    let toolbox = gDevTools.getToolbox(hud.target);
++
++    // Loading the inspector panel at first, to make it possible to listen for
++    // new node selections
++    yield toolbox.loadTool("inspector");
++    let inspector = toolbox.getPanel("inspector");
++
++    info("Iterating over the test data");
++    for (let data of TEST_DATA) {
++      let [result] = yield jsEval(data.input, hud, {text: data.output});
++      let {widget, msg} = yield getWidgetAndMessage(result);
++
++      let inspectorIcon = msg.querySelector(".open-inspector");
++      ok(inspectorIcon, "Inspector icon found in the ElementNode widget");
++
++      info("Clicking on the inspector icon and waiting for the inspector to be selected");
++      let onInspectorSelected = toolbox.once("inspector-selected");
++      let onInspectorUpdated = inspector.once("inspector-updated");
++
++      EventUtils.synthesizeMouseAtCenter(inspectorIcon, {},
++        inspectorIcon.ownerDocument.defaultView);
++      yield onInspectorSelected;
++      yield onInspectorUpdated;
++      ok(true, "Inspector selected and new node got selected");
++
++      let rawNode = content.wrappedJSObject[data.input.replace(/\(\)/g, "")]();
++      is(rawNode, inspector.selection.node.wrappedJSObject,
++        "The current inspector selection is correct");
++
++      info("Switching back to the console");
++      yield toolbox.selectTool("webconsole");
++    }
++  }).then(finishTest);
++}
++
++function jsEval(input, hud, message) {
++  info("Executing '" + input + "' in the web console");
++
++  hud.jsterm.clearOutput();
++  hud.jsterm.execute(input);
++
++  return waitForMessages({
++    webconsole: hud,
++    messages: [message]
++  });
++}
++
++function* getWidgetAndMessage(result) {
++  info("Getting the output ElementNode widget");
++
++  let msg = [...result.matched][0];
++  let widget = [...msg._messageObject.widgets][0];
++  ok(widget, "ElementNode widget found in the output");
++
++  info("Waiting for the ElementNode widget to be linked to the inspector");
++  yield widget.linkToInspector();
++
++  return {widget: widget, msg: msg};
++}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_03.js b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_03.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_03.js
+@@ -0,0 +1,67 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Test that inspector links in webconsole outputs for DOM Nodes highlight
++// the actual DOM Nodes on hover
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console-output-dom-elements.html";
++
++function test() {
++  Task.spawn(function*() {
++    let {tab} = yield loadTab(TEST_URI);
++    let hud = yield openConsole(tab);
++    let toolbox = gDevTools.getToolbox(hud.target);
++
++    // Loading the inspector panel at first, to make it possible to listen for
++    // new node selections
++    yield toolbox.loadTool("inspector");
++    let inspector = toolbox.getPanel("inspector");
++
++    info("Executing 'testNode()' in the web console to output a DOM Node");
++    let [result] = yield jsEval("testNode()", hud, {
++      text: '<p some-attribute="some-value">'
++    });
++
++    let elementNodeWidget = yield getWidget(result);
++
++    let nodeFront = yield hoverOverWidget(elementNodeWidget, toolbox);
++    let attrs = nodeFront.attributes;
++    is(nodeFront.tagName, "P", "The correct node was highlighted");
++    is(attrs[0].name, "some-attribute", "The correct node was highlighted");
++    is(attrs[0].value, "some-value", "The correct node was highlighted");
++  }).then(finishTest);
++}
++
++function jsEval(input, hud, message) {
++  hud.jsterm.execute(input);
++  return waitForMessages({
++    webconsole: hud,
++    messages: [message]
++  });
++}
++
++function* getWidget(result) {
++  info("Getting the output ElementNode widget");
++
++  let msg = [...result.matched][0];
++  let elementNodeWidget = [...msg._messageObject.widgets][0];
++  ok(elementNodeWidget, "ElementNode widget found in the output");
++
++  info("Waiting for the ElementNode widget to be linked to the inspector");
++  yield elementNodeWidget.linkToInspector();
++
++  return elementNodeWidget;
++}
++
++function* hoverOverWidget(widget, toolbox) {
++  info("Hovering over the output to highlight the node");
++
++  let onHighlight = toolbox.once("node-highlight");
++  EventUtils.sendMouseEvent({type: "mouseover"}, widget.element,
++    widget.element.ownerDocument.defaultView);
++  let nodeFront = yield onHighlight;
++  ok(true, "The highlighter was shown on a node");
++  return nodeFront;
++}
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_04.js b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_04.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_04.js
+@@ -0,0 +1,106 @@
++/*
++ * Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/
++ */
++
++// Test that inspector links in the webconsole output for DOM Nodes do not try
++// to highlight or select nodes once they have been detached
++
++const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test/test-console-output-dom-elements.html";
++
++const TEST_DATA = [
++  {
++    // The first test shouldn't be returning the body element as this is the
++    // default selected node, so re-selecting it won't fire the inspector-updated
++    // event
++    input: "testNode()",
++    output: '<p some-attribute="some-value">'
++  },
++  {
++    input: "testBodyNode()",
++    output: '<body id="body-id" class="body-class">'
++  },
++  {
++    input: "testNodeInIframe()",
++    output: '<p>'
++  },
++  {
++    input: "testDocumentElement()",
++    output: '<html lang="en-US" dir="ltr">'
++  }
++];
++
++const PREF = "devtools.webconsole.persistlog";
++
++function test() {
++  Services.prefs.setBoolPref(PREF, true);
++  registerCleanupFunction(() => Services.prefs.clearUserPref(PREF));
++
++  Task.spawn(function*() {
++    let {tab} = yield loadTab(TEST_URI);
++    let hud = yield openConsole(tab);
++    let toolbox = gDevTools.getToolbox(hud.target);
++
++    info("Executing the test data");
++    let widgets = [];
++    for (let data of TEST_DATA) {
++      let [result] = yield jsEval(data.input, hud, {text: data.output});
++      let {widget} = yield getWidgetAndMessage(result);
++      widgets.push(widget);
++    }
++
++    info("Reloading the page");
++    yield reloadPage();
++
++    info("Iterating over the ElementNode widgets");
++    for (let widget of widgets) {
++      // Verify that openNodeInInspector rejects since the associated dom node
++      // doesn't exist anymore
++      yield widget.openNodeInInspector().then(() => {
++        ok(false, "The openNodeInInspector promise resolved");
++      }, () => {
++        ok(true, "The openNodeInInspector promise rejected as expected");
++      });
++      yield toolbox.selectTool("webconsole");
++
++      // Verify that highlightDomNode rejects too, for the same reason
++      yield widget.highlightDomNode().then(() => {
++        ok(false, "The highlightDomNode promise resolved");
++      }, () => {
++        ok(true, "The highlightDomNode promise rejected as expected");
++      });
++    }
++  }).then(finishTest);
++}
++
++function jsEval(input, hud, message) {
++  info("Executing '" + input + "' in the web console");
++  hud.jsterm.execute(input);
++  return waitForMessages({
++    webconsole: hud,
++    messages: [message]
++  });
++}
++
++function* getWidgetAndMessage(result) {
++  info("Getting the output ElementNode widget");
++
++  let msg = [...result.matched][0];
++  let widget = [...msg._messageObject.widgets][0];
++  ok(widget, "ElementNode widget found in the output");
++
++  info("Waiting for the ElementNode widget to be linked to the inspector");
++  yield widget.linkToInspector();
++
++  return {widget: widget, msg: msg};
++}
++
++function reloadPage() {
++  let def = promise.defer();
++  gBrowser.selectedBrowser.addEventListener("load", function onload() {
++    gBrowser.selectedBrowser.removeEventListener("load", onload, true);
++    def.resolve();
++  }, true);
++  content.location.reload();
++  return def.promise;
++}
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -1309,16 +1309,20 @@ function whenDelayedStartupFinished(aWin
+  *        builds).
+  *
+  *        - printOutput: string|RegExp, optional, expected output for
+  *        |print(input)|. If this is not provided, printOutput = output.
+  *
+  *        - variablesViewLabel: string|RegExp, optional, the expected variables
+  *        view label when the object is inspected. If this is not provided, then
+  *        |output| is used.
++ *
++ *        - inspectorIcon: boolean, when true, the test runner expects the
++ *        result widget to contain an inspectorIcon element (className
++ *        open-inspector).
+  */
+ function checkOutputForInputs(hud, inputTests)
+ {
+   let eventHandlers = new Set();
+ 
+   function* runner()
+   {
+     for (let [i, entry] of inputTests.entries()) {
+@@ -1333,30 +1337,35 @@ function checkOutputForInputs(hud, input
+ 
+   function* checkInput(entry)
+   {
+     yield checkConsoleLog(entry);
+     yield checkPrintOutput(entry);
+     yield checkJSEval(entry);
+   }
+ 
+-  function checkConsoleLog(entry)
++  function* checkConsoleLog(entry)
+   {
+     hud.jsterm.clearOutput();
+     hud.jsterm.execute("console.log(" + entry.input + ")");
+ 
+-    return waitForMessages({
++    let [result] = yield waitForMessages({
+       webconsole: hud,
+       messages: [{
+         name: "console.log() output: " + entry.output,
+         text: entry.output,
+         category: CATEGORY_WEBDEV,
+         severity: SEVERITY_LOG,
+       }],
+     });
++
++    if (typeof entry.inspectorIcon == "boolean") {
++      let msg = [...result.matched][0];
++      yield checkLinkToInspector(entry, msg);
++    }
+   }
+ 
+   function checkPrintOutput(entry)
+   {
+     hud.jsterm.clearOutput();
+     hud.jsterm.execute("print(" + entry.input + ")");
+ 
+     let printOutput = entry.printOutput || entry.output;
+@@ -1380,20 +1389,23 @@ function checkOutputForInputs(hud, input
+       webconsole: hud,
+       messages: [{
+         name: "JS eval output: " + entry.output,
+         text: entry.output,
+         category: CATEGORY_OUTPUT,
+       }],
+     });
+ 
++    let msg = [...result.matched][0];
+     if (!entry.noClick) {
+-      let msg = [...result.matched][0];
+       yield checkObjectClick(entry, msg);
+     }
++    if (typeof entry.inspectorIcon == "boolean") {
++      yield checkLinkToInspector(entry, msg);
++    }
+   }
+ 
+   function checkObjectClick(entry, msg)
+   {
+     let body = msg.querySelector(".body a") || msg.querySelector(".body");
+     ok(body, "the message body");
+ 
+     let deferred = promise.defer();
+@@ -1408,16 +1420,39 @@ function checkOutputForInputs(hud, input
+     if (entry.inspectable) {
+       info("message body tagName '" + body.tagName +  "' className '" + body.className + "'");
+       return deferred.promise; // wait for the panel to open if we need to.
+     }
+ 
+     return promise.resolve(null);
+   }
+ 
++  function checkLinkToInspector(entry, msg)
++  {
++    let elementNodeWidget = [...msg._messageObject.widgets][0];
++    if (!elementNodeWidget) {
++      ok(!entry.inspectorIcon, "The message has no ElementNode widget");
++      return;
++    }
++
++    return elementNodeWidget.linkToInspector().then(() => {
++      // linkToInspector resolved, check for the .open-inspector element
++      if (entry.inspectorIcon) {
++        ok(msg.querySelectorAll(".open-inspector").length,
++          "The ElementNode widget is linked to the inspector");
++      } else {
++        ok(!msg.querySelectorAll(".open-inspector").length,
++          "The ElementNode widget isn't linked to the inspector");
++      }
++    }, () => {
++      // linkToInspector promise rejected, node not linked to inspector
++      ok(!entry.inspectorIcon, "The ElementNode widget isn't linked to the inspector");
++    });
++  }
++
+   function onVariablesViewOpen(entry, deferred, event, view, options)
+   {
+     let label = entry.variablesViewLabel || entry.output;
+     if (typeof label == "string" && options.label != label) {
+       return;
+     }
+     if (label instanceof RegExp && !label.test(options.label)) {
+       return;
+diff --git a/browser/devtools/webconsole/test/test-console-output-dom-elements.html b/browser/devtools/webconsole/test/test-console-output-dom-elements.html
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/test-console-output-dom-elements.html
+@@ -0,0 +1,68 @@
++<!DOCTYPE HTML>
++<html dir="ltr" lang="en-US">
++<head>
++  <meta charset="utf-8">
++  <title>Test the web console output - 05</title>
++  <!--
++  - Any copyright is dedicated to the Public Domain.
++  - http://creativecommons.org/publicdomain/zero/1.0/
++  -->
++</head>
++<body class="body-class" id="body-id">
++  <p some-attribute="some-value">hello world!</p>
++  <iframe src="data:text/html,<p>hello from iframe</p>"></iframe>
++  <script type="text/javascript">
++function testBodyNode() {
++  return document.body;
++}
++
++function testDocumentElement() {
++  return document.documentElement;
++}
++
++function testDocument() {
++  return document;
++}
++
++function testNode() {
++  return document.querySelector("p");
++}
++
++function testNodeList() {
++  return document.querySelectorAll("*");
++}
++
++function testNodeInIframe() {
++  return document.querySelector("iframe").contentWindow.document.querySelector("p");
++}
++
++function testDocumentFragment() {
++  var frag = document.createDocumentFragment();
++
++  var span = document.createElement("span");
++  span.className = 'foo';
++  span.dataset.lolz = 'hehe';
++
++  var div = document.createElement('div')
++  div.id = 'fragdiv';
++
++  frag.appendChild(span);
++  frag.appendChild(div);
++
++  return frag;
++}
++
++function testNodeInDocumentFragment() {
++  var frag = testDocumentFragment();
++  return frag.firstChild;
++}
++
++function testUnattachedNode() {
++  var p = document.createElement("p");
++  p.className = "such-class";
++  p.dataset.data = "such-data";
++  return p;
++}
++  </script>
++</body>
++</html>
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -2357,16 +2357,20 @@ WebConsoleFrame.prototype = {
+   /**
+    * Remove a given message from the output.
+    *
+    * @param nsIDOMNode aNode
+    *        The message node you want to remove.
+    */
+   removeOutputMessage: function WCF_removeOutputMessage(aNode)
+   {
++    if (aNode._messageObject) {
++      aNode._messageObject.destroy();
++    }
++
+     if (aNode._objectActors) {
+       for (let actor of aNode._objectActors) {
+         this._releaseObject(actor);
+       }
+       aNode._objectActors.clear();
+     }
+ 
+     if (aNode.category == CATEGORY_CSS ||
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -209,11 +209,16 @@ emptyPropertiesList=No properties to dis
+ # when you hover the red bubble that shows how many times a message is repeated
+ # in the web console output.
+ # This is a semi-colon list of plural forms.
+ # See: http://developer.mozilla.org/en/docs/Localization_and_Plurals
+ # #1 number of message repeats
+ # example: 3 repeats
+ messageRepeats.tooltip2=#1 repeat;#1 repeats
+ 
++# LOCALIZATION NOTE (openNodeInInspector): the text that is displayed in a
++# tooltip when hovering over the inspector icon next to a DOM Node in the console
++# output
++openNodeInInspector=Click to select the node in the inspector
++
+ # LOCALIZATION NOTE (cdFunctionInvalidArgument): the text that is displayed when
+ # cd() is invoked with an invalid argument.
+ cdFunctionInvalidArgument=Cannot cd() to the given window. Invalid argument.
+diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
+--- a/browser/themes/shared/devtools/webconsole.inc.css
++++ b/browser/themes/shared/devtools/webconsole.inc.css
+@@ -376,16 +376,33 @@ a {
+   text-decoration: none;
+ }
+ 
+ .cm-s-mozilla a[class]:hover,
+ .cm-s-mozilla a[class]:focus {
+   text-decoration: underline;
+ }
+ 
++/* Open DOMNode in inspector button */
++.open-inspector {
++  background: url("chrome://browser/skin/devtools/vview-open-inspector.png") no-repeat 0 0;
++  padding-left: 16px;
++  margin-left: 5px;
++  cursor: pointer;
++}
++
++.elementNode:hover .open-inspector,
++.open-inspector:hover {
++  background-position: -32px 0;
++}
++
++.open-inspector:active {
++  background-position: -16px 0;
++}
++
+ /* Replace these values with CSS variables as available */
+ .theme-dark .jsterm-input-container {
+   background-color: #252c33; /* tabToolbarBackgroundColor */
+   border-color: #14171a; /* mainBackgroundColor */
+ }
+ 
+ .theme-dark .jsterm-input-node {
+   color: #a9bacb; /* textColor */
+diff --git a/toolkit/devtools/server/actors/highlighter.js b/toolkit/devtools/server/actors/highlighter.js
+--- a/toolkit/devtools/server/actors/highlighter.js
++++ b/toolkit/devtools/server/actors/highlighter.js
+@@ -78,17 +78,17 @@ let HighlighterActor = protocol.ActorCla
+    * the highlighter instance to these nodes.
+    *
+    * @param NodeActor The node to be highlighted
+    * @param Options See the request part for existing options. Note that not
+    * all options may be supported by all types of highlighters. The simple
+    * outline highlighter for instance does not scrollIntoView
+    */
+   showBoxModel: method(function(node, options={}) {
+-    if (this._isNodeValidForHighlighting(node.rawNode)) {
++    if (node && this._isNodeValidForHighlighting(node.rawNode)) {
+       this._boxModelHighlighter.show(node.rawNode, options);
+     } else {
+       this._boxModelHighlighter.hide();
+     }
+   }, {
+     request: {
+       node: Arg(0, "domnode"),
+       scrollIntoView: Option(1)
+diff --git a/toolkit/devtools/server/actors/inspector.js b/toolkit/devtools/server/actors/inspector.js
+--- a/toolkit/devtools/server/actors/inspector.js
++++ b/toolkit/devtools/server/actors/inspector.js
+@@ -2046,36 +2046,76 @@ var WalkerActor = protocol.ActorClass({
+     }
+ 
+     // Need to force a release of this node, because those nodes can't
+     // be accessed anymore.
+     this.releaseNode(documentActor, { force: true });
+   },
+ 
+   /**
++   * Check if a node is attached to the DOM tree of the current page.
++   * @param {nsIDomNode} rawNode
++   * @return {Boolean} false if the node is removed from the tree or within a
++   * document fragment
++   */
++  _isInDOMTree: function(rawNode) {
++    let walker = documentWalker(rawNode, this.rootWin);
++    let current = walker.currentNode;
++
++    // Reaching the top of tree
++    while (walker.parentNode()) {
++      current = walker.currentNode;
++    }
++
++    // The top of the tree is a fragment or is not rootDoc, hence rawNode isn't
++    // attached
++    if (current.nodeType === Ci.nsIDOMNode.DOCUMENT_FRAGMENT_NODE ||
++        current !== this.rootDoc) {
++      return false;
++    }
++
++    // Otherwise the top of the tree is rootDoc, hence rawNode is in rootDoc
++    return true;
++  },
++
++  /**
++   * @see _isInDomTree
++   */
++  isInDOMTree: method(function(node) {
++    return node ? this._isInDOMTree(node.rawNode) : false;
++  }, {
++    request: { node: Arg(0, "domnode") },
++    response: { attached: RetVal("boolean") }
++  }),
++
++  /**
+    * Given an ObjectActor (identified by its ID), commonly used in the debugger,
+    * webconsole and variablesView, return the corresponding inspector's NodeActor
+    */
+   getNodeActorFromObjectActor: method(function(objectActorID) {
+-    let debuggerObject = this.conn.poolFor(objectActorID).get(objectActorID).obj;
++    let debuggerObject = this.conn.getActor(objectActorID).obj;
+     let rawNode = debuggerObject.unsafeDereference();
+ 
++    if (!this._isInDOMTree(rawNode)) {
++      return null;
++    }
++
+     // This is a special case for the document object whereby it is considered
+     // as document.documentElement (the <html> node)
+     if (rawNode.defaultView && rawNode === rawNode.defaultView.document) {
+       rawNode = rawNode.documentElement;
+     }
+ 
+     return this.attachElement(rawNode);
+   }, {
+     request: {
+       objectActorID: Arg(0, "string")
+     },
+     response: {
+-      nodeFront: RetVal("disconnectedNode")
++      nodeFront: RetVal("nullable:disconnectedNode")
+     }
+   }),
+ });
+ 
+ /**
+  * Client side of the DOM walker.
+  */
+ var WalkerFront = exports.WalkerFront = protocol.FrontClass(WalkerActor, {
+@@ -2203,17 +2243,17 @@ var WalkerFront = exports.WalkerFront = 
+       return response.node;
+     });
+   }, {
+     impl: "_querySelector"
+   }),
+ 
+   getNodeActorFromObjectActor: protocol.custom(function(objectActorID) {
+     return this._getNodeActorFromObjectActor(objectActorID).then(response => {
+-      return response.node;
++      return response ? response.node : null;
+     });
+   }, {
+     impl: "_getNodeActorFromObjectActor"
+   }),
+ 
+   _releaseFront: function(node, force) {
+     if (node.retained && !force) {
+       node.reparent(null);

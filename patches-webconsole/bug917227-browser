@@ -1,9 +1,76 @@
 # HG changeset patch
-# Parent ee131fc23afd41112fd0275d8b87677a46709103
+# Parent 67ccb76be87c898f9191418d6c772a0f1985384f
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1394050124 -7200
+# Date 1394194493 -7200
 Bug 917227 - Part 1: network monitor client changes; r=ochameau
 
+diff --git a/browser/devtools/framework/test/browser_toolbox_tabsswitch_shortcuts.js b/browser/devtools/framework/test/browser_toolbox_tabsswitch_shortcuts.js
+--- a/browser/devtools/framework/test/browser_toolbox_tabsswitch_shortcuts.js
++++ b/browser/devtools/framework/test/browser_toolbox_tabsswitch_shortcuts.js
+@@ -6,22 +6,25 @@ let Toolbox = devtools.Toolbox;
+ let toolbox, toolIDs, idIndex, secondTime = false,
+     reverse = false, nextKey = null, prevKey = null;
+ 
+ function test() {
+   waitForExplicitFinish();
+ 
+   addTab("about:blank", function() {
+     let target = TargetFactory.forTab(gBrowser.selectedTab);
+-    toolIDs = gDevTools.getToolDefinitionArray()
+-                .filter(def => def.isTargetSupported(target))
+-                .map(def => def.id);
+     idIndex = 0;
+-    gDevTools.showToolbox(target, toolIDs[0], Toolbox.HostType.BOTTOM)
+-             .then(testShortcuts);
++
++    target.makeRemote().then(() => {
++      toolIDs = gDevTools.getToolDefinitionArray()
++                  .filter(def => def.isTargetSupported(target))
++                  .map(def => def.id);
++      gDevTools.showToolbox(target, toolIDs[0], Toolbox.HostType.BOTTOM)
++               .then(testShortcuts);
++    });
+   });
+ }
+ 
+ function testShortcuts(aToolbox, aIndex) {
+   if (aIndex == toolIDs.length) {
+     aIndex = 0;
+     if (secondTime) {
+       secondTime = false;
+diff --git a/browser/devtools/framework/test/browser_toolbox_tool_ready.js b/browser/devtools/framework/test/browser_toolbox_tool_ready.js
+--- a/browser/devtools/framework/test/browser_toolbox_tool_ready.js
++++ b/browser/devtools/framework/test/browser_toolbox_tool_ready.js
+@@ -1,13 +1,17 @@
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ function test() {
+   addTab().then(function(data) {
++    data.target.makeRemote().then(performChecks.bind(null, data));
++  }).then(null, console.error);
++
++  function performChecks(data) {
+     let toolIds = gDevTools.getToolDefinitionArray()
+                     .filter(def => def.isTargetSupported(data.target))
+                     .map(def => def.id);
+ 
+     let open = function(index) {
+       let toolId = toolIds[index];
+ 
+       info("About to open " + index + "/" + toolId);
+@@ -27,10 +31,10 @@ function test() {
+         }
+         else {
+           open(nextIndex);
+         }
+       }, console.error);
+     };
+ 
+     open(0);
+-  }).then(null, console.error);
++  }
+ }
 diff --git a/browser/devtools/framework/toolbox.js b/browser/devtools/framework/toolbox.js
 --- a/browser/devtools/framework/toolbox.js
 +++ b/browser/devtools/framework/toolbox.js
