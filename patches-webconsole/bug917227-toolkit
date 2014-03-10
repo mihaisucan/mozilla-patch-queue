@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent c01985aa106682c0e9f4ed97f4731b0e5a53c2c6
+# Parent 5efe8f29f5f9f54329ed96858dbb60e2c7342297
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1394121701 -7200
+# Date 1394477847 -7200
 
 Bug 917227 - Part 2: network monitor server changes to add support for Firefox OS; r=ochameau; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-bc,mochitest-o -t none
 
 diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/dbg-client.jsm
 --- a/toolkit/devtools/client/dbg-client.jsm
 +++ b/toolkit/devtools/client/dbg-client.jsm
-@@ -441,17 +441,18 @@ DebuggerClient.prototype = {
+@@ -444,17 +444,18 @@ DebuggerClient.prototype = {
     *        Called with the response packet and a TabClient
     *        (which will be undefined on error).
     */
@@ -28,7 +28,7 @@ diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/db
      let packet = {
        to: aTabActor,
        type: "attach"
-@@ -486,17 +487,17 @@ DebuggerClient.prototype = {
+@@ -514,17 +515,17 @@ DebuggerClient.prototype = {
      };
  
      this.request(packet, (aResponse) => {
@@ -47,7 +47,7 @@ diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/db
    },
  
    /**
-@@ -946,16 +947,17 @@ SSProto.translatePacket = function (aPac
+@@ -979,16 +980,17 @@ SSProto.translatePacket = function (aPac
  function TabClient(aClient, aForm) {
    this.client = aClient;
    this._actor = aForm.from;
@@ -68,50 +68,24 @@ diff --git a/toolkit/devtools/client/dbg-client.jsm b/toolkit/devtools/client/db
 diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/server/actors/childtab.js
 --- a/toolkit/devtools/server/actors/childtab.js
 +++ b/toolkit/devtools/server/actors/childtab.js
-@@ -14,26 +14,42 @@
-  * Creates a tab actor for handling requests to the single tab, like
-  * attaching and detaching. ContentAppActor respects the actor factories
-  * registered with DebuggerServer.addTabActor.
-  *
-  * @param connection DebuggerServerConnection
+@@ -19,16 +19,17 @@
   *        The conection to the client.
-  * @param browser browser
-  *        The browser instance that contains this tab.
-+ * @param number appId
-+ *        The web application ID for the content app actor.
-+ * @param nsIMessageManager messageManager
-+ *        THe message manager of the app content process.
+  * @param chromeGlobal
+  *        The content script global holding |content| and |docShell| properties for a tab.
   */
--function ContentAppActor(connection, browser)
-+function ContentAppActor(connection, browser, appId, messageManager)
+ function ContentActor(connection, chromeGlobal)
  {
-   BrowserTabActor.call(this, connection, browser);
-+  this.appId = appId;
-+  this.messageManager = messageManager;
+   TabActor.call(this, connection, chromeGlobal);
+   this._chromeGlobal = chromeGlobal;
++  this.traits.reconfigure = false;
  }
  
- ContentAppActor.prototype = Object.create(BrowserTabActor.prototype);
+ ContentActor.prototype = Object.create(TabActor.prototype);
  
- ContentAppActor.prototype.constructor = ContentAppActor;
+ ContentActor.prototype.constructor = ContentActor;
  
-+ContentAppActor.prototype.onAttach = function()
-+{
-+  let result = BrowserTabActor.prototype.onAttach.apply(this, arguments);
-+  if (result.traits) {
-+    result.traits.reconfigure = false;
-+  }
-+  return result;
-+};
-+ContentAppActor.prototype.requestTypes.attach = ContentAppActor.prototype.onAttach;
-+
- Object.defineProperty(ContentAppActor.prototype, "title", {
+ Object.defineProperty(ContentActor.prototype, "docShell", {
    get: function() {
-     return this.browser.title;
-   },
-   enumerable: true,
-   configurable: false
- });
- 
 diff --git a/toolkit/devtools/server/actors/root.js b/toolkit/devtools/server/actors/root.js
 --- a/toolkit/devtools/server/actors/root.js
 +++ b/toolkit/devtools/server/actors/root.js
@@ -163,69 +137,67 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
    Cc["@mozilla.org/consoleservice;1"]
      .getService(Ci.nsIConsoleService)
      .logStringMessage("--*-- WebappsActor : " + aMsg);
-@@ -791,16 +799,17 @@ WebappsActor.prototype = {
+@@ -817,23 +825,29 @@ WebappsActor.prototype = {
  
-   _connectToApp: function (aFrame) {
-     let deferred = Promise.defer();
- 
-     let mm = aFrame.QueryInterface(Ci.nsIFrameLoaderOwner).frameLoader.messageManager;
-     mm.loadFrameScript("resource://gre/modules/devtools/server/child.js", false);
- 
-     let childTransport, prefix;
-+    let netMonitor;
- 
-     let onActorCreated = DevToolsUtils.makeInfallible(function (msg) {
-       mm.removeMessageListener("debug:actor", onActorCreated);
- 
-       dump("***** Got debug:actor\n");
-       let { actor, appId } = msg.json;
-       prefix = msg.json.prefix;
- 
-@@ -813,16 +822,18 @@ WebappsActor.prototype = {
-       childTransport.ready();
- 
-       this.conn.setForwarding(prefix, childTransport);
- 
-       debug("establishing forwarding for app with prefix " + prefix);
- 
-       this._appActorsMap.set(mm, actor);
- 
-+      netMonitor = new NetworkMonitorManager(aFrame);
-+
-       deferred.resolve(actor);
-     }).bind(this);
-     mm.addMessageListener("debug:actor", onActorCreated);
- 
-     let onMessageManagerDisconnect = DevToolsUtils.makeInfallible(function (subject, topic, data) {
-       if (subject == mm) {
-         Services.obs.removeObserver(onMessageManagerDisconnect, topic);
-         if (childTransport) {
-@@ -840,16 +851,21 @@ WebappsActor.prototype = {
-         if (actor) {
-           // The ContentAppActor within the child process doesn't necessary
-           // have to time to uninitialize itself when the app is closed/killed.
-           // So ensure telling the client that the related actor is detached.
-           this.conn.send({ from: actor.actor,
-                            type: "tabDetached" });
-           this._appActorsMap.delete(mm);
-         }
-+
-+        if (netMonitor) {
-+          netMonitor.destroy();
-+          netMonitor = null;
-+        }
+       // Only create a new actor, if we haven't already
+       // instanciated one for this connection.
+       let map = this._appActorsMap;
+       let mm = appFrame.QueryInterface(Ci.nsIFrameLoaderOwner)
+                        .frameLoader
+                        .messageManager;
+       let actor = map.get(mm);
++      let netMonitor = null;
+       if (!actor) {
+         let onConnect = actor => {
+           map.set(mm, actor);
++          netMonitor = new NetworkMonitorManager(appFrame);
+           return { actor: actor };
+         };
+         let onDisconnect = mm => {
+           map.delete(mm);
++          if (netMonitor) {
++            netMonitor.destroy();
++            netMonitor = null;
++          }
+         };
+         return DebuggerServer.connectToChild(this.conn, mm, onDisconnect)
+                              .then(onConnect);
        }
-     }).bind(this);
-     Services.obs.addObserver(onMessageManagerDisconnect,
-                              "message-manager-disconnect", false);
  
-     let prefixStart = this.conn.prefix + "child";
-     mm.sendAsyncMessage("debug:connect", { prefix: prefixStart });
- 
+       return { actor: actor };
+     });
+   },
 diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/server/actors/webbrowser.js
 --- a/toolkit/devtools/server/actors/webbrowser.js
 +++ b/toolkit/devtools/server/actors/webbrowser.js
-@@ -711,17 +711,18 @@ BrowserTabActor.prototype = {
+@@ -489,22 +489,26 @@ function TabActor(aConnection, aChromeEv
+ {
+   this.conn = aConnection;
+   this._chromeEventHandler = aChromeEventHandler;
+   this._tabActorPool = null;
+   // A map of actor names to actor instances provided by extensions.
+   this._extraActors = {};
+ 
+   this._onWindowCreated = this.onWindowCreated.bind(this);
++
++  this.traits = { reconfigure: true };
+ }
+ 
+ // XXX (bug 710213): TabActor attach/detach/exit/disconnect is a
+ // *complete* mess, needs to be rethought asap.
+ 
+ TabActor.prototype = {
++  traits: null,
++
+   get exited() { return !this._chromeEventHandler; },
+   get attached() { return !!this._attached; },
+ 
+   _tabPool: null,
+   get tabActorPool() { return this._tabPool; },
+ 
+   _contextPool: null,
+   get contextActorPool() { return this._contextPool; },
+@@ -730,17 +734,18 @@ TabActor.prototype = {
      }
  
      this._attach();
@@ -236,7 +208,7 @@ diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/ser
        cacheEnabled: this._getCacheEnabled(),
 -      javascriptEnabled: this._getJavascriptEnabled()
 +      javascriptEnabled: this._getJavascriptEnabled(),
-+      traits: { reconfigure: true },
++      traits: this.traits,
      };
    },
  
@@ -293,7 +265,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
    }
 +
 +  this.traits = {
-+    customNetworkRequest: !this._parentIsContentAppActor,
++    customNetworkRequest: !this._parentIsContentActor,
 +  };
  }
  
@@ -318,14 +290,14 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +  traits: null,
 +
 +  /**
-+   * Boolean getter that tells if the parent actor is a ContentAppActor.
++   * Boolean getter that tells if the parent actor is a ContentActor.
 +   *
 +   * @private
 +   * @type boolean
 +   */
-+  get _parentIsContentAppActor() {
-+    return "ContentAppActor" in DebuggerServer &&
-+            this.parentActor instanceof DebuggerServer.ContentAppActor;
++  get _parentIsContentActor() {
++    return "ContentActor" in DebuggerServer &&
++            this.parentActor instanceof DebuggerServer.ContentActor;
 +  },
 +
 +  /**
@@ -373,10 +345,10 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +    let appId = null;
 +    let messageManager = null;
 +
-+    if (this._parentIsContentAppActor) {
++    if (this._parentIsContentActor) {
 +      // Filter network requests by appId on Firefox OS devices.
-+      appId = this.parentActor.appId;
-+      messageManager = this.parentActor.messageManager;
++      appId = this.parentActor.docShell.appId;
++      messageManager = this.parentActor._chromeGlobal;
 +    }
  
      while (aRequest.listeners.length > 0) {
@@ -493,29 +465,6 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
        this._netEvents.delete(aChannel);
        actor.channel = null;
        return actor;
-diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
---- a/toolkit/devtools/server/child.js
-+++ b/toolkit/devtools/server/child.js
-@@ -25,17 +25,18 @@
-     removeMessageListener("debug:connect", onConnect);
- 
-     let mm = msg.target;
- 
-     let prefix = msg.data.prefix + docShell.appId;
- 
-     let conn = DebuggerServer.connectToParent(prefix, mm);
- 
--    let actor = new DebuggerServer.ContentAppActor(conn, content);
-+    let actor = new DebuggerServer.ContentAppActor(conn, content,
-+                                                   docShell.appId, mm);
-     let actorPool = new ActorPool(conn);
-     actorPool.addActor(actor);
-     conn.addActorPool(actorPool);
- 
-     sendAsyncMessage("debug:actor", {actor: actor.grip(),
-                                      appId: docShell.appId,
-                                      prefix: prefix});
-   });
 diff --git a/toolkit/devtools/webconsole/client.js b/toolkit/devtools/webconsole/client.js
 --- a/toolkit/devtools/webconsole/client.js
 +++ b/toolkit/devtools/webconsole/client.js
@@ -2121,7 +2070,7 @@ diff --git a/toolkit/devtools/webconsole/utils.js b/toolkit/devtools/webconsole/
  loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
  loader.lazyImporter(this, "DevToolsUtils", "resource://gre/modules/devtools/DevToolsUtils.jsm");
  
-@@ -1621,1167 +1615,16 @@ function JSTermHelpers(aOwner)
+@@ -1672,1167 +1666,16 @@ function JSTermHelpers(aOwner)
    aOwner.sandbox.print = function JSTH_print(aString)
    {
      aOwner.helperResult = { rawOutput: true };

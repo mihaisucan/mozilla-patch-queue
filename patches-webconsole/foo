@@ -1,208 +1,71 @@
 # HG changeset patch
-# Parent 7b57f2adea12d7eb603dfde000fdd04db65e22d8
+# Parent d7887e38fa59728eae6242297f77c8e6cfb560a2
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1394213575 -7200
-Bug 980835 - Fix for intermittent | browser_webconsole_output_dom_elements_02.js | The current inspector selection is correct - Got [object HTMLParagraphElement], expected [object HTMLBodyElement]; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+# Date 1394479105 -7200
 
-diff --git a/browser/devtools/styleinspector/style-inspector.js b/browser/devtools/styleinspector/style-inspector.js
---- a/browser/devtools/styleinspector/style-inspector.js
-+++ b/browser/devtools/styleinspector/style-inspector.js
-@@ -85,16 +85,20 @@ function RuleViewTool(aInspector, aWindo
+diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server/actors/webapps.js
+--- a/toolkit/devtools/server/actors/webapps.js
++++ b/toolkit/devtools/server/actors/webapps.js
+@@ -142,16 +142,21 @@ WebappsActor.prototype = {
  
-   this.onSelect();
- }
+   disconnect: function () {
+     // When we stop using this actor, we should ensure removing all files.
+     for (let upload of this._uploads) {
+       upload.remove();
+     }
+     this._uploads = null;
  
- exports.RuleViewTool = RuleViewTool;
- 
- RuleViewTool.prototype = {
-   onSelect: function RVT_onSelect(aEvent) {
-+    if (!this.view) {
-+      // Skip the event if RuleViewTool has been destroyed.
-+      return;
++    for (var mm of this._appActorsMap.keys()) {
++      mm.sendAsyncMessage("debug:disconnect", null);
++      dump("Sent disconnect!\n");
 +    }
-     this.view.setPageStyle(this.inspector.pageStyle);
- 
-     if (!this.inspector.selection.isConnected() ||
-         !this.inspector.selection.isElementNode()) {
-       this.view.highlight(null);
-       return;
-     }
- 
-@@ -153,16 +157,20 @@ function ComputedViewTool(aInspector, aW
-   this.onSelect();
- }
- 
- exports.ComputedViewTool = ComputedViewTool;
- 
- ComputedViewTool.prototype = {
-   onSelect: function CVT_onSelect(aEvent)
-   {
-+    if (!this.view) {
-+      // Skip the event if ComputedViewTool has been destroyed.
-+      return;
-+    }
-     this.view.setPageStyle(this.inspector.pageStyle);
- 
-     if (!this.inspector.selection.isConnected() ||
-         !this.inspector.selection.isElementNode()) {
-       this.view.highlight(null);
-       return;
-     }
- 
-diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
---- a/browser/devtools/webconsole/console-output.js
-+++ b/browser/devtools/webconsole/console-output.js
-@@ -515,20 +515,22 @@ Messages.BaseMessage.prototype = {
-    */
-   _onClickAnchor: function(event)
-   {
-     this.output.openLink(event.target.href);
-   },
- 
-   destroy: function()
-   {
-+    console.log("message destroy");
-     // Destroy all widgets that have registered themselves in this.widgets
-     for (let widget of this.widgets) {
-       widget.destroy();
-     }
-+    this.widgets.clear();
-   }
- }; // Messages.BaseMessage.prototype
- 
- 
- /**
-  * The NavigationMarker is used to show a page load event.
-  *
-  * @constructor
-@@ -2158,16 +2160,17 @@ Widgets.ObjectRenderers.add({
-       this._anchor(str);
-     }
- 
-     this._text(" ]");
-   },
- 
-   _renderElementNode: function()
-   {
-+    console.log("DOMNode widget _renderElementNode");
-     let doc = this.document;
-     let {attributes, nodeName} = this.objectActor.preview;
- 
-     this.element = this.el("span." + "kind-" + this.objectActor.preview.kind + ".elementNode");
- 
-     let openTag = this.el("span.cm-tag");
-     openTag.textContent = "<";
-     this.element.appendChild(openTag);
-@@ -2219,16 +2222,18 @@ Widgets.ObjectRenderers.add({
-     }
- 
-     this._linkedToInspector = Task.spawn(function*() {
-       // Checking the node type
-       if (this.objectActor.preview.nodeType !== Ci.nsIDOMNode.ELEMENT_NODE) {
-         throw null;
-       }
- 
-+      console.log("DOMNode widget linkToInspector task");
 +
-       // Checking the presence of a toolbox
-       let target = this.message.output.toolboxTarget;
-       this.toolbox = gDevTools.getToolbox(target);
-       if (!this.toolbox) {
-         throw null;
-       }
- 
-       // Checking that the inspector supports the node
-@@ -2293,38 +2298,47 @@ Widgets.ObjectRenderers.add({
-    * @return a promise that resolves when the inspector has been switched to
-    * and the node has been selected, or rejects if the node cannot be selected
-    * (detached from the DOM). Note that in any case, the inspector panel will
-    * be switched to.
-    */
-   openNodeInInspector: function()
-   {
-     return Task.spawn(function*() {
-+      console.log("DOMNode widget openNodeInInspector");
-       yield this.linkToInspector();
-+      console.log("DOMNode widget openNodeInInspector linkedToInspector");
-       yield this.toolbox.selectTool("inspector");
-+      console.log("DOMNode widget openNodeInInspector inspector selected");
- 
-       let isAttached = yield this.toolbox.walker.isInDOMTree(this._nodeFront);
-+      console.log("DOMNode widget openNodeInInspector isAttached", isAttached, !!this.toolbox);
-       if (isAttached) {
-         let onReady = this.toolbox.inspector.once("inspector-updated");
-         yield this.toolbox.selection.setNodeFront(this._nodeFront, "console");
-+        console.log("DOMNode widget openNodeInInspector after setNodeFront");
-         yield onReady;
-+        console.log("DOMNode widget openNodeInInspector inspector-updated");
-       } else {
-         throw null;
-       }
-     }.bind(this));
+     this.conn.removeActorPool(this._actorPool);
+     this._actorPool = null;
+     this.conn = null;
    },
  
-   destroy: function()
-   {
-     if (this.toolbox && this._nodeFront) {
-+      console.log("DOMNode widget destroy (with toolbox and nodeFront)");
-       this.element.removeEventListener("mouseover", this.highlightDomNode, false);
-       this.element.removeEventListener("mouseout", this.unhighlightDomNode, false);
-       this._openInspectorNode.removeEventListener("mousedown", this.openNodeInInspector, true);
-       this.toolbox = null;
-       this._nodeFront = null;
-+    } else {
-+      console.log("DOMNode widget destroy");
-     }
-   },
- }); // Widgets.ObjectRenderers.byKind.DOMNode
+   _registerApp: function wa_actorRegisterApp(aDeferred, aApp, aId, aDir) {
+     debug("registerApp");
+     let reg = DOMApplicationRegistry;
+diff --git a/toolkit/devtools/server/child.js b/toolkit/devtools/server/child.js
+--- a/toolkit/devtools/server/child.js
++++ b/toolkit/devtools/server/child.js
+@@ -17,26 +17,36 @@ let chromeGlobal = this;
+     DebuggerServer.init();
+   }
  
- /**
-  * The widget used for displaying generic JS object previews.
-  */
- Widgets.ObjectRenderers.add({
-diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js
---- a/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js
-+++ b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js
-@@ -33,18 +33,19 @@ const TEST_DATA = [
- function test() {
-   Task.spawn(function*() {
-     let {tab} = yield loadTab(TEST_URI);
-     let hud = yield openConsole(tab);
-     let toolbox = gDevTools.getToolbox(hud.target);
+   // In case of apps being loaded in parent process, DebuggerServer is already
+   // initialized, but child specific actors are not registered.
+   // Otherwise, for apps in child process, we need to load actors the first
+   // time we load child.js
+   DebuggerServer.addChildActors();
++  let conn;
  
-     // Loading the inspector panel at first, to make it possible to listen for
-     // new node selections
--    yield toolbox.loadTool("inspector");
--    let inspector = toolbox.getPanel("inspector");
-+    yield toolbox.selectTool("inspector");
-+    let inspector = toolbox.getCurrentPanel();
-+    yield toolbox.selectTool("webconsole");
+   let onConnect = DevToolsUtils.makeInfallible(function (msg) {
+     removeMessageListener("debug:connect", onConnect);
  
-     info("Iterating over the test data");
-     for (let data of TEST_DATA) {
-       let [result] = yield jsEval(data.input, hud, {text: data.output});
-       let {widget, msg} = yield getWidgetAndMessage(result);
+     let mm = msg.target;
  
-       let inspectorIcon = msg.querySelector(".open-inspector");
-       ok(inspectorIcon, "Inspector icon found in the ElementNode widget");
-@@ -55,18 +56,18 @@ function test() {
+-    let conn = DebuggerServer.connectToParent(msg.data.prefix, mm);
++    conn = DebuggerServer.connectToParent(msg.data.prefix, mm);
  
-       EventUtils.synthesizeMouseAtCenter(inspectorIcon, {},
-         inspectorIcon.ownerDocument.defaultView);
-       yield onInspectorSelected;
-       yield onInspectorUpdated;
-       ok(true, "Inspector selected and new node got selected");
+     let actor = new DebuggerServer.ContentActor(conn, chromeGlobal);
+     let actorPool = new ActorPool(conn);
+     actorPool.addActor(actor);
+     conn.addActorPool(actorPool);
  
-       let rawNode = content.wrappedJSObject[data.input.replace(/\(\)/g, "")]();
--      is(rawNode, inspector.selection.node.wrappedJSObject,
--        "The current inspector selection is correct");
-+      is(inspector.selection.node.wrappedJSObject, rawNode,
-+         "The current inspector selection is correct");
+     sendAsyncMessage("debug:actor", {actor: actor.grip()});
+   });
  
-       info("Switching back to the console");
-       yield toolbox.selectTool("webconsole");
-     }
-   }).then(finishTest);
- }
- 
- function jsEval(input, hud, message) {
++  let onDisconnect = DevToolsUtils.makeInfallible(function (msg) {
++    dump("onDisconnect\n");
++    removeMessageListener("debug:disconnect", onDisconnect);
++    conn.onClosed();
++    conn = null;
++    dump("onDisconnect done\n");
++  });
++
+   addMessageListener("debug:connect", onConnect);
++  addMessageListener("debug:disconnect", onDisconnect);
+ })();

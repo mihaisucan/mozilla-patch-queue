@@ -1,0 +1,125 @@
+
+# HG changeset patch
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1394313239 -7200
+# Node ID 3d8d5d2cb3848e413dabd47ed8bcc10d4464599c
+# Parent bc2b15cc6d36f9a43080821987ce6e7fe3e89388
+Bug 980835 - Fix for intermittent | browser_webconsole_output_dom_elements_02.js | The current inspector selection is correct - Got [object HTMLParagraphElement], expected [object HTMLBodyElement]; r=me; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/styleinspector/style-inspector.js b/browser/devtools/styleinspector/style-inspector.js
+--- a/browser/devtools/styleinspector/style-inspector.js
++++ b/browser/devtools/styleinspector/style-inspector.js
+@@ -85,16 +85,20 @@ function RuleViewTool(aInspector, aWindo
+ 
+   this.onSelect();
+ }
+ 
+ exports.RuleViewTool = RuleViewTool;
+ 
+ RuleViewTool.prototype = {
+   onSelect: function RVT_onSelect(aEvent) {
++    if (!this.view) {
++      // Skip the event if RuleViewTool has been destroyed.
++      return;
++    }
+     this.view.setPageStyle(this.inspector.pageStyle);
+ 
+     if (!this.inspector.selection.isConnected() ||
+         !this.inspector.selection.isElementNode()) {
+       this.view.highlight(null);
+       return;
+     }
+ 
+@@ -153,16 +157,20 @@ function ComputedViewTool(aInspector, aW
+   this.onSelect();
+ }
+ 
+ exports.ComputedViewTool = ComputedViewTool;
+ 
+ ComputedViewTool.prototype = {
+   onSelect: function CVT_onSelect(aEvent)
+   {
++    if (!this.view) {
++      // Skip the event if ComputedViewTool has been destroyed.
++      return;
++    }
+     this.view.setPageStyle(this.inspector.pageStyle);
+ 
+     if (!this.inspector.selection.isConnected() ||
+         !this.inspector.selection.isElementNode()) {
+       this.view.highlight(null);
+       return;
+     }
+ 
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -519,16 +519,17 @@ Messages.BaseMessage.prototype = {
+   },
+ 
+   destroy: function()
+   {
+     // Destroy all widgets that have registered themselves in this.widgets
+     for (let widget of this.widgets) {
+       widget.destroy();
+     }
++    this.widgets.clear();
+   }
+ }; // Messages.BaseMessage.prototype
+ 
+ 
+ /**
+  * The NavigationMarker is used to show a page load event.
+  *
+  * @constructor
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_output_dom_elements_02.js
+@@ -33,40 +33,43 @@ const TEST_DATA = [
+ function test() {
+   Task.spawn(function*() {
+     let {tab} = yield loadTab(TEST_URI);
+     let hud = yield openConsole(tab);
+     let toolbox = gDevTools.getToolbox(hud.target);
+ 
+     // Loading the inspector panel at first, to make it possible to listen for
+     // new node selections
+-    yield toolbox.loadTool("inspector");
+-    let inspector = toolbox.getPanel("inspector");
++    yield toolbox.selectTool("inspector");
++    let inspector = toolbox.getCurrentPanel();
++    yield toolbox.selectTool("webconsole");
+ 
+     info("Iterating over the test data");
+     for (let data of TEST_DATA) {
+       let [result] = yield jsEval(data.input, hud, {text: data.output});
+       let {widget, msg} = yield getWidgetAndMessage(result);
+ 
+       let inspectorIcon = msg.querySelector(".open-inspector");
+       ok(inspectorIcon, "Inspector icon found in the ElementNode widget");
+ 
+       info("Clicking on the inspector icon and waiting for the inspector to be selected");
+       let onInspectorSelected = toolbox.once("inspector-selected");
+       let onInspectorUpdated = inspector.once("inspector-updated");
++      let onNewNode = toolbox.selection.once("new-node");
+ 
+       EventUtils.synthesizeMouseAtCenter(inspectorIcon, {},
+         inspectorIcon.ownerDocument.defaultView);
+       yield onInspectorSelected;
+       yield onInspectorUpdated;
++      yield onNewNode;
+       ok(true, "Inspector selected and new node got selected");
+ 
+       let rawNode = content.wrappedJSObject[data.input.replace(/\(\)/g, "")]();
+-      is(rawNode, inspector.selection.node.wrappedJSObject,
+-        "The current inspector selection is correct");
++      is(inspector.selection.node.wrappedJSObject, rawNode,
++         "The current inspector selection is correct");
+ 
+       info("Switching back to the console");
+       yield toolbox.selectTool("webconsole");
+     }
+   }).then(finishTest);
+ }
+ 
+ function jsEval(input, hud, message) {
