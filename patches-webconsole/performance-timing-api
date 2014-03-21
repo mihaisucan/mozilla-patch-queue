@@ -1,0 +1,93 @@
+# HG changeset patch
+# Parent d5ed56d8a9045b34fa6954d180466f2d817c312b
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1395433761 -7200
+
+diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/webconsole/network-monitor.js
+--- a/toolkit/devtools/webconsole/network-monitor.js
++++ b/toolkit/devtools/webconsole/network-monitor.js
+@@ -889,67 +889,47 @@ NetworkMonitor.prototype = {
+    *        The HTTP activity object we are working with.
+    * @return object
+    *         This object holds two properties:
+    *         - total - the total time for all of the request and response.
+    *         - timings - the HAR timings object.
+    */
+   _setupHarTimings: function NM__setupHarTimings(aHttpActivity)
+   {
++    let channel = aHttpActivity.channel.QueryInterface(Ci.nsITimedChannel);
++    console.log("_setupHarTimings 1", channel);
+     let timings = aHttpActivity.timings;
+     let harTimings = {};
+ 
+-    // Not clear how we can determine "blocked" time.
+-    harTimings.blocked = -1;
++    let unload = channel.unloadEnd - channel.unloadStart;
++    let timeToStartConnection = channel.connectStartTime - channel.navigationStartTime;
+ 
+     // DNS timing information is available only in when the DNS record is not
+     // cached.
+-    harTimings.dns = timings.STATUS_RESOLVING && timings.STATUS_RESOLVED ?
+-                     timings.STATUS_RESOLVED.last -
+-                     timings.STATUS_RESOLVING.first : -1;
++    harTimings.dns = channel.domainLookupEndTime - channel.domainLookupStartTime;
+ 
+-    if (timings.STATUS_CONNECTING_TO && timings.STATUS_CONNECTED_TO) {
+-      harTimings.connect = timings.STATUS_CONNECTED_TO.last -
+-                           timings.STATUS_CONNECTING_TO.first;
+-    }
+-    else if (timings.STATUS_SENDING_TO) {
+-      harTimings.connect = timings.STATUS_SENDING_TO.first -
+-                           timings.REQUEST_HEADER.first;
+-    }
+-    else {
+-      harTimings.connect = -1;
+-    }
++    harTimings.redirect = channel.redirectEnd - channel.redirectStart;
++    harTimings.blocked = timeToStartConnection - unload - harTimings.redirect - harTimings.dns;
+ 
+-    if ((timings.STATUS_WAITING_FOR || timings.STATUS_RECEIVING_FROM) &&
+-        (timings.STATUS_CONNECTED_TO || timings.STATUS_SENDING_TO)) {
+-      harTimings.send = (timings.STATUS_WAITING_FOR ||
+-                         timings.STATUS_RECEIVING_FROM).first -
+-                        (timings.STATUS_CONNECTED_TO ||
+-                         timings.STATUS_SENDING_TO).last;
+-    }
+-    else {
+-      harTimings.send = -1;
+-    }
++    harTimings.connect = channel.connectEndTime - channel.connectStartTime;
+ 
+-    if (timings.RESPONSE_START) {
+-      harTimings.wait = timings.RESPONSE_START.first -
+-                        (timings.REQUEST_BODY_SENT ||
+-                         timings.STATUS_SENDING_TO).last;
++    let waitingFor = timings.STATUS_WAITING_FOR ?
++                     timings.STATUS_WAITING_FOR.first : channel.responseStartTime;
++    harTimings.send = waitingFor - channel.requestStartTime;
++
++    if (timings.STATUS_WAITING_FOR) {
++      harTimings.wait = (channel.responseStartTime - channel.requestStartTime) -
++                        harTimings.send;
+     }
+     else {
+       harTimings.wait = -1;
+     }
+ 
+-    if (timings.RESPONSE_START && timings.RESPONSE_COMPLETE) {
+-      harTimings.receive = timings.RESPONSE_COMPLETE.last -
+-                           timings.RESPONSE_START.first;
+-    }
+-    else {
+-      harTimings.receive = -1;
+-    }
++    harTimings.receive = channel.responseEndTime - channel.responseStartTime;
++    console.log("_setupHarTimings 2", harTimings);
+ 
+     let totalTime = 0;
+     for (let timing in harTimings) {
+       let time = Math.max(Math.round(harTimings[timing] / 1000), -1);
+       harTimings[timing] = time;
+       if (time > -1) {
+         totalTime += time;
+       }
