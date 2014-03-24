@@ -1,0 +1,146 @@
+# HG changeset patch
+# Parent 4c27e704949b6fef1f3f2d16f2b8b557e4c5c186
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1395695182 -7200
+
+Bug 981707 - Allow the codemirror test harness to report PASS/FAIL messages to the Mozilla test harness; r=harth; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/devtools/sourceeditor/test/browser_codemirror.js b/browser/devtools/sourceeditor/test/browser_codemirror.js
+--- a/browser/devtools/sourceeditor/test/browser_codemirror.js
++++ b/browser/devtools/sourceeditor/test/browser_codemirror.js
+@@ -16,20 +16,23 @@ function test() {
+ 
+   let browser = gBrowser.getBrowserForTab(tab);
+   browser.loadURI(URI);
+ 
+   function check() {
+     var win = browser.contentWindow.wrappedJSObject;
+     var doc = win.document;
+     var out = doc.getElementById("status");
++    if (out && !win.mozilla_setStatus)
++      win.mozilla_setStatus = codeMirror_setStatus;
+ 
+     if (!out || !out.classList.contains("done"))
+       return void setTimeout(check, 100);
+ 
+     ok(!win.failed, "CodeMirror tests all passed");
++    win.mozilla_setStatus = null;
+ 
+     while (gBrowser.tabs.length > 1) gBrowser.removeCurrentTab();
+     finish();
+   }
+ 
+   setTimeout(check, 100);
+-}
+\ No newline at end of file
++}
+diff --git a/browser/devtools/sourceeditor/test/browser_vimemacs.js b/browser/devtools/sourceeditor/test/browser_vimemacs.js
+--- a/browser/devtools/sourceeditor/test/browser_vimemacs.js
++++ b/browser/devtools/sourceeditor/test/browser_vimemacs.js
+@@ -15,20 +15,23 @@ function test() {
+ 
+   let browser = gBrowser.getBrowserForTab(tab);
+   browser.loadURI(URI);
+ 
+   function check() {
+     var win = browser.contentWindow.wrappedJSObject;
+     var doc = win.document;
+     var out = doc.getElementById("status");
++    if (out && !win.mozilla_setStatus)
++      win.mozilla_setStatus = codeMirror_setStatus;
+ 
+     if (!out || !out.classList.contains("done"))
+       return void setTimeout(check, 100);
+ 
+     ok(!win.failed, "CodeMirror tests all passed");
++    win.mozilla_setStatus = null;
+ 
+     while (gBrowser.tabs.length > 1) gBrowser.removeCurrentTab();
+     finish();
+   }
+ 
+   setTimeout(check, 100);
+-}
+\ No newline at end of file
++}
+diff --git a/browser/devtools/sourceeditor/test/codemirror.html b/browser/devtools/sourceeditor/test/codemirror.html
+--- a/browser/devtools/sourceeditor/test/codemirror.html
++++ b/browser/devtools/sourceeditor/test/codemirror.html
+@@ -197,16 +197,18 @@
+             message = "All passed";
+             if (skipped) {
+               message += " (" + skipped + " skipped)";
+             }
+           }
+           progressTotal.nodeValue = '';
+           customMessage = true; // Hack to avoid adding to output
+         }
++        if (window.mozilla_setStatus)
++          mozilla_setStatus(message, type, customMessage);
+         if (verbose && !customMessage)  customMessage = message;
+         setStatus(message, type);
+         if (customMessage && customMessage.length > 0) {
+           addOutput(name, type, customMessage);
+         }
+       }
+     </script>
+   </body>
+diff --git a/browser/devtools/sourceeditor/test/head.js b/browser/devtools/sourceeditor/test/head.js
+--- a/browser/devtools/sourceeditor/test/head.js
++++ b/browser/devtools/sourceeditor/test/head.js
+@@ -75,8 +75,33 @@ function read(url) {
+   scriptableStream.init(input);
+ 
+   let data = scriptableStream.read(input.available());
+   scriptableStream.close();
+   input.close();
+ 
+   return data;
+ }
++
++/**
++ * This function is called by the CodeMirror test runner to report status
++ * messages from the CM tests.
++ * @see codemirror.html
++ */
++function codeMirror_setStatus(statusMsg, type, customMsg) {
++  switch (type) {
++    case "expected":
++    case "ok":
++      ok(1, statusMsg);
++      break;
++    case "error":
++    case "fail":
++      ok(0, statusMsg);
++      break;
++    default:
++      info(statusMsg);
++      break;
++  }
++
++  if (customMsg && typeof customMsg == "string" && customMsg != statusMsg) {
++    info(customMsg);
++  }
++}
+diff --git a/browser/devtools/sourceeditor/test/vimemacs.html b/browser/devtools/sourceeditor/test/vimemacs.html
+--- a/browser/devtools/sourceeditor/test/vimemacs.html
++++ b/browser/devtools/sourceeditor/test/vimemacs.html
+@@ -197,16 +197,18 @@
+             message = "All passed";
+             if (skipped) {
+               message += " (" + skipped + " skipped)";
+             }
+           }
+           progressTotal.nodeValue = '';
+           customMessage = true; // Hack to avoid adding to output
+         }
++        if (window.mozilla_setStatus)
++          mozilla_setStatus(message, type, customMessage);
+         if (verbose && !customMessage)  customMessage = message;
+         setStatus(message, type);
+         if (customMessage && customMessage.length > 0) {
+           addOutput(name, type, customMessage);
+         }
+       }
+     </script>
+   </body>
