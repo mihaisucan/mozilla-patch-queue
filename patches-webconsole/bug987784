@@ -1,0 +1,177 @@
+# HG changeset patch
+# Parent 975105de85fed9e8e228557da0fb65494c61f2c8
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1395768401 -7200
+
+Bug 987784 - Update the browser console default prefs to match those of the web console; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u mochitest-bc -t none
+
+diff --git a/browser/app/profile/firefox.js b/browser/app/profile/firefox.js
+--- a/browser/app/profile/firefox.js
++++ b/browser/app/profile/firefox.js
+@@ -1224,34 +1224,34 @@ pref("devtools.gcli.eagerHelper", 2);
+ pref("devtools.webconsole.filter.network", true);
+ pref("devtools.webconsole.filter.networkinfo", false);
+ pref("devtools.webconsole.filter.netwarn", true);
+ pref("devtools.webconsole.filter.csserror", true);
+ pref("devtools.webconsole.filter.cssparser", false);
+ pref("devtools.webconsole.filter.csslog", false);
+ pref("devtools.webconsole.filter.exception", true);
+ pref("devtools.webconsole.filter.jswarn", false);
+-pref("devtools.webconsole.filter.jslog", true);
++pref("devtools.webconsole.filter.jslog", false);
+ pref("devtools.webconsole.filter.error", true);
+ pref("devtools.webconsole.filter.warn", true);
+ pref("devtools.webconsole.filter.info", true);
+ pref("devtools.webconsole.filter.log", true);
+ pref("devtools.webconsole.filter.secerror", true);
+ pref("devtools.webconsole.filter.secwarn", true);
+ 
+ // Remember the Browser Console filters
+ pref("devtools.browserconsole.filter.network", true);
+-pref("devtools.browserconsole.filter.networkinfo", true);
++pref("devtools.browserconsole.filter.networkinfo", false);
+ pref("devtools.browserconsole.filter.netwarn", true);
+ pref("devtools.browserconsole.filter.csserror", true);
+-pref("devtools.browserconsole.filter.cssparser", true);
++pref("devtools.browserconsole.filter.cssparser", false);
+ pref("devtools.browserconsole.filter.csslog", false);
+ pref("devtools.browserconsole.filter.exception", true);
+-pref("devtools.browserconsole.filter.jswarn", true);
+-pref("devtools.browserconsole.filter.jslog", true);
++pref("devtools.browserconsole.filter.jswarn", false);
++pref("devtools.browserconsole.filter.jslog", false);
+ pref("devtools.browserconsole.filter.error", true);
+ pref("devtools.browserconsole.filter.warn", true);
+ pref("devtools.browserconsole.filter.info", true);
+ pref("devtools.browserconsole.filter.log", true);
+ pref("devtools.browserconsole.filter.secerror", true);
+ pref("devtools.browserconsole.filter.secwarn", true);
+ 
+ // Text size in the Web Console. Use 0 for the system default size.
+diff --git a/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js b/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
+--- a/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
++++ b/browser/devtools/webconsole/test/browser_console_nsiconsolemessage.js
+@@ -6,90 +6,75 @@
+ // Check that nsIConsoleMessages are displayed in the Browser Console.
+ // See bug 859756.
+ 
+ const TEST_URI = "data:text/html;charset=utf8,<title>bug859756</title>\n" +
+                  "<p>hello world\n<p>nsIConsoleMessages ftw!";
+ 
+ function test()
+ {
+-  addTab(TEST_URI);
+-  browser.addEventListener("load", function onLoad() {
+-    browser.removeEventListener("load", onLoad, true);
++  const FILTER_PREF = "devtools.browserconsole.filter.jslog";
++  Services.prefs.setBoolPref(FILTER_PREF, true);
++
++  registerCleanupFunction(() => {
++    Services.prefs.clearUserPref(FILTER_PREF);
++  });
++
++  Task.spawn(function*() {
++    const {tab} = yield loadTab(TEST_URI);
+ 
+     // Test for cached nsIConsoleMessages.
+     Services.console.logStringMessage("test1 for bug859756");
+ 
+     info("open web console");
+-    openConsole(null, consoleOpened);
+-  }, true);
+-}
++    let hud = yield openConsole(tab);
+ 
+-function consoleOpened(hud)
+-{
+-  ok(hud, "web console opened");
+-  Services.console.logStringMessage("do-not-show-me");
+-  content.console.log("foobarz");
++    ok(hud, "web console opened");
++    Services.console.logStringMessage("do-not-show-me");
++    content.console.log("foobarz");
+ 
+-  waitForMessages({
+-    webconsole: hud,
+-    messages: [
+-      {
++    yield waitForMessages({
++      webconsole: hud,
++      messages: [{
+         text: "foobarz",
+         category: CATEGORY_WEBDEV,
+         severity: SEVERITY_LOG,
+-      },
+-    ],
+-  }).then(() => {
++      }],
++    });
++
+     let text = hud.outputNode.textContent;
+     is(text.indexOf("do-not-show-me"), -1,
+        "nsIConsoleMessages are not displayed");
+     is(text.indexOf("test1 for bug859756"), -1,
+        "nsIConsoleMessages are not displayed (confirmed)");
+-    closeConsole(null, onWebConsoleClose);
+-  });
+-}
+ 
+-function onWebConsoleClose()
+-{
+-  info("web console closed");
+-  HUDService.toggleBrowserConsole().then(onBrowserConsoleOpen);
+-}
++    yield closeConsole(tab);
+ 
+-function onBrowserConsoleOpen(hud)
+-{
+-  ok(hud, "browser console opened");
+-  Services.console.logStringMessage("test2 for bug859756");
++    info("web console closed");
++    hud = yield HUDService.toggleBrowserConsole();
++    ok(hud, "browser console opened");
+ 
+-  waitForMessages({
+-    webconsole: hud,
+-    messages: [
+-      {
++    Services.console.logStringMessage("test2 for bug859756");
++
++    let results = yield waitForMessages({
++      webconsole: hud,
++      messages: [{
+         text: "test1 for bug859756",
+         category: CATEGORY_JS,
+-      },
+-      {
++      }, {
+         text: "test2 for bug859756",
+         category: CATEGORY_JS,
+-      },
+-      {
++      }, {
+         text: "do-not-show-me",
+         category: CATEGORY_JS,
+-      },
+-    ],
+-  }).then(testFiltering);
++      }],
++    });
+ 
+-  function testFiltering(results)
+-  {
+     let msg = [...results[2].matched][0];
+     ok(msg, "message element for do-not-show-me (nsIConsoleMessage)");
+     isnot(msg.textContent.indexOf("do-not-show"), -1, "element content is correct");
+     ok(!msg.classList.contains("filtered-by-type"), "element is not filtered");
+ 
+     hud.setFilterState("jslog", false);
+ 
+     ok(msg.classList.contains("filtered-by-type"), "element is filtered");
+-
+-    hud.setFilterState("jslog", true);
+-
+-    finishTest();
+-  }
++  }).then(finishTest);
+ }
