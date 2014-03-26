@@ -1,0 +1,168 @@
+# HG changeset patch
+# Parent 8b1a3307065af36d8c2f8ed8995e540b75a0eb34
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1395867683 -7200
+
+Bug 985425 - Fix for browser_webconsole_bug_601667_filter_buttons.js | A promise chain failed to handle a rejection - TypeError: this.webConsoleClient is null; r=benvie
+
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_601667_filter_buttons.js b/browser/devtools/webconsole/test/browser_webconsole_bug_601667_filter_buttons.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_601667_filter_buttons.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_601667_filter_buttons.js
+@@ -40,17 +40,17 @@ function testMenuFilterButton(aCategory)
+ 
+   let firstMenuItem = button.querySelector("menuitem");
+   ok(firstMenuItem, "we have the first menu item for the \"" + aCategory +
+      "\" button");
+ 
+   // Turn all the filters off, if they were on.
+   let menuItem = firstMenuItem;
+   while (menuItem != null) {
+-    if (isChecked(menuItem)) {
++    if (menuItem.hasAttribute("prefKey") && isChecked(menuItem)) {
+       chooseMenuItem(menuItem);
+     }
+     menuItem = menuItem.nextSibling;
+   }
+ 
+   // Turn all the filters on; make sure the button gets checked.
+   menuItem = firstMenuItem;
+   let prefKey;
+@@ -84,20 +84,22 @@ function testMenuFilterButton(aCategory)
+ 
+   clickButton(subbutton);
+   ok(!isChecked(button), "the button for category " + aCategory + " is " +
+      "no longer checked after clicking its main part");
+ 
+   menuItem = firstMenuItem;
+   while (menuItem) {
+     let prefKey = menuItem.getAttribute("prefKey");
+-    ok(!isChecked(menuItem), "menu item " + prefKey + " for category " +
+-       aCategory + " is no longer checked after clicking the button");
+-    ok(!hud.ui.filterPrefs[prefKey], prefKey + " messages are " +
+-       "off after clicking the button");
++    if (prefKey) {
++      ok(!isChecked(menuItem), "menu item " + prefKey + " for category " +
++         aCategory + " is no longer checked after clicking the button");
++      ok(!hud.ui.filterPrefs[prefKey], prefKey + " messages are " +
++         "off after clicking the button");
++    }
+     menuItem = menuItem.nextSibling;
+   }
+ 
+   // Turn all the filters on by clicking the main part of the button.
+   clickButton(subbutton);
+ 
+   ok(isChecked(button), "the button for category " + aCategory + " is " +
+      "checked after clicking its main part");
+@@ -122,17 +124,18 @@ function testMenuFilterButton(aCategory)
+     menuItem = menuItem.nextSibling;
+   }
+ 
+   // Uncheck the main button by unchecking all the filters
+   menuItem = firstMenuItem;
+   while (menuItem) {
+     // The csslog menu item is already unchecked at this point.
+     // Make sure it is not selected. See bug 971798.
+-    if (menuItem.getAttribute("prefKey") != "csslog") {
++    prefKey = menuItem.getAttribute("prefKey");
++    if (prefKey && prefKey != "csslog") {
+       chooseMenuItem(menuItem);
+     }
+     menuItem = menuItem.nextSibling;
+   }
+ 
+   ok(!isChecked(button), "the button for category " + aCategory + " is " +
+      "unchecked after unchecking all its filters");
+ 
+@@ -159,17 +162,17 @@ function testIsolateFilterButton(aCatego
+   Array.forEach(menuItems, (item) => {
+     let prefKey = item.getAttribute("prefKey");
+     // The CSS/Log filter should not be checked. See bug 971798.
+     if (aCategory == "css" && prefKey == "csslog") {
+       ok(!isChecked(item), "menu item " + prefKey + " for category " +
+         aCategory + " should not be checked after isolating for " + aCategory);
+       ok(!hud.ui.filterPrefs[prefKey], prefKey + " messages should be " +
+         "turned off after isolating for " + aCategory);
+-    } else {
++    } else if (prefKey) {
+       ok(isChecked(item), "menu item " + prefKey + " for category " +
+         aCategory + " is checked after isolating for " + aCategory);
+       ok(hud.ui.filterPrefs[prefKey], prefKey + " messages are " +
+         "turned on after isolating for " + aCategory);
+     }
+   });
+ 
+   // Ensure all other filter buttons are toggled off and their
+@@ -179,20 +182,22 @@ function testIsolateFilterButton(aCatego
+     if (filterButton !== targetButton) {
+       let category = filterButton.getAttribute("category");
+       ok(!isChecked(filterButton), "the button for category " +
+         category + " is unchecked after isolating for " + aCategory);
+ 
+       menuItems = filterButton.querySelectorAll("menuitem");
+       Array.forEach(menuItems, (item) => {
+         let prefKey = item.getAttribute("prefKey");
+-        ok(!isChecked(item), "menu item " + prefKey + " for category " +
+-          aCategory + " is unchecked after isolating for " + aCategory);
+-        ok(!hud.ui.filterPrefs[prefKey], prefKey + " messages are " +
+-          "turned off after isolating for " + aCategory);
++        if (prefKey) {
++          ok(!isChecked(item), "menu item " + prefKey + " for category " +
++            aCategory + " is unchecked after isolating for " + aCategory);
++          ok(!hud.ui.filterPrefs[prefKey], prefKey + " messages are " +
++            "turned off after isolating for " + aCategory);
++        }
+       });
+ 
+       // Turn all the filters on again by clicking the button.
+       let mainButton = getMainButton(filterButton);
+       clickButton(mainButton);
+     }
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_653531_highlighter_console_helper.js
+@@ -48,16 +48,17 @@ function setupHighlighterTests() {
+ 
+ function runSelectionTests(aInspector) {
+   inspector = aInspector;
+ 
+   inspector.toolbox.highlighterUtils.startPicker();
+   inspector.toolbox.once("picker-started", () => {
+     info("Picker mode started, now clicking on H1 to select that node");
+     executeSoon(() => {
++      h1.scrollIntoView();
+       EventUtils.synthesizeMouseAtCenter(h1, {}, content);
+       inspector.toolbox.once("picker-stopped", () => {
+         info("Picker mode stopped, H1 selected, now switching to the console");
+         openConsole(gBrowser.selectedTab).then(performWebConsoleTests);
+       });
+     });
+   });
+ }
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -396,16 +396,21 @@ WebConsoleFrame.prototype = {
+   /**
+    * Setter for saving of network request and response bodies.
+    *
+    * @param boolean aValue
+    *        The new value you want to set.
+    */
+   setSaveRequestAndResponseBodies:
+   function WCF_setSaveRequestAndResponseBodies(aValue) {
++    if (!this.webConsoleClient) {
++      // Don't continue if the webconsole disconnected.
++      return promise.resolve(null);
++    }
++
+     let deferred = promise.defer();
+     let newValue = !!aValue;
+     let toSet = {
+       "NetworkMonitor.saveRequestAndResponseBodies": newValue,
+     };
+ 
+     // Make sure the web console client connection is established first.
+     this.webConsoleClient.setPreferences(toSet, aResponse => {
