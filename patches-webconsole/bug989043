@@ -1,0 +1,548 @@
+# HG changeset patch
+# Parent 6f3923ed6a4db565b04e743b06109fd930c60457
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1395949735 -7200
+Bug 989043 - Network monitor support for e10s; r=ochameau
+
+diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/server/actors/childtab.js
+--- a/toolkit/devtools/server/actors/childtab.js
++++ b/toolkit/devtools/server/actors/childtab.js
+@@ -18,35 +18,33 @@
+  * @param connection DebuggerServerConnection
+  *        The conection to the client.
+  * @param chromeGlobal
+  *        The content script global holding |content| and |docShell| properties for a tab.
+  */
+ function ContentActor(connection, chromeGlobal)
+ {
+   TabActor.call(this, connection, chromeGlobal);
+-  this._chromeGlobal = chromeGlobal;
+   this.traits.reconfigure = false;
+ }
+ 
+ ContentActor.prototype = Object.create(TabActor.prototype);
+ 
+ ContentActor.prototype.constructor = ContentActor;
+ 
+ Object.defineProperty(ContentActor.prototype, "docShell", {
+   get: function() {
+-    return this._chromeGlobal.docShell;
++    return this.chromeEventHandler.docShell;
+   },
+   enumerable: true,
+   configurable: false
+ });
+ 
+ ContentActor.prototype.exit = function() {
+   TabActor.prototype.exit.call(this);
+-  this._chromeGlobal = null;
+ };
+ 
+ // Override grip just to rename this._tabActorPool to this._tabActorPool2
+ // in order to prevent it to be cleaned on detach.
+ // We have to keep tab actors alive as we keep the ContentActor
+ // alive after detach and reuse it for multiple debug sessions.
+ ContentActor.prototype.grip = function () {
+   let response = {
+diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server/actors/webapps.js
+--- a/toolkit/devtools/server/actors/webapps.js
++++ b/toolkit/devtools/server/actors/webapps.js
+@@ -9,21 +9,16 @@ let Cc = Components.classes;
+ let Ci = Components.interfaces;
+ let CC = Components.Constructor;
+ 
+ Cu.import("resource://gre/modules/osfile.jsm");
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ let {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+ 
+-XPCOMUtils.defineLazyGetter(this, "NetworkMonitorManager", () => {
+-  return devtools.require("devtools/toolkit/webconsole/network-monitor")
+-         .NetworkMonitorManager;
+-});
+-
+ let promise;
+ 
+ function debug(aMsg) {
+   /*
+   Cc["@mozilla.org/consoleservice;1"]
+     .getService(Ci.nsIConsoleService)
+     .logStringMessage("--*-- WebappsActor : " + aMsg);
+   */
+@@ -823,31 +818,25 @@ WebappsActor.prototype = {
+ 
+       // Only create a new actor, if we haven't already
+       // instanciated one for this connection.
+       let map = this._appActorsMap;
+       let mm = appFrame.QueryInterface(Ci.nsIFrameLoaderOwner)
+                        .frameLoader
+                        .messageManager;
+       let actor = map.get(mm);
+-      let netMonitor = null;
+       if (!actor) {
+         let onConnect = actor => {
+           map.set(mm, actor);
+-          netMonitor = new NetworkMonitorManager(appFrame);
+           return { actor: actor };
+         };
+         let onDisconnect = mm => {
+           map.delete(mm);
+-          if (netMonitor) {
+-            netMonitor.destroy();
+-            netMonitor = null;
+-          }
+         };
+-        return DebuggerServer.connectToChild(this.conn, mm, onDisconnect)
++        return DebuggerServer.connectToChild(this.conn, appFrame, onDisconnect)
+                              .then(onConnect);
+       }
+ 
+       return { actor: actor };
+     });
+   },
+ 
+   watchApps: function () {
+diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/server/actors/webbrowser.js
+--- a/toolkit/devtools/server/actors/webbrowser.js
++++ b/toolkit/devtools/server/actors/webbrowser.js
+@@ -1028,23 +1028,31 @@ function RemoteBrowserTabActor(aConnecti
+ {
+   this._conn = aConnection;
+   this._browser = aBrowser;
+   this._form = null;
+ }
+ 
+ RemoteBrowserTabActor.prototype = {
+   connect: function() {
+-    return DebuggerServer.connectToChild(this._conn, this._browser.messageManager);
++    return DebuggerServer.connectToChild(this._conn, this._browser);
+   },
+ 
+   form: function() {
+     return this._form;
+   },
+ 
++  get docShell() {
++    return this._browser.docShell;
++  },
++
++  get chromeEventHandler() {
++    return this._browser;
++  },
++
+   exit: function() {
+     this._browser = null;
+   },
+ };
+ 
+ function BrowserAddonList(aConnection)
+ {
+   this._connection = aConnection;
+diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
+--- a/toolkit/devtools/server/actors/webconsole.js
++++ b/toolkit/devtools/server/actors/webconsole.js
+@@ -138,18 +138,20 @@ WebConsoleActor.prototype =
+ 
+   /**
+    * Boolean getter that tells if the parent actor is a ContentActor.
+    *
+    * @private
+    * @type boolean
+    */
+   get _parentIsContentActor() {
+-    return "ContentActor" in DebuggerServer &&
+-            this.parentActor instanceof DebuggerServer.ContentActor;
++    return ("ContentActor" in DebuggerServer &&
++            this.parentActor instanceof DebuggerServer.ContentActor) ||
++           ("RemoteBrowserTabActor" in DebuggerServer &&
++            this.parentActor instanceof DebuggerServer.RemoteBrowserTabActor);
+   },
+ 
+   /**
+    * The window we work with.
+    * @type nsIDOMWindow
+    */
+   get window() {
+     if (this.parentActor.isRootActor) {
+@@ -503,19 +505,18 @@ WebConsoleActor.prototype =
+   onStartListeners: function WCA_onStartListeners(aRequest)
+   {
+     let startedListeners = [];
+     let window = !this.parentActor.isRootActor ? this.window : null;
+     let appId = null;
+     let messageManager = null;
+ 
+     if (this._parentIsContentActor) {
+-      // Filter network requests by appId on Firefox OS devices.
+       appId = this.parentActor.docShell.appId;
+-      messageManager = this.parentActor._chromeGlobal;
++      messageManager = this.parentActor.chromeEventHandler;
+     }
+ 
+     while (aRequest.listeners.length > 0) {
+       let listener = aRequest.listeners.shift();
+       switch (listener) {
+         case "PageError":
+           if (!this.consoleServiceListener) {
+             this.consoleServiceListener =
+@@ -529,19 +530,19 @@ WebConsoleActor.prototype =
+             this.consoleAPIListener =
+               new ConsoleAPIListener(window, this);
+             this.consoleAPIListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+         case "NetworkActivity":
+           if (!this.networkMonitor) {
+-            if (appId && messageManager) {
++            if (appId || messageManager) {
+               this.networkMonitor =
+-                new NetworkMonitorChild(appId, messageManager, this);
++                new NetworkMonitorChild(appId, messageManager, this.parentActor.actorID, this);
+             }
+             else {
+               this.networkMonitor = new NetworkMonitor({ window: window }, this);
+             }
+             this.networkMonitor.init();
+           }
+           startedListeners.push(listener);
+           break;
+diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
+--- a/toolkit/devtools/server/main.js
++++ b/toolkit/devtools/server/main.js
+@@ -63,16 +63,20 @@ this.defer = defer;
+ this.resolve = resolve;
+ this.reject = reject;
+ this.promised = promised;
+ this.all = all;
+ 
+ Cu.import("resource://gre/modules/devtools/SourceMap.jsm");
+ Cu.import("resource://gre/modules/devtools/Console.jsm");
+ 
++XPCOMUtils.defineLazyGetter(this, "NetworkMonitorManager", () => {
++  return require("devtools/toolkit/webconsole/network-monitor").NetworkMonitorManager;
++});
++
+ function dumpn(str) {
+   if (wantLogging) {
+     dump("DBG-SERVER: " + str + "\n");
+   }
+ }
+ this.dumpn = dumpn;
+ 
+ function dbg_assert(cond, e) {
+@@ -528,24 +532,39 @@ var DebuggerServer = {
+    */
+   connectToParent: function(aPrefix, aMessageManager) {
+     this._checkInit();
+ 
+     let transport = new ChildDebuggerTransport(aMessageManager, aPrefix);
+     return this._onConnection(transport, aPrefix, true);
+   },
+ 
+-  connectToChild: function(aConnection, aMessageManager, aOnDisconnect) {
+-    let deferred = Promise.defer();
++  /**
++   * Connect to a child process.
++   *
++   * @param object aConnection
++   *        The debugger server connection to use.
++   * @param nsIDOMElement aFrame
++   *        The browser element that holds the child process.
++   * @param function [aOnDisconnect]
++   *        Optional function to invoke when the child is disconnected.
++   * @return object
++   *         A promise object that is resolved once the connection is
++   *         established.
++   */
++  connectToChild: function(aConnection, aFrame, aOnDisconnect) {
++    let deferred = defer();
+ 
+-    let mm = aMessageManager;
++    let mm = aFrame.QueryInterface(Ci.nsIFrameLoaderOwner).frameLoader
++             .messageManager;
+     mm.loadFrameScript("resource://gre/modules/devtools/server/child.js", false);
+ 
+     let actor, childTransport;
+     let prefix = aConnection.allocID("child");
++    let netMonitor = null;
+ 
+     let onActorCreated = DevToolsUtils.makeInfallible(function (msg) {
+       mm.removeMessageListener("debug:actor", onActorCreated);
+ 
+       // Pipe Debugger message from/to parent/child via the message manager
+       childTransport = new ChildDebuggerTransport(mm, prefix);
+       childTransport.hooks = {
+         onPacket: aConnection.send.bind(aConnection),
+@@ -554,16 +573,18 @@ var DebuggerServer = {
+       childTransport.ready();
+ 
+       aConnection.setForwarding(prefix, childTransport);
+ 
+       dumpn("establishing forwarding for app with prefix " + prefix);
+ 
+       actor = msg.json.actor;
+ 
++      netMonitor = new NetworkMonitorManager(aFrame, actor.actor);
++
+       deferred.resolve(actor);
+     }).bind(this);
+     mm.addMessageListener("debug:actor", onActorCreated);
+ 
+     let onMessageManagerDisconnect = DevToolsUtils.makeInfallible(function (subject, topic, data) {
+       if (subject == mm) {
+         Services.obs.removeObserver(onMessageManagerDisconnect, topic);
+         if (childTransport) {
+@@ -580,16 +601,21 @@ var DebuggerServer = {
+         if (actor) {
+           // The ContentActor within the child process doesn't necessary
+           // have to time to uninitialize itself when the app is closed/killed.
+           // So ensure telling the client that the related actor is detached.
+           aConnection.send({ from: actor.actor, type: "tabDetached" });
+           actor = null;
+         }
+ 
++        if (netMonitor) {
++          netMonitor.destroy();
++          netMonitor = null;
++        }
++
+         if (aOnDisconnect) {
+           aOnDisconnect(mm);
+         }
+       }
+     }).bind(this);
+     Services.obs.addObserver(onMessageManagerDisconnect,
+                              "message-manager-disconnect", false);
+ 
+diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/webconsole/network-monitor.js
+--- a/toolkit/devtools/webconsole/network-monitor.js
++++ b/toolkit/devtools/webconsole/network-monitor.js
+@@ -996,21 +996,24 @@ NetworkMonitor.prototype = {
+  * send the data to this object using the nsIMessageManager. Here we proxy the
+  * data to the WebConsoleActor or to a NetworkEventActor.
+  *
+  * @constructor
+  * @param number appId
+  *        The web appId of the child process.
+  * @param nsIMessageManager messageManager
+  *        The nsIMessageManager to use to communicate with the parent process.
++ * @param string connID
++ *        The connection ID to use to send messages to the parent process.
+  * @param object owner
+  *        The WebConsoleActor that is listening for the network requests.
+  */
+-function NetworkMonitorChild(appId, messageManager, owner) {
++function NetworkMonitorChild(appId, messageManager, connID, owner) {
+   this.appId = appId;
++  this.connID = connID;
+   this.owner = owner;
+   this._messageManager = messageManager;
+   this._onNewEvent = this._onNewEvent.bind(this);
+   this._onUpdateEvent = this._onUpdateEvent.bind(this);
+   this._netEvents = new Map();
+ }
+ exports.NetworkMonitorChild = NetworkMonitorChild;
+ 
+@@ -1023,58 +1026,71 @@ NetworkMonitorChild.prototype = {
+   get saveRequestAndResponseBodies() {
+     return this._saveRequestAndResponseBodies;
+   },
+ 
+   set saveRequestAndResponseBodies(val) {
+     this._saveRequestAndResponseBodies = val;
+ 
+     this._messageManager.sendAsyncMessage("debug:netmonitor", {
++      managerID: this.connID,
+       appId: this.appId,
+       action: "setPreferences",
+       preferences: {
+         saveRequestAndResponseBodies: this._saveRequestAndResponseBodies,
+       },
+     });
+   },
+ 
+   init: function() {
+     this._messageManager.addMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
+     this._messageManager.addMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
+     this._messageManager.sendAsyncMessage("debug:netmonitor", {
++      managerID: this.connID,
+       appId: this.appId,
+       action: "start",
+     });
+   },
+ 
+   _onNewEvent: DevToolsUtils.makeInfallible(function _onNewEvent(msg) {
+-    let {id, event} = msg.data;
++    let {managerID, id, event} = msg.data;
++    if (managerID != this.connID) {
++      return;
++    }
++
+     let actor = this.owner.onNetworkEvent(event);
+     this._netEvents.set(id, Cu.getWeakReference(actor));
+   }),
+ 
+   _onUpdateEvent: DevToolsUtils.makeInfallible(function _onUpdateEvent(msg) {
+-    let {id, method, args} = msg.data;
++    let {managerID, id, method, args} = msg.data;
++    if (managerID != this.connID) {
++      return;
++    }
++
+     let weakActor = this._netEvents.get(id);
+     let actor = weakActor ? weakActor.get() : null;
+     if (!actor) {
+       Cu.reportError("Received debug:netmonitor:updateEvent for unknown event ID: " + id);
+       return;
+     }
+     if (!(method in actor)) {
+       Cu.reportError("Received debug:netmonitor:updateEvent unsupported method: " + method);
+       return;
+     }
+     actor[method].apply(actor, args);
+   }),
+ 
+   destroy: function() {
+     this._messageManager.removeMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
+     this._messageManager.removeMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
+-    this._messageManager.sendAsyncMessage("debug:netmonitor", { action: "disconnect" });
++    this._messageManager.sendAsyncMessage("debug:netmonitor", {
++      managerID: this.connID,
++      action: "disconnect",
++    });
+     this._netEvents.clear();
+     this._messageManager = null;
+     this.owner = null;
+   },
+ }; // NetworkMonitorChild.prototype
+ 
+ /**
+  * The NetworkEventActorProxy is used to send network request information from
+@@ -1085,28 +1101,32 @@ NetworkMonitorChild.prototype = {
+  * The child process has a NetworkMonitorChild instance that is listening for
+  * all network logging from the main process. The net monitor shim is used to
+  * proxy the data to the WebConsoleActor instance of the child process.
+  *
+  * @constructor
+  * @param nsIMessageManager messageManager
+  *        The message manager for the child app process. This is used for
+  *        communication with the NetworkMonitorChild instance of the process.
++ * @param string connID
++ *        The connection ID to use to send messages to the child process.
+  */
+-function NetworkEventActorProxy(messageManager) {
++function NetworkEventActorProxy(messageManager, connID) {
+   this.id = gSequenceId();
++  this.connID = connID;
+   this.messageManager = messageManager;
+ }
+ exports.NetworkEventActorProxy = NetworkEventActorProxy;
+ 
+ NetworkEventActorProxy.methodFactory = function(method) {
+   return DevToolsUtils.makeInfallible(function() {
+     let args = Array.slice(arguments);
+     this.messageManager.sendAsyncMessage("debug:netmonitor:updateEvent", {
+       id: this.id,
++      managerID: this.connID,
+       method: method,
+       args: args,
+     });
+   }, "NetworkEventActorProxy." + method);
+ };
+ 
+ NetworkEventActorProxy.prototype = {
+   /**
+@@ -1117,16 +1137,17 @@ NetworkEventActorProxy.prototype = {
+    *        Object describing the network request.
+    * @return object
+    *         This object.
+    */
+   init: DevToolsUtils.makeInfallible(function(event)
+   {
+     this.messageManager.sendAsyncMessage("debug:netmonitor:newEvent", {
+       id: this.id,
++      managerID: this.connID,
+       event: event,
+     });
+     return this;
+   }),
+ };
+ 
+ (function() {
+   // Listeners for new network event data coming from the NetworkMonitor.
+@@ -1143,19 +1164,22 @@ NetworkEventActorProxy.prototype = {
+ /**
+  * The NetworkMonitor manager used by the Webapps actor in the main process.
+  * This object uses the message manager to listen for requests from the child
+  * process to start/stop the network monitor.
+  *
+  * @constructor
+  * @param nsIDOMElement frame
+  *        The browser frame to work with (mozbrowser).
++ * @param string id
++ *        Instance identifier to use for messages.
+  */
+-function NetworkMonitorManager(frame)
++function NetworkMonitorManager(frame, id)
+ {
++  this.id = id;
+   let mm = frame.QueryInterface(Ci.nsIFrameLoaderOwner).frameLoader.messageManager;
+   this.messageManager = mm;
+   this.frame = frame;
+   this.onNetMonitorMessage = this.onNetMonitorMessage.bind(this);
+   this.onNetworkEvent = this.onNetworkEvent.bind(this);
+ 
+   mm.addMessageListener("debug:netmonitor", this.onNetMonitorMessage);
+ }
+@@ -1169,17 +1193,20 @@ NetworkMonitorManager.prototype = {
+   /**
+    * Handler for "debug:monitor" messages received through the message manager
+    * from the content process.
+    *
+    * @param object msg
+    *        Message from the content.
+    */
+   onNetMonitorMessage: DevToolsUtils.makeInfallible(function _onNetMonitorMessage(msg) {
+-    let { action, appId } = msg.json;
++    let { managerID, action, appId } = msg.json;
++    if (managerID != this.id) {
++      return;
++    }
+ 
+     // Pipe network monitor data from parent to child via the message manager.
+     switch (action) {
+       case "start":
+         if (!this.netMonitor) {
+           this.netMonitor = new NetworkMonitor({
+             topFrame: this.frame,
+             appId: appId,
+@@ -1217,23 +1244,25 @@ NetworkMonitorManager.prototype = {
+    *
+    * @param object event
+    *        Object describing the network request.
+    * @return object
+    *         A NetworkEventActorProxy instance which is notified when further
+    *         data about the request is available.
+    */
+   onNetworkEvent: DevToolsUtils.makeInfallible(function _onNetworkEvent(event) {
+-    return new NetworkEventActorProxy(this.messageManager).init(event);
++    return new NetworkEventActorProxy(this.messageManager, this.id).init(event);
+   }),
+ 
+   destroy: function()
+   {
+-    this.messageManager.removeMessageListener("debug:netmonitor",
+-                                              this.onNetMonitorMessage);
++    if (this.messageManager) {
++      this.messageManager.removeMessageListener("debug:netmonitor",
++                                                this.onNetMonitorMessage);
++    }
+     this.messageManager = null;
+     this.filters = null;
+ 
+     if (this.netMonitor) {
+       this.netMonitor.destroy();
+       this.netMonitor = null;
+     }
+   },
