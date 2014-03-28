@@ -1,12 +1,12 @@
 # HG changeset patch
-# Parent d5ed56d8a9045b34fa6954d180466f2d817c312b
+# Parent 38c8dbb6ad87588ed67266248171a9aca70971d8
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1395433761 -7200
+# Date 1396037927 -7200
 
 diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/webconsole/network-monitor.js
 --- a/toolkit/devtools/webconsole/network-monitor.js
 +++ b/toolkit/devtools/webconsole/network-monitor.js
-@@ -889,67 +889,47 @@ NetworkMonitor.prototype = {
+@@ -889,72 +889,89 @@ NetworkMonitor.prototype = {
     *        The HTTP activity object we are working with.
     * @return object
     *         This object holds two properties:
@@ -15,22 +15,56 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
     */
    _setupHarTimings: function NM__setupHarTimings(aHttpActivity)
    {
++    let win = NetworkHelper.getWindowForRequest(aHttpActivity.channel);
++
 +    let channel = aHttpActivity.channel.QueryInterface(Ci.nsITimedChannel);
-+    console.log("_setupHarTimings 1", channel);
++    console.log("_setupHarTimings 1");
      let timings = aHttpActivity.timings;
      let harTimings = {};
  
 -    // Not clear how we can determine "blocked" time.
 -    harTimings.blocked = -1;
-+    let unload = channel.unloadEnd - channel.unloadStart;
-+    let timeToStartConnection = channel.connectStartTime - channel.navigationStartTime;
++    function prtime2domtime(time) {
++      return Math.round(time / 1000);
++    }
++
++    let unload = 0,
++        redirect = 0,
++        responseStart = 0,
++        responseEnd = 0,
++        navigationStart = 0;
++
++    if (win && win.performance && win.performance.timing) {
++      let domTiming = win.performance.timing;
++      responseStart = domTiming.responseStart;
++      responseEnd = domTiming.responseEnd;
++      unload = domTiming.unloadEventEnd - domTiming.unloadEventStart;
++      redirect = domTiming.redirectEnd - domTiming.redirectStart;
++      navigationStart = domTiming.navigationStart;
++      console.log('performance.timing available');
++    } else {
++      responseStart = prtime2domtime(channel.responseStartTime || 0);
++      let cacheReadStart = prtime2domtime(channel.cacheReadStartTime || 0);
++      if (!responseStart || (cacheReadStart && cacheReadStart < responseStart)) {
++        responseStart = cacheReadStart;
++      }
++      responseEnd = prtime2domtime(channel.responseEndTime || 0);
++      let cacheReadEnd = prtime2domtime(channel.cacheReadEndTime || 0);
++      if (!responseEnd || (cacheReadEnd && cacheReadEnd < responseEnd)) {
++        responseEnd = cacheReadEnd;
++      }
++    }
++
++    let timeToStartConnection = prtime2domtime(channel.connectStartTime || channel.cacheReadStartTime) -
++                                (navigationStart ||
++                                 prtime2domtime(channel.channelCreationTime));
  
      // DNS timing information is available only in when the DNS record is not
      // cached.
 -    harTimings.dns = timings.STATUS_RESOLVING && timings.STATUS_RESOLVED ?
 -                     timings.STATUS_RESOLVED.last -
 -                     timings.STATUS_RESOLVING.first : -1;
-+    harTimings.dns = channel.domainLookupEndTime - channel.domainLookupStartTime;
++    harTimings.dns = prtime2domtime(channel.domainLookupEndTime - channel.domainLookupStartTime);
  
 -    if (timings.STATUS_CONNECTING_TO && timings.STATUS_CONNECTED_TO) {
 -      harTimings.connect = timings.STATUS_CONNECTED_TO.last -
@@ -43,8 +77,7 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
 -    else {
 -      harTimings.connect = -1;
 -    }
-+    harTimings.redirect = channel.redirectEnd - channel.redirectStart;
-+    harTimings.blocked = timeToStartConnection - unload - harTimings.redirect - harTimings.dns;
++    harTimings.redirect = redirect;
  
 -    if ((timings.STATUS_WAITING_FOR || timings.STATUS_RECEIVING_FROM) &&
 -        (timings.STATUS_CONNECTED_TO || timings.STATUS_SENDING_TO)) {
@@ -56,18 +89,21 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
 -    else {
 -      harTimings.send = -1;
 -    }
-+    harTimings.connect = channel.connectEndTime - channel.connectStartTime;
++    harTimings.blocked = timeToStartConnection - unload - redirect - harTimings.dns;
  
 -    if (timings.RESPONSE_START) {
 -      harTimings.wait = timings.RESPONSE_START.first -
 -                        (timings.REQUEST_BODY_SENT ||
 -                         timings.STATUS_SENDING_TO).last;
++    harTimings.connect = prtime2domtime(channel.connectEndTime - channel.connectStartTime);
++
 +    let waitingFor = timings.STATUS_WAITING_FOR ?
-+                     timings.STATUS_WAITING_FOR.first : channel.responseStartTime;
-+    harTimings.send = waitingFor - channel.requestStartTime;
++                     prtime2domtime(timings.STATUS_WAITING_FOR.first) :
++                     responseStart;
++    harTimings.send = waitingFor - prtime2domtime(channel.requestStartTime);
 +
 +    if (timings.STATUS_WAITING_FOR) {
-+      harTimings.wait = (channel.responseStartTime - channel.requestStartTime) -
++      harTimings.wait = (responseStart - prtime2domtime(channel.requestStartTime)) -
 +                        harTimings.send;
      }
      else {
@@ -81,13 +117,21 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
 -    else {
 -      harTimings.receive = -1;
 -    }
-+    harTimings.receive = channel.responseEndTime - channel.responseStartTime;
++    harTimings.receive = responseEnd - responseStart;
 +    console.log("_setupHarTimings 2", harTimings);
  
      let totalTime = 0;
      for (let timing in harTimings) {
-       let time = Math.max(Math.round(harTimings[timing] / 1000), -1);
-       harTimings[timing] = time;
+-      let time = Math.max(Math.round(harTimings[timing] / 1000), -1);
+-      harTimings[timing] = time;
++      let time = harTimings[timing];
++      //let time = Math.max(Math.round(harTimings[timing] / 1000), -1);
++      //harTimings[timing] = time;
        if (time > -1) {
          totalTime += time;
        }
+     }
+ 
+     return {
+       total: totalTime,
+       timings: harTimings,
