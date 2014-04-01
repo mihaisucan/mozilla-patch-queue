@@ -1,9 +1,35 @@
 # HG changeset patch
-# Parent 6f3923ed6a4db565b04e743b06109fd930c60457
+# Parent b18069357e4b4dfaec08faa4dc3e8ba5f9d0d128
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1395949735 -7200
+# Date 1396371154 -10800
 Bug 989043 - Network monitor support for e10s; r=ochameau
 
+diff --git a/b2g/chrome/content/devtools.js b/b2g/chrome/content/devtools.js
+--- a/b2g/chrome/content/devtools.js
++++ b/b2g/chrome/content/devtools.js
+@@ -113,21 +113,17 @@ let developerHUD = {
+   /**
+    * This method will ask all registered watchers to track and update metrics
+    * on an app frame.
+    */
+   trackFrame: function dwp_trackFrame(frame) {
+     if (this._targets.has(frame))
+       return;
+ 
+-    let mm = frame.QueryInterface(Ci.nsIFrameLoaderOwner)
+-                  .frameLoader
+-                  .messageManager;
+-
+-    DebuggerServer.connectToChild(this._conn, mm).then(actor => {
++    DebuggerServer.connectToChild(this._conn, frame).then(actor => {
+       let target = new Target(frame, actor);
+       this._targets.set(frame, target);
+ 
+       for (let w of this._watchers) {
+         w.trackTarget(target);
+       }
+     });
+   },
 diff --git a/toolkit/devtools/server/actors/childtab.js b/toolkit/devtools/server/actors/childtab.js
 --- a/toolkit/devtools/server/actors/childtab.js
 +++ b/toolkit/devtools/server/actors/childtab.js
@@ -105,7 +131,56 @@ diff --git a/toolkit/devtools/server/actors/webapps.js b/toolkit/devtools/server
 diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/server/actors/webbrowser.js
 --- a/toolkit/devtools/server/actors/webbrowser.js
 +++ b/toolkit/devtools/server/actors/webbrowser.js
-@@ -1028,23 +1028,31 @@ function RemoteBrowserTabActor(aConnecti
+@@ -521,16 +521,23 @@ TabActor.prototype = {
+   /**
+    * An object on which listen for DOMWindowCreated and pageshow events.
+    */
+   get chromeEventHandler() {
+     return this._chromeEventHandler;
+   },
+ 
+   /**
++   * Getter for the nsIMessageManager associated to the tab.
++   */
++  get messageManager() {
++    return this._chromeEventHandler;
++  },
++
++  /**
+    * Getter for the tab's doc shell.
+    */
+   get docShell() {
+     throw "The docShell getter should be implemented by a subclass of TabActor";
+   },
+ 
+   /**
+    * Getter for the tab content's DOM window.
+@@ -977,16 +984,24 @@ BrowserTabActor.prototype.constructor = 
+ Object.defineProperty(BrowserTabActor.prototype, "docShell", {
+   get: function() {
+     return this._browser.docShell;
+   },
+   enumerable: true,
+   configurable: false
+ });
+ 
++Object.defineProperty(BrowserTabActor.prototype, "messageManager", {
++  get: function() {
++    return this._browser.messageManager;
++  },
++  enumerable: true,
++  configurable: false
++});
++
+ Object.defineProperty(BrowserTabActor.prototype, "title", {
+   get: function() {
+     let title = this.contentDocument.contentTitle;
+     // If contentTitle is empty (e.g. on a not-yet-restored tab), but there is a
+     // tabbrowser (i.e. desktop Firefox, but not Fennec), we can use the label
+     // as the title.
+     if (!title && this._tabbrowser) {
+       title = this._tabbrowser._getTabForContentWindow(this.window).label;
+@@ -1029,17 +1044,17 @@ function RemoteBrowserTabActor(aConnecti
  {
    this._conn = aConnection;
    this._browser = aBrowser;
@@ -122,49 +197,12 @@ diff --git a/toolkit/devtools/server/actors/webbrowser.js b/toolkit/devtools/ser
      return this._form;
    },
  
-+  get docShell() {
-+    return this._browser.docShell;
-+  },
-+
-+  get chromeEventHandler() {
-+    return this._browser;
-+  },
-+
    exit: function() {
      this._browser = null;
-   },
- };
- 
- function BrowserAddonList(aConnection)
- {
-   this._connection = aConnection;
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -138,18 +138,20 @@ WebConsoleActor.prototype =
- 
-   /**
-    * Boolean getter that tells if the parent actor is a ContentActor.
-    *
-    * @private
-    * @type boolean
-    */
-   get _parentIsContentActor() {
--    return "ContentActor" in DebuggerServer &&
--            this.parentActor instanceof DebuggerServer.ContentActor;
-+    return ("ContentActor" in DebuggerServer &&
-+            this.parentActor instanceof DebuggerServer.ContentActor) ||
-+           ("RemoteBrowserTabActor" in DebuggerServer &&
-+            this.parentActor instanceof DebuggerServer.RemoteBrowserTabActor);
-   },
- 
-   /**
-    * The window we work with.
-    * @type nsIDOMWindow
-    */
-   get window() {
-     if (this.parentActor.isRootActor) {
-@@ -503,19 +505,18 @@ WebConsoleActor.prototype =
+@@ -503,19 +503,18 @@ WebConsoleActor.prototype =
    onStartListeners: function WCA_onStartListeners(aRequest)
    {
      let startedListeners = [];
@@ -176,7 +214,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 -      // Filter network requests by appId on Firefox OS devices.
        appId = this.parentActor.docShell.appId;
 -      messageManager = this.parentActor._chromeGlobal;
-+      messageManager = this.parentActor.chromeEventHandler;
++      messageManager = this.parentActor.messageManager;
      }
  
      while (aRequest.listeners.length > 0) {
@@ -185,7 +223,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
          case "PageError":
            if (!this.consoleServiceListener) {
              this.consoleServiceListener =
-@@ -529,19 +530,19 @@ WebConsoleActor.prototype =
+@@ -529,19 +528,20 @@ WebConsoleActor.prototype =
              this.consoleAPIListener =
                new ConsoleAPIListener(window, this);
              this.consoleAPIListener.init();
@@ -198,7 +236,8 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 +            if (appId || messageManager) {
                this.networkMonitor =
 -                new NetworkMonitorChild(appId, messageManager, this);
-+                new NetworkMonitorChild(appId, messageManager, this.parentActor.actorID, this);
++                new NetworkMonitorChild(appId, messageManager,
++                                        this.parentActor.actorID, this);
              }
              else {
                this.networkMonitor = new NetworkMonitor({ window: window }, this);
@@ -210,7 +249,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
 --- a/toolkit/devtools/server/main.js
 +++ b/toolkit/devtools/server/main.js
-@@ -63,16 +63,20 @@ this.defer = defer;
+@@ -64,16 +64,20 @@ this.defer = defer;
  this.resolve = resolve;
  this.reject = reject;
  this.promised = promised;
@@ -231,7 +270,7 @@ diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
  this.dumpn = dumpn;
  
  function dbg_assert(cond, e) {
-@@ -528,24 +532,39 @@ var DebuggerServer = {
+@@ -529,24 +533,39 @@ var DebuggerServer = {
     */
    connectToParent: function(aPrefix, aMessageManager) {
      this._checkInit();
@@ -274,7 +313,7 @@ diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
        childTransport = new ChildDebuggerTransport(mm, prefix);
        childTransport.hooks = {
          onPacket: aConnection.send.bind(aConnection),
-@@ -554,16 +573,18 @@ var DebuggerServer = {
+@@ -555,16 +574,18 @@ var DebuggerServer = {
        childTransport.ready();
  
        aConnection.setForwarding(prefix, childTransport);
@@ -293,7 +332,7 @@ diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
        if (subject == mm) {
          Services.obs.removeObserver(onMessageManagerDisconnect, topic);
          if (childTransport) {
-@@ -580,16 +601,21 @@ var DebuggerServer = {
+@@ -581,16 +602,21 @@ var DebuggerServer = {
          if (actor) {
            // The ContentActor within the child process doesn't necessary
            // have to time to uninitialize itself when the app is closed/killed.
@@ -328,7 +367,7 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
   * @param nsIMessageManager messageManager
   *        The nsIMessageManager to use to communicate with the parent process.
 + * @param string connID
-+ *        The connection ID to use to send messages to the parent process.
++ *        The connection ID to use for send messages to the parent process.
   * @param object owner
   *        The WebConsoleActor that is listening for the network requests.
   */
@@ -344,7 +383,8 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
  }
  exports.NetworkMonitorChild = NetworkMonitorChild;
  
-@@ -1023,58 +1026,71 @@ NetworkMonitorChild.prototype = {
+@@ -1022,29 +1025,32 @@ NetworkMonitorChild.prototype = {
+ 
    get saveRequestAndResponseBodies() {
      return this._saveRequestAndResponseBodies;
    },
@@ -352,8 +392,8 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
    set saveRequestAndResponseBodies(val) {
      this._saveRequestAndResponseBodies = val;
  
-     this._messageManager.sendAsyncMessage("debug:netmonitor", {
-+      managerID: this.connID,
+-    this._messageManager.sendAsyncMessage("debug:netmonitor", {
++    this._messageManager.sendAsyncMessage("debug:netmonitor:" + this.connID, {
        appId: this.appId,
        action: "setPreferences",
        preferences: {
@@ -363,39 +403,24 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
    },
  
    init: function() {
-     this._messageManager.addMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
-     this._messageManager.addMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
-     this._messageManager.sendAsyncMessage("debug:netmonitor", {
-+      managerID: this.connID,
+-    this._messageManager.addMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
+-    this._messageManager.addMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
+-    this._messageManager.sendAsyncMessage("debug:netmonitor", {
++    let mm = this._messageManager;
++    mm.addMessageListener("debug:netmonitor:" + this.connID + ":newEvent",
++                          this._onNewEvent);
++    mm.addMessageListener("debug:netmonitor:" + this.connID + ":updateEvent",
++                          this._onUpdateEvent);
++    mm.sendAsyncMessage("debug:netmonitor:" + this.connID, {
        appId: this.appId,
        action: "start",
      });
    },
  
    _onNewEvent: DevToolsUtils.makeInfallible(function _onNewEvent(msg) {
--    let {id, event} = msg.data;
-+    let {managerID, id, event} = msg.data;
-+    if (managerID != this.connID) {
-+      return;
-+    }
-+
+     let {id, event} = msg.data;
      let actor = this.owner.onNetworkEvent(event);
-     this._netEvents.set(id, Cu.getWeakReference(actor));
-   }),
- 
-   _onUpdateEvent: DevToolsUtils.makeInfallible(function _onUpdateEvent(msg) {
--    let {id, method, args} = msg.data;
-+    let {managerID, id, method, args} = msg.data;
-+    if (managerID != this.connID) {
-+      return;
-+    }
-+
-     let weakActor = this._netEvents.get(id);
-     let actor = weakActor ? weakActor.get() : null;
-     if (!actor) {
-       Cu.reportError("Received debug:netmonitor:updateEvent for unknown event ID: " + id);
-       return;
-     }
+@@ -1062,19 +1068,24 @@ NetworkMonitorChild.prototype = {
      if (!(method in actor)) {
        Cu.reportError("Received debug:netmonitor:updateEvent unsupported method: " + method);
        return;
@@ -404,11 +429,15 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
    }),
  
    destroy: function() {
-     this._messageManager.removeMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
-     this._messageManager.removeMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
+-    this._messageManager.removeMessageListener("debug:netmonitor:newEvent", this._onNewEvent);
+-    this._messageManager.removeMessageListener("debug:netmonitor:updateEvent", this._onUpdateEvent);
 -    this._messageManager.sendAsyncMessage("debug:netmonitor", { action: "disconnect" });
-+    this._messageManager.sendAsyncMessage("debug:netmonitor", {
-+      managerID: this.connID,
++    let mm = this._messageManager;
++    mm.removeMessageListener("debug:netmonitor:" + this.connID + ":newEvent",
++                             this._onNewEvent);
++    mm.removeMessageListener("debug:netmonitor:" + this.connID + ":updateEvent",
++                             this._onUpdateEvent);
++    mm.sendAsyncMessage("debug:netmonitor:" + this.connID, {
 +      action: "disconnect",
 +    });
      this._netEvents.clear();
@@ -419,7 +448,7 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
  
  /**
   * The NetworkEventActorProxy is used to send network request information from
-@@ -1085,28 +1101,32 @@ NetworkMonitorChild.prototype = {
+@@ -1085,27 +1096,31 @@ NetworkMonitorChild.prototype = {
   * The child process has a NetworkMonitorChild instance that is listening for
   * all network logging from the main process. The net monitor shim is used to
   * proxy the data to the WebConsoleActor instance of the child process.
@@ -442,9 +471,10 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
  NetworkEventActorProxy.methodFactory = function(method) {
    return DevToolsUtils.makeInfallible(function() {
      let args = Array.slice(arguments);
-     this.messageManager.sendAsyncMessage("debug:netmonitor:updateEvent", {
+-    this.messageManager.sendAsyncMessage("debug:netmonitor:updateEvent", {
++    let mm = this.messageManager;
++    mm.sendAsyncMessage("debug:netmonitor:" + this.connID + ":updateEvent", {
        id: this.id,
-+      managerID: this.connID,
        method: method,
        args: args,
      });
@@ -452,17 +482,19 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
  };
  
  NetworkEventActorProxy.prototype = {
-   /**
-@@ -1117,16 +1137,17 @@ NetworkEventActorProxy.prototype = {
+@@ -1115,17 +1130,18 @@ NetworkEventActorProxy.prototype = {
+    *
+    * @param object event
     *        Object describing the network request.
     * @return object
     *         This object.
     */
    init: DevToolsUtils.makeInfallible(function(event)
    {
-     this.messageManager.sendAsyncMessage("debug:netmonitor:newEvent", {
+-    this.messageManager.sendAsyncMessage("debug:netmonitor:newEvent", {
++    let mm = this.messageManager;
++    mm.sendAsyncMessage("debug:netmonitor:" + this.connID + ":newEvent", {
        id: this.id,
-+      managerID: this.connID,
        event: event,
      });
      return this;
@@ -470,8 +502,7 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
  };
  
  (function() {
-   // Listeners for new network event data coming from the NetworkMonitor.
-@@ -1143,19 +1164,22 @@ NetworkEventActorProxy.prototype = {
+@@ -1143,26 +1159,29 @@ NetworkEventActorProxy.prototype = {
  /**
   * The NetworkMonitor manager used by the Webapps actor in the main process.
   * This object uses the message manager to listen for requests from the child
@@ -493,10 +524,17 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
    this.onNetMonitorMessage = this.onNetMonitorMessage.bind(this);
    this.onNetworkEvent = this.onNetworkEvent.bind(this);
  
-   mm.addMessageListener("debug:netmonitor", this.onNetMonitorMessage);
+-  mm.addMessageListener("debug:netmonitor", this.onNetMonitorMessage);
++  mm.addMessageListener("debug:netmonitor:" + id, this.onNetMonitorMessage);
  }
-@@ -1169,17 +1193,20 @@ NetworkMonitorManager.prototype = {
-   /**
+ exports.NetworkMonitorManager = NetworkMonitorManager;
+ 
+ NetworkMonitorManager.prototype = {
+   netMonitor: null,
+   frame: null,
+   messageManager: null,
+ 
+@@ -1170,17 +1189,16 @@ NetworkMonitorManager.prototype = {
     * Handler for "debug:monitor" messages received through the message manager
     * from the content process.
     *
@@ -504,12 +542,8 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
     *        Message from the content.
     */
    onNetMonitorMessage: DevToolsUtils.makeInfallible(function _onNetMonitorMessage(msg) {
--    let { action, appId } = msg.json;
-+    let { managerID, action, appId } = msg.json;
-+    if (managerID != this.id) {
-+      return;
-+    }
- 
+     let { action, appId } = msg.json;
+-
      // Pipe network monitor data from parent to child via the message manager.
      switch (action) {
        case "start":
@@ -517,7 +551,8 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
            this.netMonitor = new NetworkMonitor({
              topFrame: this.frame,
              appId: appId,
-@@ -1217,23 +1244,25 @@ NetworkMonitorManager.prototype = {
+           }, this);
+@@ -1217,23 +1235,25 @@ NetworkMonitorManager.prototype = {
     *
     * @param object event
     *        Object describing the network request.
@@ -535,7 +570,7 @@ diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/w
 -    this.messageManager.removeMessageListener("debug:netmonitor",
 -                                              this.onNetMonitorMessage);
 +    if (this.messageManager) {
-+      this.messageManager.removeMessageListener("debug:netmonitor",
++      this.messageManager.removeMessageListener("debug:netmonitor:" + this.id,
 +                                                this.onNetMonitorMessage);
 +    }
      this.messageManager = null;
