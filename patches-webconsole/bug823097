@@ -1,24 +1,24 @@
 # HG changeset patch
-# Parent 2552d554372d96baf3e26ddaf66468886b51cbb9
+# Parent f3b94fd3b799cca6b17263464768aca0e5479ea9
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1390648303 -7200
+# Date 1396644978 -10800
 
 Bug 823097 - Add support for %c style formatting in console; r=past
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -1074,24 +1074,57 @@ Messages.ConsoleGeneric = function(packe
-     filterDuplicates: true,
-     location: {
-       url: packet.filename,
-       line: packet.lineNumber,
-     },
-   };
-   Messages.Extended.call(this, packet.arguments, options);
+@@ -1217,24 +1217,73 @@ Messages.ConsoleGeneric = function(packe
+       break;
+     }
+     default:
+       Messages.Extended.call(this, packet.arguments, options);
+       break;
+   }
+ 
    this._repeatID.consoleApiLevel = packet.level;
 +  this._repeatID.styles = packet.styles;
-+  this._styles = packet.styles;
++  this._styles = packet.styles || [];
  };
  
  Messages.ConsoleGeneric.prototype = Heritage.extend(Messages.Extended.prototype,
@@ -41,22 +41,38 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +        result.appendChild(separator);
 +      }
 +
++      let piece = this._messagePieces[i];
++      let renderedPiece = this._renderBodyPiece(piece);
++
 +      let style = this._styles[i];
 +      if (style && typeof style == "string" /* no long string support */) {
-+        let span = this.document.createElementNS(XHTML_NS, "span");
-+        span.style = style;
-+        result.appendChild(span);
-+        lastStyle = span;
++        lastStyle = this.cleanupStyle(style);
 +      }
 +
-+      let piece = this._messagePieces[i];
-+      (lastStyle || result).appendChild(this._renderBodyPiece(piece));
++      if (lastStyle) {
++        if (renderedPiece.nodeType == Ci.nsIDOMNode.ELEMENT_NODE) {
++          renderedPiece.style = lastStyle;
++          result.appendChild(renderedPiece);
++        } else {
++          let span = this.document.createElementNS(XHTML_NS, "span");
++          span.style = lastStyle;
++          span.appendChild(renderedPiece);
++          result.appendChild(span);
++        }
++      } else {
++        result.appendChild(renderedPiece);
++      }
 +    }
 +
 +    this._message = result;
 +    this._messagePieces = null;
 +    this._styles = null;
 +    return Messages.Simple.prototype.render.call(this);
++  },
++
++  cleanupStyle: function(style)
++  {
++    return style.replace(/\burl\s*\(\s*/gi, "urlnotallowed");
 +  },
  }); // Messages.ConsoleGeneric.prototype
  
@@ -66,126 +82,256 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   * @constructor
   * @extends Messages.Simple
   * @param object packet
-diff --git a/dom/base/ConsoleAPI.js b/dom/base/ConsoleAPI.js
---- a/dom/base/ConsoleAPI.js
-+++ b/dom/base/ConsoleAPI.js
-@@ -8,17 +8,17 @@ let Cu = Components.utils;
- let Ci = Components.interfaces;
- let Cc = Components.classes;
+diff --git a/browser/devtools/webconsole/test/browser.ini b/browser/devtools/webconsole/test/browser.ini
+--- a/browser/devtools/webconsole/test/browser.ini
++++ b/browser/devtools/webconsole/test/browser.ini
+@@ -275,8 +275,9 @@ run-if = os == "mac"
+ [browser_webconsole_output_dom_elements_03.js]
+ [browser_webconsole_output_dom_elements_04.js]
+ [browser_webconsole_output_events.js]
+ [browser_console_variables_view_highlighter.js]
+ [browser_webconsole_start_netmon_first.js]
+ [browser_webconsole_console_trace_duplicates.js]
+ [browser_webconsole_cd_iframe.js]
+ [browser_webconsole_autocomplete_crossdomain_iframe.js]
++[browser_webconsole_console_custom_styles.js]
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_custom_styles.js b/browser/devtools/webconsole/test/browser_webconsole_console_custom_styles.js
+new file mode 100644
+--- /dev/null
++++ b/browser/devtools/webconsole/test/browser_webconsole_console_custom_styles.js
+@@ -0,0 +1,68 @@
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++"use strict";
++
++// Test that the '%c' modifier works with the console API.
++
++function test() {
++  let hud;
++
++  const TEST_URI = "data:text/html;charset=utf8,<p>test for " +
++                   "console.log('%ccolors', 'color:red')";
++
++  Task.spawn(runner).then(finishTest);
++
++  function* runner() {
++    const {tab} = yield loadTab(TEST_URI);
++    hud = yield openConsole(tab);
++
++    const style1 = "color:red;font-size:1.3em";
++    hud.jsterm.execute("console.log('%cfoobar', '" + style1 + "')");
++
++    let [result] = yield waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "foobar",
++        category: CATEGORY_WEBDEV,
++      }],
++    });
++
++    let msg = [...result.matched][0];
++    ok(msg, "message element");
++
++    let span = msg.querySelector(".body span[style]");
++    ok(span, "span element");
++
++    info("span textContent " + span.textContent);
++    isnot(span.textContent.indexOf("foobar"), -1, "span textContent");
++
++    let outputStyle = span.getAttribute("style").replace(/\s+|;+$/g, "");
++    is(outputStyle, style1, "span style is correct");
++
++    const style2 = "color:red;background-image:url('http://example.com/test')";
++    hud.jsterm.execute("console.log('%cfoobar', '" + style1 + "')");
++
++    let [result] = yield waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "foobar",
++        category: CATEGORY_WEBDEV,
++      }],
++    });
++
++    let msg = [...result.matched][0];
++    ok(msg, "message element");
++
++    let span = msg.querySelector(".body span[style]");
++    ok(span, "span element");
++
++    info("span textContent " + span.textContent);
++    isnot(span.textContent.indexOf("foobar"), -1, "span textContent");
++
++    let outputStyle = span.getAttribute("style").replace(/\s+|;+$/g, "");
++    is(outputStyle, style1, "span style is correct");
++
++    yield closeConsole(tab);
++  }
++}
+diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
+--- a/dom/base/Console.cpp
++++ b/dom/base/Console.cpp
+@@ -964,17 +964,19 @@ Console::ProcessCallData(ConsoleCallData
+     case MethodLog:
+     case MethodInfo:
+     case MethodWarn:
+     case MethodError:
+     case MethodException:
+     case MethodDebug:
+     case MethodAssert:
+       event.mArguments.Construct();
+-      ProcessArguments(cx, aData->mArguments, event.mArguments.Value());
++      event.mStyles.Construct();
++      ProcessArguments(cx, aData->mArguments, event.mArguments.Value(),
++                       event.mStyles.Value());
+       break;
  
- // The maximum allowed number of concurrent timers per page.
- const MAX_PAGE_TIMERS = 10000;
+     default:
+       event.mArguments.Construct();
+       ArgumentsToValueList(aData->mArguments, event.mArguments.Value());
+   }
  
- // The regular expression used to parse %s/%d and other placeholders for
- // variables in strings that need to be interpolated.
--const ARGUMENT_PATTERN = /%\d*\.?\d*([osdif])\b/g;
-+const ARGUMENT_PATTERN = /%\d*\.?\d*([dif])\b|%([oOs])\b|%(c)/g;
+   if (aData->mMethodName == MethodTrace) {
+@@ -1046,28 +1048,30 @@ Console::ProcessCallData(ConsoleCallData
  
- // The maximum stacktrace depth when populating the stacktrace array used for
- // console.trace().
- const DEFAULT_MAX_STACKTRACE_DEPTH = 200;
+     obs->NotifyObservers(wrapper, "console-api-log-event", outerID.get());
+   }
+ }
  
- // The console API methods are async and their action is executed later. This
- // delay tells how much later.
- const CALL_DELAY = 15; // milliseconds
-@@ -298,19 +298,22 @@ ConsoleAPI.prototype = {
+ void
+ Console::ProcessArguments(JSContext* aCx,
+                           const nsTArray<JS::Heap<JS::Value>>& aData,
+-                          Sequence<JS::Value>& aSequence)
++                          Sequence<JS::Value>& aSequence,
++                          Sequence<JS::Value>& aStyles)
+ {
+   if (aData.IsEmpty()) {
+     return;
+   }
  
-     switch (method) {
-       case "log":
-       case "info":
-       case "warn":
-       case "error":
-       case "exception":
-       case "debug":
--      case "assert":
--        consoleEvent.arguments = this.processArguments(args);
-+      case "assert": {
-+        let result = this.processArguments(args);
-+        consoleEvent.arguments = result.args;
-+        consoleEvent.styles = result.styles;
-         break;
-+      }
-       case "trace":
-         consoleEvent.stacktrace = meta.stack;
-         break;
-       case "group":
-       case "groupCollapsed":
-       case "groupEnd":
-         try {
-           consoleEvent.groupName = Array.prototype.join.call(args, " ");
-@@ -361,54 +364,64 @@ ConsoleAPI.prototype = {
-    * TODO: object substitution should take into account width and precision
-    * qualifiers (bug 685813).
-    *
-    * @param mixed aArguments
-    *        The arguments given to the console API call.
-    **/
-   processArguments: function CA_processArguments(aArguments) {
-     if (aArguments.length < 2 || typeof aArguments[0] != "string") {
--      return aArguments;
-+      return { args: aArguments };
+   if (aData.Length() == 1 || !aData[0].isString()) {
+     ArgumentsToValueList(aData, aSequence);
+     return;
+   }
+ 
+   SequenceRooter<JS::Value> rooter(aCx, &aSequence);
++  SequenceRooter<JS::Value> rooterStyles(aCx, &aStyles);
+ 
+   JS::Rooted<JS::Value> format(aCx, aData[0]);
+   JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, format));
+   if (!jsString) {
+     return;
+   }
+ 
+   nsDependentJSString string;
+@@ -1153,16 +1157,17 @@ Console::ProcessArguments(JSContext* aCx
      }
  
-     let args = Array.prototype.slice.call(aArguments);
-     let format = args.shift();
--    let splitter = "%" + format.length + Date.now() + "%";
-+    let splitter = "!" + format.length + Date.now() + "!";
-     let objects = [];
-+    let stylesArr = [];
-+    let stylesArr2 = [];
+     char ch = *start;
+     tmp.Append(ch);
+     ++start;
  
-     // Format specification regular expression.
--    let processed = format.replace(ARGUMENT_PATTERN, function CA_PA_substitute(match, submatch) {
-+    let processed = format.replace(ARGUMENT_PATTERN, (match, submatch1, submatch2, submatch3) => {
-+      let submatch = submatch1 || submatch2 || submatch3;
-       switch (submatch) {
-         case "o":
-+        case "O":
-           objects.push(args.shift());
-           return splitter;
-         case "s":
-           return String(args.shift());
-         case "d":
-         case "i":
-           return parseInt(args.shift());
-         case "f":
-           return parseFloat(args.shift());
-+        case "c":
-+          stylesArr.push(String(args.shift()));
-+          return splitter;
-         default:
-           return submatch;
-       };
-     });
+     switch (ch) {
+       case 'o':
++      case 'O':
+       {
+         if (!output.IsEmpty()) {
+           JS::Rooted<JSString*> str(aCx, JS_NewUCStringCopyN(aCx,
+                                                              output.get(),
+                                                              output.Length()));
+           if (!str) {
+             return;
+           }
+@@ -1175,16 +1180,41 @@ Console::ProcessArguments(JSContext* aCx
+         if (index < aData.Length()) {
+           v = aData[index++];
+         }
  
-     let result = [];
-     let processedArray = processed.split(splitter);
-     processedArray.forEach(function(aValue, aIndex) {
-       if (aValue !== "") {
-         result.push(aValue);
+         aSequence.AppendElement(v);
+         break;
        }
-       if (objects[aIndex]) {
-         result.push(objects[aIndex]);
-       }
-+      if (stylesArr[aIndex]) {
-+        stylesArr2[result.length] = stylesArr[aIndex];
+ 
++      case 'c':
++      {
++        if (!output.IsEmpty()) {
++          JS::Rooted<JSString*> str(aCx, JS_NewUCStringCopyN(aCx,
++                                                             output.get(),
++                                                             output.Length()));
++          if (!str) {
++            return;
++          }
++
++          aSequence.AppendElement(JS::StringValue(str));
++          output.Truncate();
++        }
++
++        if (index < aData.Length()) {
++          JS::Rooted<JS::Value> v(aCx, aData[index++]);
++          JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, v));
++          if (!jsString) {
++            return;
++          }
++          aStyles.AppendElement(JS::StringValue(jsString));
++        }
++        break;
 +      }
-     });
++
+       case 's':
+         if (index < aData.Length()) {
+           JS::Rooted<JS::Value> value(aCx, aData[index++]);
+           JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, value));
+           if (!jsString) {
+             return;
+           }
  
--    return result.concat(args);
-+    return { args: result.concat(args), styles: stylesArr2 };
-   },
+diff --git a/dom/base/Console.h b/dom/base/Console.h
+--- a/dom/base/Console.h
++++ b/dom/base/Console.h
+@@ -142,17 +142,18 @@ private:
+   // The output is an array where any object is a separated item, the rest is
+   // unified in a format string.
+   // Example if the input is:
+   //   "string: %s, integer: %d, object: %o, double: %d", 's', 1, window, 0.9
+   // The output will be:
+   //   [ "string: s, integer: 1, object: ", window, ", double: 0.9" ]
+   void
+   ProcessArguments(JSContext* aCx, const nsTArray<JS::Heap<JS::Value>>& aData,
+-                   Sequence<JS::Value>& aSequence);
++                   Sequence<JS::Value>& aSequence,
++                   Sequence<JS::Value>& aStyles);
  
-   /**
-    * Build the stacktrace array for the console.trace() call.
-    *
-    * @param number [aMaxDepth=DEFAULT_MAX_STACKTRACE_DEPTH]
-    *        Optional maximum stacktrace depth.
-    * @return array
+   void
+   MakeFormatString(nsCString& aFormat, int32_t aInteger, int32_t aMantissa,
+                    char aCh);
+ 
+   // Stringify and Concat all the JS::Value in a single string using ' ' as
+   // separator.
+   void
+diff --git a/dom/webidl/Console.webidl b/dom/webidl/Console.webidl
+--- a/dom/webidl/Console.webidl
++++ b/dom/webidl/Console.webidl
+@@ -37,16 +37,17 @@ dictionary ConsoleEvent {
+   (unsigned long or DOMString) ID;
+   (unsigned long or DOMString) innerID;
+   DOMString level = "";
+   DOMString filename = "";
+   unsigned long lineNumber = 0;
+   DOMString functionName = "";
+   double timeStamp = 0;
+   sequence<any> arguments;
++  sequence<any> styles;
+   boolean private = false;
+   sequence<ConsoleStackEntry> stacktrace;
+   DOMString groupName = "";
+   any timer = null;
+   any counter = null;
+ };
+ 
+ // Event for profile operations
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -1239,16 +1239,21 @@ WebConsoleActor.prototype =
+@@ -1314,16 +1314,21 @@ WebConsoleActor.prototype =
      delete result.ID;
      delete result.innerID;
  

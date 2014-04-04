@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent b18069357e4b4dfaec08faa4dc3e8ba5f9d0d128
+# Parent 8be0cf3668ed4a0baeb527dfbfae764fc0166698
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1396371154 -10800
+# Date 1396529125 -10800
 Bug 989043 - Network monitor support for e10s; r=ochameau
 
 diff --git a/b2g/chrome/content/devtools.js b/b2g/chrome/content/devtools.js
@@ -249,7 +249,7 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
 diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
 --- a/toolkit/devtools/server/main.js
 +++ b/toolkit/devtools/server/main.js
-@@ -64,16 +64,20 @@ this.defer = defer;
+@@ -65,16 +65,20 @@ this.defer = defer;
  this.resolve = resolve;
  this.reject = reject;
  this.promised = promised;
@@ -270,7 +270,7 @@ diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
  this.dumpn = dumpn;
  
  function dbg_assert(cond, e) {
-@@ -529,24 +533,39 @@ var DebuggerServer = {
+@@ -531,24 +535,39 @@ var DebuggerServer = {
     */
    connectToParent: function(aPrefix, aMessageManager) {
      this._checkInit();
@@ -313,7 +313,7 @@ diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
        childTransport = new ChildDebuggerTransport(mm, prefix);
        childTransport.hooks = {
          onPacket: aConnection.send.bind(aConnection),
-@@ -555,16 +574,18 @@ var DebuggerServer = {
+@@ -557,16 +576,18 @@ var DebuggerServer = {
        childTransport.ready();
  
        aConnection.setForwarding(prefix, childTransport);
@@ -332,7 +332,7 @@ diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
        if (subject == mm) {
          Services.obs.removeObserver(onMessageManagerDisconnect, topic);
          if (childTransport) {
-@@ -581,16 +602,21 @@ var DebuggerServer = {
+@@ -584,16 +605,21 @@ var DebuggerServer = {
          if (actor) {
            // The ContentActor within the child process doesn't necessary
            // have to time to uninitialize itself when the app is closed/killed.
@@ -354,6 +354,47 @@ diff --git a/toolkit/devtools/server/main.js b/toolkit/devtools/server/main.js
      Services.obs.addObserver(onMessageManagerDisconnect,
                               "message-manager-disconnect", false);
  
+diff --git a/toolkit/devtools/server/tests/mochitest/test_connectToChild.html b/toolkit/devtools/server/tests/mochitest/test_connectToChild.html
+--- a/toolkit/devtools/server/tests/mochitest/test_connectToChild.html
++++ b/toolkit/devtools/server/tests/mochitest/test_connectToChild.html
+@@ -69,17 +69,17 @@ function runTests() {
+   DebuggerServer.init(function () { return true; });
+   DebuggerServer.addBrowserActors();
+ 
+   function firstClient() {
+     // Fake a first connection to an iframe
+     let transport = DebuggerServer.connectPipe();
+     let conn = transport._serverConnection;
+     let client = new DebuggerClient(transport);
+-    DebuggerServer.connectToChild(conn, mm).then(actor => {
++    DebuggerServer.connectToChild(conn, iframe).then(actor => {
+       ok(actor.testActor, "Got the test actor");
+ 
+       // Ensure sending at least one request to our actor,
+       // otherwise it won't be instanciated, nor be disconnected...
+       client.request({
+         to: actor.testActor,
+         type: "hello",
+       }, function (response) {
+@@ -99,17 +99,17 @@ function runTests() {
+     });
+   }
+ 
+   function secondClient(firstActor) {
+     // Then fake a second one, that should spawn a new set of tab actors
+     let transport = DebuggerServer.connectPipe();
+     let conn = transport._serverConnection;
+     let client = new DebuggerClient(transport);
+-    DebuggerServer.connectToChild(conn, mm).then(actor => {
++    DebuggerServer.connectToChild(conn, iframe).then(actor => {
+       ok(actor.testActor, "Got a test actor for the second connection");
+       isnot(actor.testActor, firstActor, "We get different actor instances between two connections");
+ 
+       client.close(cleanup);
+     });
+   }
+ 
+   function cleanup() {
 diff --git a/toolkit/devtools/webconsole/network-monitor.js b/toolkit/devtools/webconsole/network-monitor.js
 --- a/toolkit/devtools/webconsole/network-monitor.js
 +++ b/toolkit/devtools/webconsole/network-monitor.js
