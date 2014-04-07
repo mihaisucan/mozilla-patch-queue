@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent f3b94fd3b799cca6b17263464768aca0e5479ea9
+# Parent f4b4df9eba88f77f885467ca8dec19dec0289eba
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1396644978 -10800
+# Date 1396900784 -10800
 
-Bug 823097 - Add support for %c style formatting in console; r=past
+Bug 823097 - Add support for %c style formatting in console; r=past,bz
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -1217,24 +1217,73 @@ Messages.ConsoleGeneric = function(packe
+@@ -1217,24 +1217,88 @@ Messages.ConsoleGeneric = function(packe
        break;
      }
      default:
@@ -70,9 +70,24 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return Messages.Simple.prototype.render.call(this);
 +  },
 +
++  /**
++   * Given a style attribute value cleanup the string such that no external URL
++   * is allowed to load.
++   *
++   * Note: this method does not attempt to produce a correct style attribute
++   * value. URLs are not allowed and the intent here is to just break/disallow
++   * their use.
++   *
++   * @param string style
++   *        The style string to cleanup.
++   * @return string
++   *         The style value with no URLs.
++   */
 +  cleanupStyle: function(style)
 +  {
-+    return style.replace(/\burl\s*\(\s*/gi, "urlnotallowed");
++    return style.replace(/\burl[\s('"]+/gi, "urlnotallowed")
++           .replace(/['"(]*(?:chrome|resource|about|app|data|https?|ftp|file):+\/*/gi,
++                    "urlnotallowed");
 +  },
  }); // Messages.ConsoleGeneric.prototype
  
@@ -85,7 +100,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 diff --git a/browser/devtools/webconsole/test/browser.ini b/browser/devtools/webconsole/test/browser.ini
 --- a/browser/devtools/webconsole/test/browser.ini
 +++ b/browser/devtools/webconsole/test/browser.ini
-@@ -275,8 +275,9 @@ run-if = os == "mac"
+@@ -276,8 +276,9 @@ run-if = os == "mac"
  [browser_webconsole_output_dom_elements_03.js]
  [browser_webconsole_output_dom_elements_04.js]
  [browser_webconsole_output_events.js]
@@ -99,19 +114,30 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_custom_
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_webconsole_console_custom_styles.js
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,72 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
 +"use strict";
 +
-+// Test that the '%c' modifier works with the console API.
++// Test that the '%c' modifier works with the console API. See bug 823097.
 +
 +function test() {
 +  let hud;
 +
 +  const TEST_URI = "data:text/html;charset=utf8,<p>test for " +
-+                   "console.log('%ccolors', 'color:red')";
++                   "console.log('%ccustom styles', 'color:red')";
++
++  const checks = [{
++    style: "color:red;font-size:1.3em",
++    props: { color: true, fontSize: true },
++    sameStyleExpected: true,
++  }, {
++    style: "color:blue;background-image:url('http://example.com/test')",
++    props: { color: true, fontSize: false, background: false,
++             backgroundImage: false },
++    sameStyleExpected: false,
++  }];
 +
 +  Task.spawn(runner).then(finishTest);
 +
@@ -119,53 +145,46 @@ new file mode 100644
 +    const {tab} = yield loadTab(TEST_URI);
 +    hud = yield openConsole(tab);
 +
-+    const style1 = "color:red;font-size:1.3em";
-+    hud.jsterm.execute("console.log('%cfoobar', '" + style1 + "')");
-+
-+    let [result] = yield waitForMessages({
-+      webconsole: hud,
-+      messages: [{
-+        text: "foobar",
-+        category: CATEGORY_WEBDEV,
-+      }],
-+    });
-+
-+    let msg = [...result.matched][0];
-+    ok(msg, "message element");
-+
-+    let span = msg.querySelector(".body span[style]");
-+    ok(span, "span element");
-+
-+    info("span textContent " + span.textContent);
-+    isnot(span.textContent.indexOf("foobar"), -1, "span textContent");
-+
-+    let outputStyle = span.getAttribute("style").replace(/\s+|;+$/g, "");
-+    is(outputStyle, style1, "span style is correct");
-+
-+    const style2 = "color:red;background-image:url('http://example.com/test')";
-+    hud.jsterm.execute("console.log('%cfoobar', '" + style1 + "')");
-+
-+    let [result] = yield waitForMessages({
-+      webconsole: hud,
-+      messages: [{
-+        text: "foobar",
-+        category: CATEGORY_WEBDEV,
-+      }],
-+    });
-+
-+    let msg = [...result.matched][0];
-+    ok(msg, "message element");
-+
-+    let span = msg.querySelector(".body span[style]");
-+    ok(span, "span element");
-+
-+    info("span textContent " + span.textContent);
-+    isnot(span.textContent.indexOf("foobar"), -1, "span textContent");
-+
-+    let outputStyle = span.getAttribute("style").replace(/\s+|;+$/g, "");
-+    is(outputStyle, style1, "span style is correct");
++    for (let check of checks) {
++      yield checkStyle(check);
++    }
 +
 +    yield closeConsole(tab);
++  }
++
++  function* checkStyle(check) {
++    hud.jsterm.clearOutput();
++
++    info("checkStyle " + check.style);
++    hud.jsterm.execute("console.log('%cfoobar', \"" + check.style + "\")");
++
++    let [result] = yield waitForMessages({
++      webconsole: hud,
++      messages: [{
++        text: "foobar",
++        category: CATEGORY_WEBDEV,
++      }],
++    });
++
++    let msg = [...result.matched][0];
++    ok(msg, "message element");
++
++    let span = msg.querySelector(".body span[style]");
++    ok(span, "span element");
++
++    info("span textContent is: " + span.textContent);
++    isnot(span.textContent.indexOf("foobar"), -1, "span textContent check");
++
++    let outputStyle = span.getAttribute("style").replace(/\s+|;+$/g, "");
++    if (check.sameStyleExpected) {
++      is(outputStyle, check.style, "span style is correct");
++    } else {
++      isnot(outputStyle, check.style, "span style is not the same");
++    }
++
++    for (let prop of Object.keys(check.props)) {
++      is(!!span.style[prop], check.props[prop], "property check for " + prop);
++    }
 +  }
 +}
 diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
