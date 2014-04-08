@@ -1,7 +1,7 @@
 # HG changeset patch
-# Parent f4b4df9eba88f77f885467ca8dec19dec0289eba
+# Parent f94e2d36105895f5af4c9b5714aca7f076744ec5
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1396900784 -10800
+# Date 1396989386 -10800
 
 Bug 823097 - Add support for %c style formatting in console; r=past,bz
 
@@ -243,7 +243,25 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    }
  
    nsDependentJSString string;
-@@ -1153,16 +1157,17 @@ Console::ProcessArguments(JSContext* aCx
+@@ -1076,16 +1080,17 @@ Console::ProcessArguments(JSContext* aCx
+   }
+ 
+   nsString::const_iterator start, end;
+   string.BeginReading(start);
+   string.EndReading(end);
+ 
+   nsString output;
+   uint32_t index = 1;
++  uint32_t index2 = 1;
+ 
+   while (start != end) {
+     if (*start != '%') {
+       output.Append(*start);
+       ++start;
+       continue;
+     }
+ 
+@@ -1153,16 +1158,17 @@ Console::ProcessArguments(JSContext* aCx
      }
  
      char ch = *start;
@@ -261,7 +279,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
            if (!str) {
              return;
            }
-@@ -1175,16 +1180,41 @@ Console::ProcessArguments(JSContext* aCx
+@@ -1175,16 +1181,41 @@ Console::ProcessArguments(JSContext* aCx
          if (index < aData.Length()) {
            v = aData[index++];
          }
@@ -290,7 +308,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
 +          if (!jsString) {
 +            return;
 +          }
-+          aStyles.AppendElement(JS::StringValue(jsString));
++          aStyles.InsertElementAt(aSequence.Length(), JS::StringValue(jsString));
 +        }
 +        break;
 +      }
@@ -326,6 +344,108 @@ diff --git a/dom/base/Console.h b/dom/base/Console.h
    // Stringify and Concat all the JS::Value in a single string using ' ' as
    // separator.
    void
+diff --git a/dom/tests/browser/browser_ConsoleAPITests.js b/dom/tests/browser/browser_ConsoleAPITests.js
+--- a/dom/tests/browser/browser_ConsoleAPITests.js
++++ b/dom/tests/browser/browser_ConsoleAPITests.js
+@@ -1,16 +1,16 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ const TEST_URI = "http://example.com/browser/dom/tests/browser/test-console-api.html";
+ 
+-var gWindow, gLevel, gArgs, gTestDriver;
++var gWindow, gLevel, gArgs, gTestDriver, gStyle;
+ 
+ function test() {
+   waitForExplicitFinish();
+ 
+   var tab = gBrowser.addTab(TEST_URI);
+   gBrowser.selectedTab = tab;
+   var browser = gBrowser.selectedBrowser;
+ 
+@@ -59,16 +59,24 @@ function testConsoleData(aMessageObject)
+         //
+         // It'd be nice to just use XPCNativeWrapper.unwrap here, but there are
+         // a number of dumb reasons we can't. See bug 868675.
+         var arg = aMessageObject.arguments[i];
+         if (Components.utils.isXrayWrapper(arg))
+           arg = arg.wrappedJSObject;
+         is(arg, a, "correct arg " + i);
+       });
++
++      if (gStyle) {
++        is(aMessageObject.styles.length, gStyle.length, "styles.length matches");
++        is(aMessageObject.styles + "", gStyle + "", "styles match");
++      } else {
++        ok(!aMessageObject.styles || aMessageObject.styles.length === 0,
++           "styles match");
++      }
+     }
+   }
+ 
+   gTestDriver.next();
+ }
+ 
+ function testLocationData(aMessageObject) {
+   let messageWindow = Services.wm.getOuterWindowWithId(aMessageObject.ID);
+@@ -240,22 +248,22 @@ function observeConsoleTest() {
+                    "PI",
+                    3.14159);
+   yield undefined;
+ 
+   expect("log", "%d, %s, %l");
+   win.console.log("%d, %s, %l");
+   yield undefined;
+ 
+-  expect("log", "%a %b %c");
+-  win.console.log("%a %b %c");
++  expect("log", "%a %b %g");
++  win.console.log("%a %b %g");
+   yield undefined;
+ 
+-  expect("log", "%a %b %c", "a", "b");
+-  win.console.log("%a %b %c", "a", "b");
++  expect("log", "%a %b %g", "a", "b");
++  win.console.log("%a %b %g", "a", "b");
+   yield undefined;
+ 
+   expect("log", "2, a, %l", 3);
+   win.console.log("%d, %s, %l", 2, "a", 3);
+   yield undefined;
+ 
+   // Bug #692550 handle null and undefined.
+   expect("log", "null, undefined");
+@@ -275,16 +283,28 @@ function observeConsoleTest() {
+   expect("error", "arg");
+   win.console.error("arg");
+   yield undefined;
+ 
+   expect("exception", "arg");
+   win.console.exception("arg");
+   yield undefined;
+ 
++  expect("log", "foobar");
++  gStyle = ["color:red;foobar;;"];
++  win.console.log("%cfoobar", gStyle[0]);
++  yield undefined;
++
++  let obj3 = { c: 3 };
++  expect("info", "foobar", "bazbaz", obj3, "omg");
++  gStyle = [null, "color:pink;", "color:red"];
++  win.console.info("foobar%cbazbaz", gStyle[1], obj3, "%comg", gStyle[2]);
++  yield undefined;
++
++  gStyle = null;
+   let obj2 = { b: 2 };
+   expect("log", "omg ", obj, " foo ", 4, obj2);
+   win.console.log("omg %o foo %o", obj, 4, obj2);
+   yield undefined;
+ 
+   expect("assert", "message");
+   win.console.assert(false, "message");
+   yield undefined;
 diff --git a/dom/webidl/Console.webidl b/dom/webidl/Console.webidl
 --- a/dom/webidl/Console.webidl
 +++ b/dom/webidl/Console.webidl
