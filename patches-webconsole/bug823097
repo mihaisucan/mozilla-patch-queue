@@ -1,14 +1,32 @@
 # HG changeset patch
-# Parent f94e2d36105895f5af4c9b5714aca7f076744ec5
+# Parent 7262fabfd83eef1f569571bb72f8943dd3870902
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1396989386 -10800
+# Date 1397075832 -10800
 
 Bug 823097 - Add support for %c style formatting in console; r=past,bz
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -1217,24 +1217,88 @@ Messages.ConsoleGeneric = function(packe
+@@ -93,16 +93,17 @@ const CONSOLE_API_LEVELS_TO_SEVERITIES =
+ };
+ 
+ // Array of known message source URLs we need to hide from output.
+ const IGNORED_SOURCE_URLS = ["debugger eval code", "self-hosted"];
+ 
+ // The maximum length of strings to be displayed by the Web Console.
+ const MAX_LONG_STRING_LENGTH = 200000;
+ 
++const RE_ALLOWED_STYLES = /^(?:-moz-)?(?:background|border|box|clear|color|cursor|float|font|line|margin|padding|text|transition|outline|white-space|word|writing|(?:min|max)width|(?:min|max)height)/;
+ 
+ /**
+  * The ConsoleOutput object is used to manage output of messages in the Web
+  * Console.
+  *
+  * @constructor
+  * @param object owner
+  *        The console output owner. This usually the WebConsoleFrame instance.
+@@ -1217,24 +1218,120 @@ Messages.ConsoleGeneric = function(packe
        break;
      }
      default:
@@ -85,9 +103,41 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +   */
 +  cleanupStyle: function(style)
 +  {
-+    return style.replace(/\burl[\s('"]+/gi, "urlnotallowed")
-+           .replace(/['"(]*(?:chrome|resource|about|app|data|https?|ftp|file):+\/*/gi,
-+                    "urlnotallowed");
++    const regex = [
++      // url(), -moz-element()
++      /\b(?:url|(?:-moz-)?element)[\s('"]+/gi,
++
++      // various URL protocols
++      /['"(]*(?:chrome|resource|about|app|data|https?|ftp|file):+\/*/gi,
++    ];
++
++    for (let r of regex) {
++      style = style.replace(r, "notallowed");
++    }
++
++    let dummy = this.output._dummyElement;
++    if (!dummy) {
++      dummy = this.output._dummyElement =
++        this.document.createElementNS(XHTML_NS, "div");
++    }
++    dummy.style = style;
++
++    let toRemove = [];
++    for (let i = 0; i < dummy.style.length; i++) {
++      let prop = dummy.style[i];
++      if (!RE_ALLOWED_STYLES.test(prop)) {
++        toRemove.push(prop);
++      }
++    }
++
++    for (let prop of toRemove) {
++      dummy.style.removeProperty(prop);
++    }
++
++    style = String(dummy.style);
++    dummy.style = "";
++
++    return style;
 +  },
  }); // Messages.ConsoleGeneric.prototype
  
@@ -211,7 +261,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    }
  
    if (aData->mMethodName == MethodTrace) {
-@@ -1046,28 +1048,30 @@ Console::ProcessCallData(ConsoleCallData
+@@ -1046,29 +1048,28 @@ Console::ProcessCallData(ConsoleCallData
  
      obs->NotifyObservers(wrapper, "console-api-log-event", outerID.get());
    }
@@ -233,9 +283,8 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
      return;
    }
  
-   SequenceRooter<JS::Value> rooter(aCx, &aSequence);
-+  SequenceRooter<JS::Value> rooterStyles(aCx, &aStyles);
- 
+-  SequenceRooter<JS::Value> rooter(aCx, &aSequence);
+-
    JS::Rooted<JS::Value> format(aCx, aData[0]);
    JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, format));
    if (!jsString) {
@@ -243,25 +292,8 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    }
  
    nsDependentJSString string;
-@@ -1076,16 +1080,17 @@ Console::ProcessArguments(JSContext* aCx
-   }
- 
-   nsString::const_iterator start, end;
-   string.BeginReading(start);
-   string.EndReading(end);
- 
-   nsString output;
-   uint32_t index = 1;
-+  uint32_t index2 = 1;
- 
-   while (start != end) {
-     if (*start != '%') {
-       output.Append(*start);
-       ++start;
-       continue;
-     }
- 
-@@ -1153,16 +1158,17 @@ Console::ProcessArguments(JSContext* aCx
+   if (!string.init(aCx, jsString)) {
+@@ -1153,16 +1154,17 @@ Console::ProcessArguments(JSContext* aCx
      }
  
      char ch = *start;
@@ -279,7 +311,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
            if (!str) {
              return;
            }
-@@ -1175,16 +1181,41 @@ Console::ProcessArguments(JSContext* aCx
+@@ -1175,16 +1177,48 @@ Console::ProcessArguments(JSContext* aCx
          if (index < aData.Length()) {
            v = aData[index++];
          }
@@ -308,7 +340,14 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
 +          if (!jsString) {
 +            return;
 +          }
-+          aStyles.InsertElementAt(aSequence.Length(), JS::StringValue(jsString));
++
++          int32_t diff = aSequence.Length() - aStyles.Length();
++          if (diff > 0) {
++            for (uint32_t i = 0; i < diff; i++) {
++              aStyles.AppendElement(JSVAL_NULL);
++            }
++          }
++          aStyles.AppendElement(JS::StringValue(jsString));
 +        }
 +        break;
 +      }
@@ -324,13 +363,29 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
 diff --git a/dom/base/Console.h b/dom/base/Console.h
 --- a/dom/base/Console.h
 +++ b/dom/base/Console.h
-@@ -142,17 +142,18 @@ private:
+@@ -133,26 +133,33 @@ private:
+   void
+   ProcessCallData(ConsoleCallData* aData);
+ 
+   // If the first JS::Value of the array is a string, this method uses it to
+   // format a string. The supported sequences are:
+   //   %s    - string
+   //   %d,%i - integer
+   //   %f    - double
+-  //   %o    - a JS object.
++  //   %o,%O - a JS object.
++  //   %c    - style string.
    // The output is an array where any object is a separated item, the rest is
    // unified in a format string.
    // Example if the input is:
    //   "string: %s, integer: %d, object: %o, double: %d", 's', 1, window, 0.9
    // The output will be:
    //   [ "string: s, integer: 1, object: ", window, ", double: 0.9" ]
++  //
++  // The aStyles array is populated with the style strings that the function
++  // finds based the format string. The index of the styles matches the indexes
++  // of elements that need the custom styling from aSequence. For elements with
++  // no custom styling the array is padded with null elements.
    void
    ProcessArguments(JSContext* aCx, const nsTArray<JS::Heap<JS::Value>>& aData,
 -                   Sequence<JS::Value>& aSequence);
@@ -470,7 +525,7 @@ diff --git a/dom/webidl/Console.webidl b/dom/webidl/Console.webidl
 diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/server/actors/webconsole.js
 --- a/toolkit/devtools/server/actors/webconsole.js
 +++ b/toolkit/devtools/server/actors/webconsole.js
-@@ -1314,16 +1314,21 @@ WebConsoleActor.prototype =
+@@ -1314,16 +1314,20 @@ WebConsoleActor.prototype =
      delete result.ID;
      delete result.innerID;
  
@@ -479,9 +534,8 @@ diff --git a/toolkit/devtools/server/actors/webconsole.js b/toolkit/devtools/ser
        return this.createValueGrip(dbgObj);
      });
  
-+    result.styles = Array.map(aMessage.styles || [], (aObj) => {
-+      let dbgObj = this.makeDebuggeeValue(aObj, true);
-+      return this.createValueGrip(dbgObj);
++    result.styles = Array.map(aMessage.styles || [], (aString) => {
++      return this.createValueGrip(aString);
 +    });
 +
      return result;
