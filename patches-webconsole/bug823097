@@ -1,14 +1,14 @@
 # HG changeset patch
-# Parent 7262fabfd83eef1f569571bb72f8943dd3870902
+# Parent 6c37a8480f1b98e016f33921cbd10d8d4fa58938
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1397075832 -10800
+# Date 1397141961 -10800
 
-Bug 823097 - Add support for %c style formatting in console; r=past,bz
+Bug 823097 - Add support for %c style formatting in console; r=past,bz; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitests -t none
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
 +++ b/browser/devtools/webconsole/console-output.js
-@@ -93,16 +93,17 @@ const CONSOLE_API_LEVELS_TO_SEVERITIES =
+@@ -93,16 +93,29 @@ const CONSOLE_API_LEVELS_TO_SEVERITIES =
  };
  
  // Array of known message source URLs we need to hide from output.
@@ -17,7 +17,19 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  // The maximum length of strings to be displayed by the Web Console.
  const MAX_LONG_STRING_LENGTH = 200000;
  
-+const RE_ALLOWED_STYLES = /^(?:-moz-)?(?:background|border|box|clear|color|cursor|float|font|line|margin|padding|text|transition|outline|white-space|word|writing|(?:min|max)width|(?:min|max)height)/;
++// Regular expression that matches the allowed CSS property names when using
++// the `window.console` API.
++const RE_ALLOWED_STYLES = /^(?:-moz-)?(?:background|border|box|clear|color|cursor|display|float|font|line|margin|padding|text|transition|outline|white-space|word|writing|(?:min-|max-)?width|(?:min-|max-)?height)/;
++
++// Regular expressions to search and replace with 'notallowed' in the styles
++// given to the `window.console` API methods.
++const RE_CLEANUP_STYLES = [
++  // url(), -moz-element()
++  /\b(?:url|(?:-moz-)?element)[\s('"]+/gi,
++
++  // various URL protocols
++  /['"(]*(?:chrome|resource|about|app|data|https?|ftp|file):+\/*/gi,
++];
  
  /**
   * The ConsoleOutput object is used to manage output of messages in the Web
@@ -26,7 +38,44 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
   * @constructor
   * @param object owner
   *        The console output owner. This usually the WebConsoleFrame instance.
-@@ -1217,24 +1218,120 @@ Messages.ConsoleGeneric = function(packe
+@@ -115,16 +128,18 @@ const MAX_LONG_STRING_LENGTH = 200000;
+  */
+ function ConsoleOutput(owner)
+ {
+   this.owner = owner;
+   this._onFlushOutputMessage = this._onFlushOutputMessage.bind(this);
+ }
+ 
+ ConsoleOutput.prototype = {
++  _dummyElement: null,
++
+   /**
+    * The output container.
+    * @type DOMElement
+    */
+   get element() {
+     return this.owner.outputNode;
+   },
+ 
+@@ -320,16 +335,17 @@ ConsoleOutput.prototype = {
+     this.owner.jsterm.openVariablesView.apply(this.owner.jsterm, arguments);
+   },
+ 
+   /**
+    * Destroy this ConsoleOutput instance.
+    */
+   destroy: function()
+   {
++    this._dummyElement = null;
+     this.owner = null;
+   },
+ }; // ConsoleOutput.prototype
+ 
+ /**
+  * Message objects container.
+  * @type object
+  */
+@@ -1217,24 +1233,112 @@ Messages.ConsoleGeneric = function(packe
        break;
      }
      default:
@@ -60,26 +109,12 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +      }
 +
 +      let piece = this._messagePieces[i];
-+      let renderedPiece = this._renderBodyPiece(piece);
-+
 +      let style = this._styles[i];
 +      if (style && typeof style == "string" /* no long string support */) {
 +        lastStyle = this.cleanupStyle(style);
 +      }
 +
-+      if (lastStyle) {
-+        if (renderedPiece.nodeType == Ci.nsIDOMNode.ELEMENT_NODE) {
-+          renderedPiece.style = lastStyle;
-+          result.appendChild(renderedPiece);
-+        } else {
-+          let span = this.document.createElementNS(XHTML_NS, "span");
-+          span.style = lastStyle;
-+          span.appendChild(renderedPiece);
-+          result.appendChild(span);
-+        }
-+      } else {
-+        result.appendChild(renderedPiece);
-+      }
++      result.appendChild(this._renderBodyPiece(piece, lastStyle));
 +    }
 +
 +    this._message = result;
@@ -88,30 +123,40 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    return Messages.Simple.prototype.render.call(this);
 +  },
 +
++  _renderBodyPiece: function(piece, style)
++  {
++    let elem = Messages.Extended.prototype._renderBodyPiece.call(this, piece);
++    let result = elem;
++
++    if (style) {
++      if (elem.nodeType == Ci.nsIDOMNode.ELEMENT_NODE) {
++        elem.style = style;
++      } else {
++        let span = this.document.createElementNS(XHTML_NS, "span");
++        span.style = style;
++        span.appendChild(elem);
++        result = span;
++      }
++    }
++
++    return result;
++  },
++
 +  /**
-+   * Given a style attribute value cleanup the string such that no external URL
-+   * is allowed to load.
++   * Given a style attribute value cleanup the string such that:
 +   *
-+   * Note: this method does not attempt to produce a correct style attribute
-+   * value. URLs are not allowed and the intent here is to just break/disallow
-+   * their use.
++   * - no external URL is allowed to load. See RE_CLEANUP_STYLES.
++   * - only some of the properties are allowed, based on a whitelist. See
++   *   RE_ALLOWED_STYLES.
 +   *
 +   * @param string style
 +   *        The style string to cleanup.
 +   * @return string
-+   *         The style value with no URLs.
++   *         The style value after cleanup.
 +   */
 +  cleanupStyle: function(style)
 +  {
-+    const regex = [
-+      // url(), -moz-element()
-+      /\b(?:url|(?:-moz-)?element)[\s('"]+/gi,
-+
-+      // various URL protocols
-+      /['"(]*(?:chrome|resource|about|app|data|https?|ftp|file):+\/*/gi,
-+    ];
-+
-+    for (let r of regex) {
++    for (let r of RE_CLEANUP_STYLES) {
 +      style = style.replace(r, "notallowed");
 +    }
 +
@@ -122,22 +167,18 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +    }
 +    dummy.style = style;
 +
-+    let toRemove = [];
++    let stylesArray = [];
 +    for (let i = 0; i < dummy.style.length; i++) {
 +      let prop = dummy.style[i];
-+      if (!RE_ALLOWED_STYLES.test(prop)) {
-+        toRemove.push(prop);
++      if (RE_ALLOWED_STYLES.test(prop)) {
++        let val = dummy.style.getPropertyValue(prop);
++        stylesArray.push(prop + ":" + val);
 +      }
 +    }
 +
-+    for (let prop of toRemove) {
-+      dummy.style.removeProperty(prop);
-+    }
-+
-+    style = String(dummy.style);
 +    dummy.style = "";
 +
-+    return style;
++    return stylesArray.join(";");
 +  },
  }); // Messages.ConsoleGeneric.prototype
  
@@ -164,7 +205,7 @@ diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_custom_
 new file mode 100644
 --- /dev/null
 +++ b/browser/devtools/webconsole/test/browser_webconsole_console_custom_styles.js
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,79 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -179,13 +220,20 @@ new file mode 100644
 +                   "console.log('%ccustom styles', 'color:red')";
 +
 +  const checks = [{
++    // check the basics work
 +    style: "color:red;font-size:1.3em",
 +    props: { color: true, fontSize: true },
 +    sameStyleExpected: true,
 +  }, {
++    // check that the url() is not allowed
 +    style: "color:blue;background-image:url('http://example.com/test')",
 +    props: { color: true, fontSize: false, background: false,
 +             backgroundImage: false },
++    sameStyleExpected: false,
++  }, {
++    // check that some properties are not allowed
++    style: "color:pink;position:absolute:top:10px",
++    props: { color: true, position: false, top: false },
 +    sameStyleExpected: false,
 +  }];
 +
@@ -343,7 +391,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
 +
 +          int32_t diff = aSequence.Length() - aStyles.Length();
 +          if (diff > 0) {
-+            for (uint32_t i = 0; i < diff; i++) {
++            for (int32_t i = 0; i < diff; i++) {
 +              aStyles.AppendElement(JSVAL_NULL);
 +            }
 +          }
@@ -472,7 +520,7 @@ diff --git a/dom/tests/browser/browser_ConsoleAPITests.js b/dom/tests/browser/br
  
    // Bug #692550 handle null and undefined.
    expect("log", "null, undefined");
-@@ -275,16 +283,28 @@ function observeConsoleTest() {
+@@ -275,16 +283,34 @@ function observeConsoleTest() {
    expect("error", "arg");
    win.console.error("arg");
    yield undefined;
@@ -486,10 +534,16 @@ diff --git a/dom/tests/browser/browser_ConsoleAPITests.js b/dom/tests/browser/br
 +  win.console.log("%cfoobar", gStyle[0]);
 +  yield undefined;
 +
++  let obj4 = { d: 4 };
++  expect("warn", "foobar", obj4, "test", "bazbazstr", "last");
++  gStyle = [null, null, null, "color:blue;", "color:red"];
++  win.console.warn("foobar%Otest%cbazbaz%s%clast", obj4, gStyle[3], "str", gStyle[4]);
++  yield undefined;
++
 +  let obj3 = { c: 3 };
-+  expect("info", "foobar", "bazbaz", obj3, "omg");
-+  gStyle = [null, "color:pink;", "color:red"];
-+  win.console.info("foobar%cbazbaz", gStyle[1], obj3, "%comg", gStyle[2]);
++  expect("info", "foobar", "bazbaz", obj3, "%comg", "color:yellow");
++  gStyle = [null, "color:pink;"];
++  win.console.info("foobar%cbazbaz", gStyle[1], obj3, "%comg", "color:yellow");
 +  yield undefined;
 +
 +  gStyle = null;
