@@ -1,7 +1,8 @@
 # HG changeset patch
-# Parent c300fbbd1b1e7da6c3b7e82ce505de7d94b3d999
+# Parent 3be10cad99a827b08b433cac25d68bd1a96c5675
 # User Mihai Sucan <mihai.sucan@gmail.com>
-# Date 1397592519 -10800
+# Date 1397674076 -10800
+Bug 920116 - Show full stack traces for console logged messages; r=robcee; try: -b do -p linux,linux64,macosx64,win32,win64 -u xpcshell,mochitest-o,mochitest-dt -t none
 
 diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
 --- a/browser/devtools/webconsole/console-output.js
@@ -25,7 +26,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
        anchor.draggable = false;
        this._addLinkCallback(anchor, this._linkCallback);
        body.appendChild(anchor);
-@@ -1218,70 +1218,127 @@ Messages.ConsoleGeneric = function(packe
+@@ -1218,70 +1218,143 @@ Messages.ConsoleGeneric = function(packe
      severity: CONSOLE_API_LEVELS_TO_SEVERITIES[packet.level],
      private: packet.private,
      filterDuplicates: true,
@@ -76,14 +77,29 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    let repeatNode = Messages.Simple.prototype._renderRepeatNode.call(this);
 +    let location = Messages.Simple.prototype._renderLocation.call(this);
++    if (location) {
++      location.target = "jsdebugger";
++    }
 +
 +    let stack = null;
++    let twisty = null;
 +    if (this._stacktrace && this._stacktrace.length > 0) {
 +      stack = new Widgets.Stacktrace(this, this._stacktrace).render().element;
++
++      twisty = this.document.createElementNS(XHTML_NS, "a");
++      twisty.className = "theme-twisty";
++      twisty.href = "#";
++      twisty.title = l10n.getStr("messageToggleDetails");
++      twisty.addEventListener("click", this._onClickCollapsible);
 +    }
 +
 +    let flex = this.document.createElementNS(XHTML_NS, "span");
 +    flex.className = "message-flex-body";
++
++    if (twisty) {
++      flex.appendChild(twisty);
++    }
++
 +    flex.appendChild(msg);
 +
 +    if (repeatNode) {
@@ -108,8 +124,9 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +    if (stack) {
 +      this.element.setAttribute("collapsible", true);
-+      this.element.setAttribute("collapsed", true);
-+      flex.addEventListener("click", this._onClickCollapsible);
++
++      let icon = this.element.querySelector(".icon");
++      icon.addEventListener("click", this._onClickCollapsible);
 +    }
 +
 +    return this;
@@ -158,7 +175,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      let result = elem;
  
      if (style) {
-@@ -1293,16 +1350,34 @@ Messages.ConsoleGeneric.prototype = Heri
+@@ -1293,16 +1366,35 @@ Messages.ConsoleGeneric.prototype = Heri
          span.appendChild(elem);
          result = span;
        }
@@ -174,14 +191,15 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
 +
 +  _onClickCollapsible: function(ev)
 +  {
-+    if (!ev.target.classList ||
-+        !ev.target.classList.contains("message-body")) {
-+      return;
-+    }
-+    if (this.element.hasAttribute("collapsed")) {
-+      this.element.removeAttribute("collapsed");
++    ev.preventDefault();
++
++    let twisty = this.element.querySelector(".theme-twisty");
++    if (this.element.hasAttribute("open")) {
++      this.element.removeAttribute("open");
++      twisty.removeAttribute("open");
 +    } else {
-+      this.element.setAttribute("collapsed", true);
++      this.element.setAttribute("open", true);
++      twisty.setAttribute("open", true);
 +    }
 +  },
 +
@@ -193,7 +211,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
     * - only some of the properties are allowed, based on a whitelist. See
     *   RE_ALLOWED_STYLES.
     *
-@@ -1350,17 +1425,17 @@ Messages.ConsoleGeneric.prototype = Heri
+@@ -1350,17 +1442,17 @@ Messages.ConsoleGeneric.prototype = Heri
   * @constructor
   * @extends Messages.Simple
   * @param object packet
@@ -212,7 +230,31 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
      location: {
        url: packet.filename,
        line: packet.lineNumber,
-@@ -1424,31 +1499,29 @@ Messages.ConsoleTrace.prototype = Herita
+@@ -1407,16 +1499,23 @@ Messages.ConsoleTrace.prototype = Herita
+         }
+       }
+     }
+     this._arguments = null;
+ 
+     return result;
+   },
+ 
++  render: function()
++  {
++    Messages.Simple.prototype.render.apply(this, arguments);
++    this.element.setAttribute("open", true);
++    return this;
++  },
++
+   /**
+    * Render the stack frames.
+    *
+    * @private
+    * @return DOMElement
+    */
+   _renderStack: function()
+   {
+@@ -1424,31 +1523,32 @@ Messages.ConsoleTrace.prototype = Herita
      cmvar.className = "cm-variable";
      cmvar.textContent = "console";
  
@@ -230,9 +272,9 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
  
      let repeatNode = Messages.Simple.prototype._renderRepeatNode.call(this);
      let location = Messages.Simple.prototype._renderLocation.call(this);
--    if (location) {
--      location.target = "jsdebugger";
--    }
+     if (location) {
+       location.target = "jsdebugger";
+     }
  
      let widget = new Widgets.Stacktrace(this, this._stacktrace).render();
  
@@ -247,7 +289,7 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
        body.appendChild(location);
      }
      body.appendChild(this.document.createTextNode("\n"));
-@@ -1458,17 +1531,17 @@ Messages.ConsoleTrace.prototype = Herita
+@@ -1458,17 +1558,17 @@ Messages.ConsoleTrace.prototype = Herita
      frag.appendChild(widget.element);
  
      return frag;
@@ -266,6 +308,440 @@ diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/we
    _renderLocation: function() { },
    _renderRepeatNode: function() { },
  }); // Messages.ConsoleTrace.prototype
+diff --git a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
+--- a/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
++++ b/browser/devtools/webconsole/test/browser_bug_638949_copy_link_location.js
+@@ -62,16 +62,17 @@ function onConsoleMessage(aResults) {
+   output.focus();
+   let message = [...aResults[0].matched][0];
+ 
+   goUpdateCommand(COMMAND_NAME);
+   ok(!isEnabled(), COMMAND_NAME + "is disabled");
+ 
+   // Test that the "Copy Link Location" menu item is hidden for non-network
+   // messages.
++  message.scrollIntoView();
+   waitForContextMenu(menu, message, () => {
+     let isHidden = menu.querySelector(CONTEXT_MENU_ID).hidden;
+     ok(isHidden, CONTEXT_MENU_ID + " is hidden");
+   }, testWithNetActivity);
+ }
+ 
+ function testWithNetActivity() {
+   HUD.jsterm.clearOutput();
+@@ -102,15 +103,16 @@ function onNetworkMessage(aResults) {
+ 
+   waitForClipboard((aData) => { return aData.trim() == message.url; },
+     () => { goDoCommand(COMMAND_NAME) },
+     testMenuWithNetActivity, testMenuWithNetActivity);
+ 
+   function testMenuWithNetActivity() {
+     // Test that the "Copy Link Location" menu item is visible for network-related
+     // messages.
++    message.scrollIntoView();
+     waitForContextMenu(menu, message, () => {
+       let isVisible = !menu.querySelector(CONTEXT_MENU_ID).hidden;
+       ok(isVisible, CONTEXT_MENU_ID + " is visible");
+     }, finishTest);
+   }
+ }
+ 
+diff --git a/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js b/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js
+--- a/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js
++++ b/browser/devtools/webconsole/test/browser_bug_865288_repeat_different_objects.js
+@@ -48,17 +48,17 @@ function checkMessages([result])
+   let m = -1;
+ 
+   function nextMessage()
+   {
+     let msg = msgs[++m];
+     if (msg) {
+       ok(msg, "message element #" + m);
+ 
+-      let clickable = msg.querySelector(".body a");
++      let clickable = msg.querySelector(".message-body a");
+       ok(clickable, "clickable object #" + m);
+ 
+       msg.scrollIntoView(false);
+       clickObject(clickable);
+     }
+     else {
+       finishTest();
+     }
+diff --git a/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js b/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
+--- a/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
++++ b/browser/devtools/webconsole/test/browser_bug_865871_variables_view_close_on_esc_key.js
+@@ -18,17 +18,17 @@ function test()
+     let {tab} = yield loadTab(TEST_URI);
+     hud = yield openConsole(tab);
+     let jsterm = hud.jsterm;
+ 
+     let msg = yield execute("fooObj");
+     ok(msg, "output message found");
+ 
+     let anchor = msg.querySelector("a");
+-    let body = msg.querySelector(".body");
++    let body = msg.querySelector(".message-body");
+     ok(anchor, "object anchor");
+     ok(body, "message body");
+     ok(body.textContent.contains('testProp: "testValue"'), "message text check");
+ 
+     msg.scrollIntoView();
+     executeSoon(() => {
+       EventUtils.synthesizeMouse(anchor, 2, 2, {}, hud.iframeWindow);
+     });
+@@ -54,17 +54,17 @@ function test()
+     });
+     yield jsterm.once("sidebar-closed");
+ 
+     jsterm.clearOutput();
+ 
+     msg = yield execute("window.location");
+     ok(msg, "output message found");
+ 
+-    body = msg.querySelector(".body");
++    body = msg.querySelector(".message-body");
+     ok(body, "message body");
+     anchor = msg.querySelector("a");
+     ok(anchor, "object anchor");
+     ok(body.textContent.contains("Location \u2192 http://example.com/browser/"),
+        "message text check");
+ 
+     msg.scrollIntoView();
+     executeSoon(() => {
+diff --git a/browser/devtools/webconsole/test/browser_bug_869003_inspect_cross_domain_object.js b/browser/devtools/webconsole/test/browser_bug_869003_inspect_cross_domain_object.js
+--- a/browser/devtools/webconsole/test/browser_bug_869003_inspect_cross_domain_object.js
++++ b/browser/devtools/webconsole/test/browser_bug_869003_inspect_cross_domain_object.js
+@@ -42,17 +42,17 @@ function consoleOpened(hud)
+   }).then(onConsoleMessage);
+ }
+ 
+ function onConsoleMessage(aResults)
+ {
+   let msg = [...aResults[0].matched][0];
+   ok(msg, "message element");
+ 
+-  let body = msg.querySelector(".body");
++  let body = msg.querySelector(".message-body");
+   ok(body, "message body");
+ 
+   let clickable = aResults[0].clickableElements[0];
+   ok(clickable, "clickable object found");
+   ok(body.textContent.contains('{ hello: "world!",'), "message text check");
+ 
+   gJSTerm.once("variablesview-fetched", onObjFetch);
+ 
+diff --git a/browser/devtools/webconsole/test/browser_console_click_focus.js b/browser/devtools/webconsole/test/browser_console_click_focus.js
+--- a/browser/devtools/webconsole/test/browser_console_click_focus.js
++++ b/browser/devtools/webconsole/test/browser_console_click_focus.js
+@@ -20,17 +20,17 @@ function testInputFocus() {
+       webconsole: hud,
+       messages: [{
+         text: "Dolske Digs Bacon",
+         category: CATEGORY_WEBDEV,
+         severity: SEVERITY_LOG,
+       }],
+     }).then(([result]) => {
+       let msg = [...result.matched][0];
+-      let outputItem = msg.querySelector(".body");
++      let outputItem = msg.querySelector(".message-body");
+       ok(outputItem, "found a logged message");
+       let inputNode = hud.jsterm.inputNode;
+       ok(inputNode.getAttribute("focused"), "input node is focused, first");
+ 
+       let lostFocus = () => {
+         inputNode.removeEventListener("blur", lostFocus);
+         info("input node lost focus");
+       }
+diff --git a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
+--- a/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
++++ b/browser/devtools/webconsole/test/browser_console_log_inspectable_object.js
+@@ -29,17 +29,17 @@ function performTest(hud)
+       text: "fooBug676722",
+       category: CATEGORY_WEBDEV,
+       severity: SEVERITY_LOG,
+       objects: true,
+     }],
+   }).then(([result]) => {
+     let msg = [...result.matched][0];
+     ok(msg, "message element");
+-    let body = msg.querySelector(".body");
++    let body = msg.querySelector(".message-body");
+     ok(body, "message body");
+     let clickable = result.clickableElements[0];
+     ok(clickable, "the console.log() object anchor was found");
+     ok(body.textContent.contains('{ abba: "omgBug676722" }'),
+        "clickable node content is correct");
+ 
+     hud.jsterm.once("variablesview-fetched",
+       (aEvent, aVar) => {
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js b/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_594477_clickable_output.js
+@@ -31,17 +31,17 @@ function tabLoad2(aEvent) {
+     webconsole: HUD,
+     messages: [{
+       text: "test-console.html",
+       category: CATEGORY_NETWORK,
+       severity: SEVERITY_LOG,
+     }],
+   }).then(([result]) => {
+     let msg = [...result.matched][0];
+-    outputItem = msg.querySelector(".body .url");
++    outputItem = msg.querySelector(".message-body .url");
+     ok(outputItem, "found a network message");
+     document.addEventListener("popupshown", networkPanelShown, false);
+ 
+     // Send the mousedown and click events such that the network panel opens.
+     EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+     EventUtils.sendMouseEvent({type: "click"}, outputItem);
+   });
+ }
+@@ -97,17 +97,17 @@ function networkPanelHidden(aEvent) {
+     document.removeEventListener("popupshown", networkPanelShowFailure, false);
+ 
+     // Done with the network output. Now test the jsterm output and the property
+     // panel.
+     HUD.jsterm.execute("document", (msg) => {
+       info("jsterm execute 'document' callback");
+ 
+       HUD.jsterm.once("variablesview-open", onVariablesViewOpen);
+-      let outputItem = msg.querySelector(".body a");
++      let outputItem = msg.querySelector(".message-body a");
+       ok(outputItem, "jsterm output message found");
+ 
+       // Send the mousedown and click events such that the property panel opens.
+       EventUtils.sendMouseEvent({type: "mousedown"}, outputItem);
+       EventUtils.sendMouseEvent({type: "click"}, outputItem);
+     });
+   });
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_632347_iterators_generators.js
+@@ -61,17 +61,17 @@ function consoleOpened(HUD) {
+   completion = JSPropertyProvider(dbgWindow, null, "window._container.");
+   ok(completion, "matches available for window._container");
+   ok(completion.matches.length, "matches available for window (length)");
+ 
+   jsterm.clearOutput();
+ 
+   jsterm.execute("window._container", (msg) => {
+     jsterm.once("variablesview-fetched", testVariablesView.bind(null, HUD));
+-    let anchor = msg.querySelector(".body a");
++    let anchor = msg.querySelector(".message-body a");
+     EventUtils.synthesizeMouse(anchor, 2, 2, {}, HUD.iframeWindow);
+   });
+ }
+ 
+ function testVariablesView(aWebconsole, aEvent, aView) {
+   findVariableViewProperties(aView, [
+     { name: "gen1", isGenerator: true },
+     { name: "gen2", isGenerator: true },
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_651501_document_body_autocomplete.js
+@@ -70,17 +70,17 @@ function autocompletePopupHidden()
+ }
+ 
+ function testPropertyPanel()
+ {
+   let jsterm = gHUD.jsterm;
+   jsterm.clearOutput();
+   jsterm.execute("document", (msg) => {
+     jsterm.once("variablesview-fetched", onVariablesViewReady);
+-    let anchor = msg.querySelector(".body a");
++    let anchor = msg.querySelector(".message-body a");
+     EventUtils.synthesizeMouse(anchor, 2, 2, {}, gHUD.iframeWindow);
+   });
+ }
+ 
+ function onVariablesViewReady(aEvent, aView)
+ {
+   findVariableViewProperties(aView, [
+     { name: "body", value: "<body>" },
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_764572_output_open_url.js b/browser/devtools/webconsole/test/browser_webconsole_bug_764572_output_open_url.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_764572_output_open_url.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_764572_output_open_url.js
+@@ -53,16 +53,17 @@ function onConsoleMessage(aResults) {
+   // Check if the command is disabled non-network messages.
+   goUpdateCommand(COMMAND_NAME);
+   let controller = top.document.commandDispatcher
+                    .getControllerForCommand(COMMAND_NAME);
+ 
+   let isDisabled = !controller || !controller.isCommandEnabled(COMMAND_NAME);
+   ok(isDisabled, COMMAND_NAME + " should be disabled.");
+ 
++  outputNode.selectedItem.scrollIntoView();
+   waitForContextMenu(contextMenu, outputNode.selectedItem, () => {
+     let isHidden = contextMenu.querySelector(CONTEXT_MENU_ID).hidden;
+     ok(isHidden, CONTEXT_MENU_ID + " should be hidden.");
+   }, testOnNetActivity);
+ }
+ 
+ function testOnNetActivity() {
+   HUD.jsterm.clearOutput();
+@@ -112,13 +113,14 @@ function onNetworkMessage(aResults) {
+   // Try to open the URL.
+   goDoCommand(COMMAND_NAME);
+ }
+ 
+ function testOnNetActivity_contextmenu(msg) {
+   outputNode.focus();
+   HUD.ui.output.selectMessage(msg);
+ 
++  msg.scrollIntoView();
+   waitForContextMenu(contextMenu, msg, () => {
+     let isShown = !contextMenu.querySelector(CONTEXT_MENU_ID).hidden;
+     ok(isShown, CONTEXT_MENU_ID + " should be shown.");
+   }, finishTest);
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_bug_766001_JS_Console_in_Debugger.js b/browser/devtools/webconsole/test/browser_webconsole_bug_766001_JS_Console_in_Debugger.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_bug_766001_JS_Console_in_Debugger.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_bug_766001_JS_Console_in_Debugger.js
+@@ -1,13 +1,17 @@
+ /* vim:set ts=2 sw=2 sts=2 et: */
+-/* ***** BEGIN LICENSE BLOCK *****
+- * Any copyright is dedicated to the Public Domain.
++/* Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+- * ***** END LICENSE BLOCK ***** */
++ */
++
++// Test that message source links for js errors and console API calls open in
++// the jsdebugger when clicked.
++
++"use strict";
+ 
+ const TEST_URI = "http://example.com/browser/browser/devtools/webconsole/test" +
+                  "/test-bug-766001-js-console-links.html";
+ 
+ function test() {
+   let hud;
+ 
+   requestLongerTimeout(2);
+@@ -56,18 +60,16 @@ function test() {
+ 
+     let line = node.sourceLine;
+     ok(line, "found source line for index " + index);
+ 
+     executeSoon(() => {
+       EventUtils.sendMouseEvent({ type: "click" }, node);
+     });
+ 
+-    yield hud.ui.once("source-in-debugger-opened", checkLine.bind(null, url, line));
+-  }
++    yield hud.ui.once("source-in-debugger-opened");
+ 
+-  function* checkLine(url, line) {
+     let toolbox = yield gDevTools.getToolbox(hud.target);
+     let {panelWin: { DebuggerView: view }} = toolbox.getPanel("jsdebugger");
+     is(view.Sources.selectedValue, url, "expected source url");
+     is(view.editor.getCursor().line, line - 1, "expected source line");
+   }
+ }
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_console_custom_styles.js b/browser/devtools/webconsole/test/browser_webconsole_console_custom_styles.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_console_custom_styles.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_console_custom_styles.js
+@@ -54,17 +54,17 @@ function test() {
+         text: "foobar",
+         category: CATEGORY_WEBDEV,
+       }],
+     });
+ 
+     let msg = [...result.matched][0];
+     ok(msg, "message element");
+ 
+-    let span = msg.querySelector(".body span[style]");
++    let span = msg.querySelector(".message-body span[style]");
+     ok(span, "span element");
+ 
+     info("span textContent is: " + span.textContent);
+     isnot(span.textContent.indexOf("foobar"), -1, "span textContent check");
+ 
+     let outputStyle = span.getAttribute("style").replace(/\s+|;+$/g, "");
+     if (check.sameStyleExpected) {
+       is(outputStyle, check.style, "span style is correct");
+diff --git a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+--- a/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
++++ b/browser/devtools/webconsole/test/browser_webconsole_jsterm.js
+@@ -25,17 +25,17 @@ function nextTest() {
+ function checkResult(msg, desc) {
+   waitForMessages({
+     webconsole: jsterm.hud.owner,
+     messages: [{
+       name: desc,
+       category: CATEGORY_OUTPUT,
+     }],
+   }).then(([result]) => {
+-    let node = [...result.matched][0].querySelector(".body");
++    let node = [...result.matched][0].querySelector(".message-body");
+     if (typeof msg == "string") {
+       is(node.textContent.trim(), msg,
+         "correct message shown for " + desc);
+     }
+     else if (typeof msg == "function") {
+       ok(msg(node), "correct message shown for " + desc);
+     }
+ 
+diff --git a/browser/devtools/webconsole/test/head.js b/browser/devtools/webconsole/test/head.js
+--- a/browser/devtools/webconsole/test/head.js
++++ b/browser/devtools/webconsole/test/head.js
+@@ -1161,17 +1161,17 @@ function waitForMessages(aOptions)
+           displayErrorContext(aRule, aElement);
+         }
+         return false;
+       }
+       aRule.longStrings = longStrings;
+     }
+ 
+     if ("objects" in aRule) {
+-      let clickables = aElement.querySelectorAll(".body a");
++      let clickables = aElement.querySelectorAll(".message-body a");
+       if (aRule.objects != !!clickables[0]) {
+         if (partialMatch) {
+           is(!!clickables[0], aRule.objects,
+              "objects existence check failed for message rule: " +
+              displayRule(aRule));
+           displayErrorContext(aRule, aElement);
+         }
+         return false;
+@@ -1405,17 +1405,18 @@ function checkOutputForInputs(hud, input
+     }
+     if (typeof entry.inspectorIcon == "boolean") {
+       yield checkLinkToInspector(entry, msg);
+     }
+   }
+ 
+   function checkObjectClick(entry, msg)
+   {
+-    let body = msg.querySelector(".body a") || msg.querySelector(".body");
++    let body = msg.querySelector(".message-body a") ||
++               msg.querySelector(".message-body");
+     ok(body, "the message body");
+ 
+     let deferred = promise.defer();
+ 
+     entry._onVariablesViewOpen = onVariablesViewOpen.bind(null, entry, deferred);
+     hud.jsterm.on("variablesview-open", entry._onVariablesViewOpen);
+     eventHandlers.add(entry._onVariablesViewOpen);
+ 
+diff --git a/browser/devtools/webconsole/test/test-bug-766001-console-log.js b/browser/devtools/webconsole/test/test-bug-766001-console-log.js
+--- a/browser/devtools/webconsole/test/test-bug-766001-console-log.js
++++ b/browser/devtools/webconsole/test/test-bug-766001-console-log.js
+@@ -1,8 +1,10 @@
+ /*
+  * Any copyright is dedicated to the Public Domain.
+  * http://creativecommons.org/publicdomain/zero/1.0/
+  */
+ 
+-window.addEventListener("load", function() {
++function onLoad123() {
+   console.log("Blah Blah");
+-}, false);
++}
++
++window.addEventListener("load", onLoad123, false);
 diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
 --- a/browser/devtools/webconsole/webconsole.js
 +++ b/browser/devtools/webconsole/webconsole.js
@@ -307,6 +783,44 @@ diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webcon
      aClipboardText = aClipboardText ||
                       (aBody + (aSourceURL ? " @ " + aSourceURL : "") +
                                (aSourceLine ? ":" + aSourceLine : ""));
+@@ -2603,17 +2603,19 @@ WebConsoleFrame.prototype = {
+     }
+ 
+     filenameNode.className = "filename";
+     filenameNode.textContent = " " + (filename || l10n.getStr("unknownLocation"));
+     locationNode.appendChild(filenameNode);
+ 
+     locationNode.href = isScratchpad || !fullURL ? "#" : fullURL;
+     locationNode.draggable = false;
+-    locationNode.target = aTarget;
++    if (aTarget) {
++      locationNode.target = aTarget;
++    }
+     locationNode.setAttribute("title", aSourceURL);
+     locationNode.className = "message-location theme-link devtools-monospace";
+ 
+     // Make the location clickable.
+     let onClick = () => {
+       let target = locationNode.target;
+       if (target == "scratchpad" || isScratchpad) {
+         this.owner.viewSourceInScratchpad(aSourceURL);
+diff --git a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+--- a/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
++++ b/browser/locales/en-US/chrome/browser/devtools/webconsole.properties
+@@ -217,8 +217,13 @@ messageRepeats.tooltip2=#1 repeat;#1 rep
+ # LOCALIZATION NOTE (openNodeInInspector): the text that is displayed in a
+ # tooltip when hovering over the inspector icon next to a DOM Node in the console
+ # output
+ openNodeInInspector=Click to select the node in the inspector
+ 
+ # LOCALIZATION NOTE (cdFunctionInvalidArgument): the text that is displayed when
+ # cd() is invoked with an invalid argument.
+ cdFunctionInvalidArgument=Cannot cd() to the given window. Invalid argument.
++
++# LOCALIZATION NOTE (messageToggleDetails): the text that is displayed when
++# you hover the arrow for expanding/collapsing the message details. For
++# console.error() and other messages we show the stacktrace.
++messageToggleDetails=Show/hide message details.
 diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
 --- a/browser/themes/shared/devtools/webconsole.inc.css
 +++ b/browser/themes/shared/devtools/webconsole.inc.css
@@ -332,6 +846,25 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    -moz-user-select: none;
    flex: 0 0 auto;
    margin: 2px 6px;
+@@ -66,17 +64,17 @@ a {
+ 
+ .message-location {
+   -moz-margin-start: 6px;
+   display: flex;
+   flex: 0 0 auto;
+   align-self: flex-start;
+   justify-content: flex-end;
+   width: 10em;
+-  margin-top: 4px;
++  margin: 3px 0;
+   color: -moz-nativehyperlinktext;
+   text-decoration: none;
+   white-space: nowrap;
+ }
+ 
+ .message-location:hover,
+ .message-location:focus {
+   text-decoration: underline;
 @@ -87,16 +85,30 @@ a {
    text-align: end;
    overflow: hidden;
@@ -363,7 +896,7 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
  #output-wrapper {
    direction: ltr;
    overflow: auto;
-@@ -148,16 +160,20 @@ a {
+@@ -148,25 +160,33 @@ a {
  }
  
  /* Network styles */
@@ -372,8 +905,12 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    border-color: #777;
  }
  
-+.message[severity=error] {
++.theme-light .message[severity=error] {
 +  background-color: rgba(255, 150, 150, 0.3);
++}
++
++.theme-dark .message[severity=error] {
++  background-color: rgba(255, 100, 100, 0.3);
 +}
 +
  .message[category=network] > .icon {
@@ -384,7 +921,36 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
    background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 0, 16, 8, 8);
  }
  
-@@ -335,37 +351,53 @@ a {
+-.message[category=network] > .body {
++.message[category=network] > .message-body {
+   display: flex;
+ }
+ 
+ .message[category=network] .method {
+   flex: 0 0 auto;
+ }
+ 
+ .message[category=network]:not(.navigation-marker) .url {
+@@ -279,17 +299,17 @@ a {
+   background: -moz-image-rect(url("chrome://browser/skin/devtools/commandline-icon.png"), 0, 32, 16, 16) no-repeat;
+ }
+ 
+ :-moz-any(.jsterm-input-node,
+           .jsterm-complete-node) > .textbox-input-box > .textbox-textarea {
+   overflow-x: hidden;
+ }
+ 
+-.inlined-variables-view .body {
++.inlined-variables-view .message-body {
+   display: flex;
+   flex-direction: column;
+ }
+ .inlined-variables-view iframe {
+   display: block;
+   flex: 1;
+   margin-top: 5px;
+   margin-bottom: 15px;
+@@ -335,35 +355,43 @@ a {
    font-size: 0.9em;
  }
  
@@ -396,57 +962,49 @@ diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/
 -.consoleTrace .body > div {
 -  display: flex;
 -  margin-bottom: 5px;
--}
--
++.stacktrace {
++  display: none;
++  list-style: none;
++  padding: 0 1em 0 1.5em;
++  margin: 5px 0 0 0;
++  max-height: 10em;
++  overflow-y: auto;
++  border: 1px solid #ccc;
++  border-radius: 3px;
+ }
+ 
 -.consoleTrace .title {
 -  display: block;
 -  flex: 1 1 auto;
--}
--
- .stacktrace {
-   list-style: none;
-   padding: 0 1em 0 1.5em;
--  margin: 0;
-+  margin: 5px 0 0 0;
-   max-height: 10em;
-   overflow-y: auto;
- 
--  border: 1px solid rgba(128, 128, 128, .5);
-+  border: 1px solid rgba(128, 128, 128, .3);
-   border-radius: 3px;
++.theme-light .message[severity=error] .stacktrace {
++  background-color: rgba(255, 255, 255, 0.5);
  }
  
-+.message[severity=error] .stacktrace {
-+  background-color: rgba(255, 255, 255, 0.5);
+-.stacktrace {
+-  list-style: none;
+-  padding: 0 1em 0 1.5em;
+-  margin: 0;
+-  max-height: 10em;
+-  overflow-y: auto;
++.theme-dark .message[severity=error] .stacktrace {
++  background-color: rgba(0, 0, 0, 0.5);
++}
+ 
+-  border: 1px solid rgba(128, 128, 128, .5);
+-  border-radius: 3px;
++.message[open] .stacktrace {
++  display: block;
 +}
 +
-+.message[collapsible] .message-body:before {
-+  -moz-appearance: treetwistyopen;
++.message .theme-twisty {
 +  display: inline-block;
-+  width: 32px;
-+  height: 1ex;
-+  background-position: center;
 +  vertical-align: middle;
-+  overflow: hidden;
-+  content: " ";
-+  margin-right: 5px;
-+  cursor: pointer;
-+}
-+
-+.message[collapsible][collapsed] .message-body:before {
-+  -moz-appearance: treetwisty;
-+  content: " ";
-+}
-+
-+.message[collapsed] .stacktrace {
-+  display: none;
-+}
-+
++  margin: 2px 3px 0 0;
+ }
+ 
  .stacktrace li {
    display: flex;
    margin: 0;
  }
  
  .stacktrace .function {
-   display: block;
-   flex: 1 1 auto;
