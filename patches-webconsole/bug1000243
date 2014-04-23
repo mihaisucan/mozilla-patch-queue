@@ -1,0 +1,430 @@
+# HG changeset patch
+# Parent e386f9ef145dfa0ee6c14b69cfe77a090079321b
+# User Mihai Sucan <mihai.sucan@gmail.com>
+# Date 1398284012 -10800
+
+Bug 1000243 - Console error and stack trace UI follow up; r=bgrins
+
+diff --git a/browser/devtools/webconsole/console-output.js b/browser/devtools/webconsole/console-output.js
+--- a/browser/devtools/webconsole/console-output.js
++++ b/browser/devtools/webconsole/console-output.js
+@@ -63,19 +63,16 @@ const COMPAT = {
+   CATEGORY_CLASS_FRAGMENTS: [ "network", "cssparser", "exception", "console",
+                               "input", "output", "security" ],
+ 
+   // The fragment of a CSS class name that identifies each severity.
+   SEVERITY_CLASS_FRAGMENTS: [ "error", "warn", "info", "log" ],
+ 
+   // The indent of a console group in pixels.
+   GROUP_INDENT: 12,
+-
+-  // The default indent in pixels, applied even without any groups.
+-  GROUP_INDENT_DEFAULT: 6,
+ };
+ 
+ // A map from the console API call levels to the Web Console severities.
+ const CONSOLE_API_LEVELS_TO_SEVERITIES = {
+   error: "error",
+   exception: "error",
+   assert: "error",
+   warn: "warning",
+@@ -812,32 +809,34 @@ Messages.Simple.prototype = Heritage.ext
+ 
+     let timestamp = new Widgets.MessageTimestamp(this, this.timestamp).render();
+ 
+     let icon = this.document.createElementNS(XHTML_NS, "span");
+     icon.className = "icon";
+ 
+     // Apply the current group by indenting appropriately.
+     // TODO: remove this once bug 778766 is fixed.
+-    let iconMarginLeft = this._groupDepthCompat * COMPAT.GROUP_INDENT +
+-                         COMPAT.GROUP_INDENT_DEFAULT;
+-    icon.style.marginLeft = iconMarginLeft + "px";
++    let indent = this._groupDepthCompat * COMPAT.GROUP_INDENT;
++    let indentNode = this.document.createElementNS(XHTML_NS, "span");
++    indentNode.className = "indent";
++    indentNode.style.width = indent + "px";
+ 
+     let body = this._renderBody();
+     this._repeatID.textContent += "|" + body.textContent;
+ 
+     let repeatNode = this._renderRepeatNode();
+     let location = this._renderLocation();
+ 
+     Messages.BaseMessage.prototype.render.call(this);
+     if (this._className) {
+       this.element.className += " " + this._className;
+     }
+ 
+     this.element.appendChild(timestamp.element);
++    this.element.appendChild(indentNode);
+     this.element.appendChild(icon);
+     this.element.appendChild(body);
+     if (repeatNode) {
+       this.element.appendChild(repeatNode);
+     }
+     if (location) {
+       this.element.appendChild(location);
+     }
+diff --git a/browser/devtools/webconsole/webconsole.js b/browser/devtools/webconsole/webconsole.js
+--- a/browser/devtools/webconsole/webconsole.js
++++ b/browser/devtools/webconsole/webconsole.js
+@@ -140,19 +140,16 @@ const MAX_HTTP_ERROR_CODE = 599;
+ 
+ // Constants used for defining the direction of JSTerm input history navigation.
+ const HISTORY_BACK = -1;
+ const HISTORY_FORWARD = 1;
+ 
+ // The indent of a console group in pixels.
+ const GROUP_INDENT = 12;
+ 
+-// The default indent in pixels, applied even without any groups.
+-const GROUP_INDENT_DEFAULT = 6;
+-
+ // The number of messages to display in a single display update. If we display
+ // too many messages at once we slow the Firefox UI too much.
+ const MESSAGES_IN_INTERVAL = DEFAULT_LOG_LIMIT;
+ 
+ // The delay between display updates - tells how often we should *try* to push
+ // new messages to screen. This value is optimistic, updates won't always
+ // happen. Keep this low so the Web Console output feels live.
+ const OUTPUT_INTERVAL = 50; // milliseconds
+@@ -2444,26 +2441,29 @@ WebConsoleFrame.prototype = {
+   createMessageNode:
+   function WCF_createMessageNode(aCategory, aSeverity, aBody, aSourceURL,
+                                  aSourceLine, aClipboardText, aLevel, aTimeStamp)
+   {
+     if (typeof aBody != "string" && aClipboardText == null && aBody.innerText) {
+       aClipboardText = aBody.innerText;
+     }
+ 
++    let indentNode = this.document.createElementNS(XHTML_NS, "span");
++    indentNode.className = "indent";
++
++    // Apply the current group by indenting appropriately.
++    let indent = this.groupDepth * GROUP_INDENT;
++    indentNode.style.width = indent + "px";
++
+     // Make the icon container, which is a vertical box. Its purpose is to
+     // ensure that the icon stays anchored at the top of the message even for
+     // long multi-line messages.
+     let iconContainer = this.document.createElementNS(XHTML_NS, "span");
+     iconContainer.className = "icon";
+ 
+-    // Apply the current group by indenting appropriately.
+-    let iconMarginLeft = this.groupDepth * GROUP_INDENT + GROUP_INDENT_DEFAULT;
+-    iconContainer.style.marginLeft = iconMarginLeft + "px";
+-
+     // Create the message body, which contains the actual text of the message.
+     let bodyNode = this.document.createElementNS(XHTML_NS, "span");
+     bodyNode.className = "message-body-wrapper message-body devtools-monospace";
+ 
+     // Store the body text, since it is needed later for the variables view.
+     let body = aBody;
+     // If a string was supplied for the body, turn it into a DOM node and an
+     // associated clipboard string now.
+@@ -2523,16 +2523,17 @@ WebConsoleFrame.prototype = {
+     // Create the source location (e.g. www.example.com:6) that sits on the
+     // right side of the message, if applicable.
+     let locationNode;
+     if (aSourceURL && IGNORED_SOURCE_URLS.indexOf(aSourceURL) == -1) {
+       locationNode = this.createLocationNode(aSourceURL, aSourceLine);
+     }
+ 
+     node.appendChild(timestampNode);
++    node.appendChild(indentNode);
+     node.appendChild(iconContainer);
+ 
+     // Display the variables view after the message node.
+     if (aLevel == "dir") {
+       bodyNode.style.height = (this.window.innerHeight *
+                                CONSOLE_DIR_VIEW_HEIGHT) + "px";
+ 
+       let options = {
+diff --git a/browser/themes/shared/devtools/webconsole.inc.css b/browser/themes/shared/devtools/webconsole.inc.css
+--- a/browser/themes/shared/devtools/webconsole.inc.css
++++ b/browser/themes/shared/devtools/webconsole.inc.css
+@@ -13,39 +13,43 @@ a {
+ 
+ /* Workaround for Bug 575675 - FindChildWithRules aRelevantLinkVisited
+  * assertion when loading HTML page with links in XUL iframe */
+ *:visited { }
+ 
+ .message {
+   display: flex;
+   flex: 0 0 auto;
+-  -moz-margin-start: 6px;
+-  -moz-margin-end: 8px;
+-  width: calc(100% - 6px - 8px);
++  padding: 0 7px;
++  width: 100%;
++  box-sizing: border-box;
+ }
+ 
+ .message > .timestamp {
+   flex: 0 0 auto;
+   color: GrayText;
+-  margin: 4px 0;
++  margin: 4px 6px 0 0;
++}
++
++.message > .indent {
++  flex: 0 0 auto;
+ }
+ 
+ .message > .icon {
+   background: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 0, 1, 0, 0) no-repeat;
+   background-position: center 0.5em;
+   flex: 0 0 auto;
+-  margin: 0 6px;
++  margin: 0 6px 0 0;
+   padding: 0 4px;
+   width: 8px;
+ }
+ 
+ .message > .message-body-wrapper {
+   flex: 1 1 100%;
+-  margin-top: 4px;
++  margin: 3px;
+ }
+ 
+ /* The red bubble that shows the number of times a message is repeated */
+ .message-repeats {
+   -moz-user-select: none;
+   flex: 0 0 auto;
+   margin: 2px 6px;
+   padding: 0 6px;
+@@ -58,23 +62,22 @@ a {
+   font-weight: 600;
+ }
+ 
+ .message-repeats[value="1"] {
+   display: none;
+ }
+ 
+ .message-location {
+-  -moz-margin-start: 6px;
+   display: flex;
+   flex: 0 0 auto;
+   align-self: flex-start;
+   justify-content: flex-end;
+   width: 10em;
+-  margin: 3px 0;
++  margin-top: 4px;
+   color: -moz-nativehyperlinktext;
+   text-decoration: none;
+   white-space: nowrap;
+ }
+ 
+ .message-location:hover,
+ .message-location:focus {
+   text-decoration: underline;
+@@ -97,16 +100,21 @@ a {
+ .message-body {
+   white-space: pre-wrap;
+   word-wrap: break-word;
+ }
+ 
+ .message-flex-body > .message-body {
+   display: block;
+   flex: 1 1 auto;
++  vertical-align: middle;
++}
++
++.message-flex-body > .message-location {
++  margin-top: 0;
+ }
+ 
+ .jsterm-input-container {
+   border-top-width: 1px;
+   border-top-style: solid;
+ }
+ 
+ #output-wrapper {
+@@ -117,20 +125,34 @@ a {
+ #output-container {
+   -moz-user-select: text;
+   -moz-box-flex: 1;
+   display: flex;
+   flex-direction: column;
+   align-items: flex-start;
+ }
+ 
++#output-container.hideTimestamps > .message {
++  -moz-padding-start: 0;
++  -moz-margin-start: 7px;
++  width: calc(100% - 7px);
++}
++
+ #output-container.hideTimestamps > .message > .timestamp {
+   display: none;
+ }
+ 
++.theme-dark #output-container.hideTimestamps > .message > .indent {
++  background-color: #14171a; /* .theme-body */
++}
++
++.theme-light #output-container.hideTimestamps > .message > .indent {
++  background-color: #fcfcfc; /* .theme-body */
++}
++
+ .filtered-by-type,
+ .filtered-by-string {
+   display: none;
+ }
+ 
+ .hidden-message {
+   display: block;
+   visibility: hidden;
+@@ -165,21 +187,25 @@ a {
+   border-color: #777;
+ }
+ 
+ .theme-light .message[severity=error] {
+   background-color: rgba(255, 150, 150, 0.3);
+ }
+ 
+ .theme-dark .message[severity=error] {
+-  background-color: rgba(255, 100, 100, 0.3);
++  background-color: rgba(235, 83, 104, 0.17);
+ }
+ 
+-.message[category=network] > .icon {
+-  -moz-border-start: solid #000 6px;
++.theme-dark .message .cm-string {
++  color: #d99b28;
++}
++
++.message[category=network] > .indent {
++  -moz-border-end: solid #000 6px;
+ }
+ 
+ .message[category=network][severity=error] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 0, 16, 8, 8);
+ }
+ 
+ .message[category=network] > .message-body {
+   display: flex;
+@@ -214,73 +240,73 @@ a {
+ }
+ 
+ /* CSS styles */
+ .webconsole-filter-button[category="css"] > .toolbarbutton-menubutton-button:before {
+   background-image: linear-gradient(#2DC3F3, #00B6F0);
+   border-color: #1BA2CC;
+ }
+ 
+-.message[category=cssparser] > .icon {
+-  -moz-border-start: solid #00b6f0 6px;
++.message[category=cssparser] > .indent {
++  -moz-border-end: solid #00b6f0 6px;
+ }
+ 
+ .message[category=cssparser][severity=error] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 8, 16, 16, 8);
+ }
+ 
+ .message[category=cssparser][severity=warn] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 8, 24, 16, 16);
+ }
+ 
+ /* JS styles */
+ .webconsole-filter-button[category="js"] > .toolbarbutton-menubutton-button:before {
+   background-image: linear-gradient(#FCB142, #FB9500);
+   border-color: #E98A00;
+ }
+ 
+-.message[category=exception] > .icon {
+-  -moz-border-start: solid #fb9500 6px;
++.message[category=exception] > .indent {
++  -moz-border-end: solid #fb9500 6px;
+ }
+ 
+ .message[category=exception][severity=error] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 16, 16, 24, 8);
+ }
+ 
+ .message[category=exception][severity=warn] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 16, 24, 24, 16);
+ }
+ 
+ /* Web Developer styles */
+ .webconsole-filter-button[category="logging"] > .toolbarbutton-menubutton-button:before {
+   background-image: linear-gradient(#B9B9B9, #AAAAAA);
+   border-color: #929292;
+ }
+ 
+-.message[category=console] > .icon {
+-  -moz-border-start: solid #cbcbcb 6px;
++.message[category=console] > .indent {
++  -moz-border-end: solid #cbcbcb 6px;
+ }
+ 
+ .message[category=console][severity=error] > .icon,
+ .message[category=output][severity=error] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 16, 32, 8);
+ }
+ 
+ .message[category=console][severity=warn] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 24, 32, 16);
+ }
+ 
+ .message[category=console][severity=info] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 32, 32, 24);
+ }
+ 
+ /* Input and output styles */
+-.message[category=input] > .icon,
+-.message[category=output] > .icon {
+-  -moz-border-start: solid #808080 6px;
++.message[category=input] > .indent,
++.message[category=output] > .indent {
++  -moz-border-end: solid #808080 6px;
+ }
+ 
+ .message[category=input] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 40, 32, 32);
+ }
+ 
+ .message[category=output] > .icon {
+   background-image: -moz-image-rect(url(chrome://browser/skin/devtools/webconsole.png), 24, 48, 32, 40);
+@@ -324,18 +350,18 @@ a {
+ }
+ 
+ .devtools-side-splitter ~ #webconsole-sidebar[hidden] {
+   display: none;
+ }
+ 
+ /* Security styles */
+ 
+-.message[category=security] > .icon {
+-  -moz-border-start: solid red 6px;
++.message[category=security] > .indent {
++  -moz-border-end: solid red 6px;
+ }
+ 
+ .webconsole-filter-button[category="security"] > .toolbarbutton-menubutton-button:before {
+   background-image: linear-gradient(#FF3030, #FF7D7D);
+   border-color: #D12C2C;
+ }
+ 
+ .message[category=security][severity=error] > .icon {
+@@ -381,17 +407,17 @@ a {
+ 
+ .message[open] .stacktrace {
+   display: block;
+ }
+ 
+ .message .theme-twisty {
+   display: inline-block;
+   vertical-align: middle;
+-  margin: 2px 3px 0 0;
++  margin: 0 3px 0 0;
+ }
+ 
+ .stacktrace li {
+   display: flex;
+   margin: 0;
+ }
+ 
+ .stacktrace .function {
